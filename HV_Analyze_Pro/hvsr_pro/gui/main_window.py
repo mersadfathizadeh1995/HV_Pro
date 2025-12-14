@@ -1,0 +1,2046 @@
+"""
+HVSR Pro - Main GUI Window
+===========================
+
+Main application window with interactive HVSR analysis workflow.
+"""
+
+import sys
+from pathlib import Path
+from typing import Optional, List
+import numpy as np
+
+try:
+    from PyQt5.QtWidgets import (
+        QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QSpinBox, QDoubleSpinBox,
+        QComboBox, QCheckBox, QGroupBox, QTextEdit,
+        QProgressBar, QFileDialog, QMessageBox,
+        QSplitter, QTabWidget, QScrollArea, QDockWidget,
+        QApplication, QInputDialog, QStatusBar, QAction
+    )
+    from PyQt5.QtCore import Qt, QThread, pyqtSignal
+    from PyQt5.QtGui import QFont
+    HAS_PYQT5 = True
+except ImportError:
+    HAS_PYQT5 = False
+    print("Warning: PyQt5 not available. GUI will not work.")
+
+from hvsr_pro.core import HVSRDataHandler
+from hvsr_pro.processing import (
+    WindowManager, RejectionEngine, HVSRProcessor
+)
+from hvsr_pro.processing.hvsr_structures import HVSRResult
+from hvsr_pro.visualization import HVSRPlotter
+
+if HAS_PYQT5:
+    from hvsr_pro.gui.interactive_canvas import InteractiveHVSRCanvas
+    from hvsr_pro.gui.plot_window_manager import PlotWindowManager
+    from hvsr_pro.gui.layers_dock import WindowLayersDock
+    from hvsr_pro.gui.peak_picker_dock import PeakPickerDock
+    from hvsr_pro.gui.view_mode_selector import ViewModeSelector
+    from hvsr_pro.gui.data_input_dialog import DataInputDialog
+
+
+class ProcessingThread(QThread):
+    """Background thread for HVSR processing with multi-file support."""
+    
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(object, object, object)  # result, windows, data
+    error = pyqtSignal(str)
+    
+    def __init__(self, file_input, window_length, overlap, smoothing_bandwidth, load_mode='single', time_range=None,
+                 freq_min=0.2, freq_max=20.0, n_frequencies=100, qc_mode='balanced', apply_cox_fdwra=False,
+                 use_parallel=False, manual_sampling_rate=None, custom_qc_settings=None):
+        super().__init__()
+        self.file_input = file_input  # Can be str, list, or dict
+        self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2'
+        self.window_length = window_length
+        self.overlap = overlap
+        self.smoothing_bandwidth = smoothing_bandwidth
+        self.time_range = time_range  # Optional time range filter
+        self.freq_min = freq_min
+        self.freq_max = freq_max
+        self.n_frequencies = n_frequencies
+        self.qc_mode = qc_mode  # QC strictness mode
+        self.apply_cox_fdwra = apply_cox_fdwra  # Apply Cox FDWRA after HVSR
+        self.use_parallel = use_parallel  # Enable parallel processing
+        self.manual_sampling_rate = manual_sampling_rate  # Optional manual sampling rate override
+        self.custom_qc_settings = custom_qc_settings  # Optional custom QC settings
+    
+    def run(self):
+        """Execute processing pipeline with multi-file support."""
+        try:
+            # Step 1: Load data
+            handler = HVSRDataHandler()
+            
+            if self.load_mode == 'single':
+                self.progress.emit(10, "Loading seismic data...")
+                data = handler.load_data(self.file_input)
+                
+            elif self.load_mode == 'multi_type1':
+                self.progress.emit(10, f"Loading {len(self.file_input)} MiniSEED files (Type 1)...")
+                data = handler.load_multi_miniseed_type1(self.file_input)
+                
+            elif self.load_mode == 'multi_type2':
+                complete_groups = [g for g in self.file_input.values() 
+                                 if 'E' in g and 'N' in g and 'Z' in g]
+                self.progress.emit(10, f"Loading {len(complete_groups)} file groups (Type 2)...")
+                data = handler.load_multi_miniseed_type2(self.file_input)
+            
+            else:
+                raise ValueError(f"Unknown load mode: {self.load_mode}")
+
+            # Step 1.2: Apply manual sampling rate override (if enabled)
+            if self.manual_sampling_rate:
+                self.progress.emit(12, f"Overriding sampling rate to {self.manual_sampling_rate:.4f} Hz...")
+                data.east.sampling_rate = self.manual_sampling_rate
+                data.north.sampling_rate = self.manual_sampling_rate
+                data.vertical.sampling_rate = self.manual_sampling_rate
+
+            # Step 1.5: Apply time range slicing (if enabled)
+            if self.time_range and self.time_range.get('enabled'):
+                self.progress.emit(15, "Applying time range filter...")
+                
+                start_local = self.time_range['start']
+                end_local = self.time_range['end']
+                tz_offset = self.time_range['timezone_offset']
+                tz_name = self.time_range.get('timezone_name', f'UTC{tz_offset:+d}')
+                
+                self.progress.emit(17, f"Time range: {start_local.strftime('%Y-%m-%d %H:%M')} to {end_local.strftime('%H:%M')} ({tz_name})")
+                
+                try:
+                    # Apply time slicing
+                    data = handler.slice_by_time(data, start_local, end_local, tz_offset)
+                    
+                    duration_hours = data.duration / 3600
+                    self.progress.emit(20, f"Sliced to {duration_hours:.2f} hours")
+                    
+                except ValueError as e:
+                    # Time range error - show detailed message
+                    raise ValueError(f"Time range error: {str(e)}")
+            
+            # Step 2: Create windows
+            self.progress.emit(30, "Creating windows...")
+            manager = WindowManager(
+                window_length=self.window_length,
+                overlap=self.overlap
+            )
+            windows = manager.create_windows(data, calculate_quality=True)
+            
+            # Step 3: Quality control
+            engine = RejectionEngine()
+
+            # Check if QC is completely disabled
+            if self.custom_qc_settings and not self.custom_qc_settings.get('enabled', True):
+                self.progress.emit(50, "Quality control disabled (skipping)...")
+                # Skip QC entirely - all windows remain active
+            elif self.custom_qc_settings and self.qc_mode == 'custom':
+                # Use custom QC settings
+                self.progress.emit(50, "Applying quality control (custom settings)...")
+                self._apply_custom_qc(engine, self.custom_qc_settings)
+                engine.evaluate(windows, auto_apply=True)
+            else:
+                # Use default pipeline
+                self.progress.emit(50, f"Applying quality control ({self.qc_mode} mode)...")
+                engine.create_default_pipeline(mode=self.qc_mode)
+                engine.evaluate(windows, auto_apply=True)
+            
+            # Log QC results
+            self.progress.emit(60, f"QC: {windows.n_active}/{windows.n_windows} windows active ({windows.acceptance_rate*100:.1f}%)")
+            
+            # Check if NO windows passed QC
+            if windows.n_active == 0:
+                self.progress.emit(65, f"ERROR: No windows passed QC (0/{windows.n_windows})")
+                
+                # Create a dummy result with valid but empty data to prevent crash
+                import numpy as np
+                
+                # Create frequency array
+                frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
+                
+                # Create dummy HVSR values (all ones to avoid division issues)
+                dummy_hvsr = np.ones_like(frequencies)
+                
+                result = HVSRResult(
+                    frequencies=frequencies,
+                    mean_hvsr=dummy_hvsr,
+                    median_hvsr=dummy_hvsr,
+                    std_hvsr=np.zeros_like(frequencies),
+                    percentile_16=dummy_hvsr * 0.9,
+                    percentile_84=dummy_hvsr * 1.1,
+                    window_spectra=[],
+                    peaks=[],
+                    total_windows=windows.n_windows,
+                    valid_windows=0,
+                    metadata={'qc_failure': True, 'message': 'No windows passed QC'}
+                )
+                
+                # Emit error but continue to show the empty result
+                self.error.emit("No windows passed QC. Please adjust QC settings or check data quality.")
+                self.finished.emit(result, windows, data)
+                return
+            
+            # If too many rejected, warn but continue
+            if windows.n_active < 10 and windows.n_windows > 50:
+                self.progress.emit(65, f"WARNING: Only {windows.n_active} windows passed QC. Consider relaxing quality settings.")
+            
+            # Step 4: Compute HVSR
+            if self.use_parallel:
+                self.progress.emit(70, "Computing HVSR (parallel processing)...")
+            else:
+                self.progress.emit(70, "Computing HVSR...")
+            
+            processor = HVSRProcessor(
+                smoothing_bandwidth=self.smoothing_bandwidth,
+                f_min=self.freq_min,
+                f_max=self.freq_max,
+                n_frequencies=self.n_frequencies,
+                parallel=self.use_parallel
+            )
+            result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+            
+            # Step 5: Apply Cox FDWRA (if enabled or SESAME mode)
+            if self.apply_cox_fdwra or self.qc_mode == 'sesame':
+                self.progress.emit(85, "Applying Cox FDWRA (peak consistency)...")
+                fdwra_result = engine.evaluate_fdwra(
+                    windows,
+                    result,
+                    n=2.0,
+                    distribution_fn="lognormal",
+                    distribution_mc="lognormal",
+                    search_range_hz=(self.freq_min, self.freq_max),
+                    auto_apply=True
+                )
+                
+                n_rejected = fdwra_result['n_rejected']
+                converged = fdwra_result['converged']
+                iterations = fdwra_result['iterations']
+                
+                self.progress.emit(90, f"Cox FDWRA: {n_rejected} windows rejected, converged in {iterations} iterations")
+                
+                # Recompute HVSR with updated window states
+                if n_rejected > 0:
+                    # Check if Cox FDWRA rejected ALL windows
+                    if windows.n_active == 0:
+                        self.progress.emit(92, f"ERROR: Cox FDWRA rejected all windows")
+                        
+                        # Create dummy result like before
+                        import numpy as np
+                        frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
+                        dummy_hvsr = np.ones_like(frequencies)
+                        
+                        result = HVSRResult(
+                            frequencies=frequencies,
+                            mean_hvsr=dummy_hvsr,
+                            median_hvsr=dummy_hvsr,
+                            std_hvsr=np.zeros_like(frequencies),
+                            percentile_16=dummy_hvsr * 0.9,
+                            percentile_84=dummy_hvsr * 1.1,
+                            window_spectra=[],
+                            peaks=[],
+                            total_windows=windows.n_windows,
+                            valid_windows=0,
+                            metadata={'qc_failure': True, 'message': 'Cox FDWRA rejected all windows'}
+                        )
+                        
+                        self.error.emit("Cox FDWRA rejected all windows. Please disable Cox FDWRA or adjust settings.")
+                        self.finished.emit(result, windows, data)
+                        return
+                    else:
+                        self.progress.emit(92, "Recomputing HVSR after Cox FDWRA...")
+                        result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+            
+            self.progress.emit(100, "Complete!")
+            self.finished.emit(result, windows, data)
+            
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            self.error.emit(error_detail)
+
+    def _apply_custom_qc(self, engine, settings):
+        """Apply custom QC settings to rejection engine."""
+        from hvsr_pro.processing.rejection_algorithms import QualityThresholdRejection, StatisticalOutlierRejection
+        from hvsr_pro.processing.rejection_advanced import STALTARejection, FrequencyDomainRejection, AmplitudeRejection
+
+        algorithms = settings.get('algorithms', {})
+
+        # Add algorithms based on settings
+        if algorithms.get('amplitude', {}).get('enabled', False):
+            engine.add_algorithm(AmplitudeRejection())
+
+        if algorithms.get('quality_threshold', {}).get('enabled', False):
+            threshold = algorithms['quality_threshold']['params'].get('threshold', 0.5)
+            engine.add_algorithm(QualityThresholdRejection(threshold=threshold))
+
+        if algorithms.get('sta_lta', {}).get('enabled', False):
+            params = algorithms['sta_lta']['params']
+            engine.add_algorithm(STALTARejection(
+                sta_length=params.get('sta_length', 1.0),
+                lta_length=params.get('lta_length', 30.0),
+                min_ratio=params.get('min_ratio', 0.15),
+                max_ratio=params.get('max_ratio', 2.5)
+            ))
+
+        if algorithms.get('frequency_domain', {}).get('enabled', False):
+            spike_threshold = algorithms['frequency_domain']['params'].get('spike_threshold', 3.0)
+            engine.add_algorithm(FrequencyDomainRejection(spike_threshold=spike_threshold))
+
+        if algorithms.get('statistical_outlier', {}).get('enabled', False):
+            threshold = algorithms['statistical_outlier']['params'].get('threshold', 2.0)
+            engine.add_algorithm(StatisticalOutlierRejection(method='iqr', threshold=threshold))
+
+
+class HVSRMainWindow(QMainWindow):
+    """
+    Main application window for HVSR analysis.
+    
+    Features:
+    - Interactive window rejection (click to toggle)
+    - Color-coded windows (green=active, gray=rejected)
+    - Real-time HVSR updates
+    - Complete processing pipeline
+    - Export capabilities
+    """
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Data storage
+        self.data = None
+        self.windows = None
+        self.hvsr_result = None
+        self.current_file = None
+        self.load_mode = 'single'  # Track how files should be loaded
+        self.current_time_range = None  # Store time range from dialog
+
+        # Custom QC settings storage
+        self.custom_qc_settings = None  # Will be set if user opens Advanced QC dialog
+
+        # Plot window manager (separate window by default)
+        self.plot_manager = PlotWindowManager(self)
+        
+        # Window lines storage for layer dock
+        self.window_lines = {}  # {window_index: matplotlib_line}
+        self.stat_lines = {}  # {'mean': line, 'std_plus': line, ...}
+        
+        # Setup UI
+        self.setWindowTitle("HVSR Pro - Control Panel")
+        self.setGeometry(100, 100, 900, 700)  # Smaller control window
+        
+        # Make window resizable with minimum size
+        self.setMinimumSize(800, 600)
+        
+        # Set window icon (if available)
+        try:
+            from PyQt5.QtGui import QIcon
+            import os
+            icon_path = os.path.join(os.path.dirname(__file__), 'icons', 'hvsr_icon.png')
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except:
+            pass
+        
+        self.init_ui()
+        self.connect_signals()
+    
+    def create_menu_bar(self):
+        """Create menu bar with common actions."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu('&File')
+        
+        # Open action
+        open_action = file_menu.addAction('&Open...')
+        open_action.setShortcut('Ctrl+O')
+        open_action.triggered.connect(self.load_data_file)
+        
+        # Save results action
+        save_action = file_menu.addAction('&Save Results...')
+        save_action.setShortcut('Ctrl+S')
+        save_action.triggered.connect(self.export_results)
+        
+        file_menu.addSeparator()
+        
+        # Export figure action
+        export_fig_action = file_menu.addAction('&Export Figure...')
+        export_fig_action.setShortcut('Ctrl+E')
+        export_fig_action.triggered.connect(self.export_figure)
+        
+        file_menu.addSeparator()
+        
+        # Exit action
+        exit_action = file_menu.addAction('E&xit')
+        exit_action.setShortcut('Ctrl+Q')
+        exit_action.triggered.connect(self.close)
+        
+        # Edit menu
+        edit_menu = menubar.addMenu('&Edit')
+        
+        # Copy info action
+        copy_action = edit_menu.addAction('&Copy Info')
+        copy_action.setShortcut('Ctrl+C')
+        copy_action.triggered.connect(self.copy_info)
+        
+        # Clear info action
+        clear_action = edit_menu.addAction('C&lear Info')
+        clear_action.triggered.connect(lambda: self.info_text.clear())
+        
+        # View menu
+        view_menu = menubar.addMenu('&View')
+        
+        # Toggle plot window
+        plot_action = view_menu.addAction('&Plot Window')
+        plot_action.setShortcut('Ctrl+P')
+        plot_action.triggered.connect(self.toggle_plot_window)
+        
+        view_menu.addSeparator()
+        
+        # Toggle docks
+        layers_action = view_menu.addAction('&Layers Dock')
+        layers_action.setCheckable(True)
+        layers_action.setChecked(True)
+        layers_action.triggered.connect(lambda checked: self.layers_dock.setVisible(checked))
+        
+        peaks_action = view_menu.addAction('P&eaks Dock')
+        peaks_action.setCheckable(True)
+        peaks_action.setChecked(True)
+        peaks_action.triggered.connect(lambda checked: self.peak_picker_dock.setVisible(checked))
+        
+        props_action = view_menu.addAction('P&roperties Dock')
+        props_action.setCheckable(True)
+        props_action.setChecked(True)
+        props_action.triggered.connect(lambda checked: self.properties_dock.setVisible(checked))
+        
+        # Mode menu
+        mode_menu = menubar.addMenu('&Mode')
+        
+        single_action = mode_menu.addAction('&Single File')
+        single_action.setShortcut('Alt+1')
+        single_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(0))
+        
+        # Help menu
+        help_menu = menubar.addMenu('&Help')
+        
+        about_action = help_menu.addAction('&About')
+        about_action.triggered.connect(self.show_about)
+        
+        shortcuts_action = help_menu.addAction('&Keyboard Shortcuts')
+        shortcuts_action.setShortcut('F1')
+        shortcuts_action.triggered.connect(self.show_shortcuts)
+    
+    def copy_info(self):
+        """Copy info text to clipboard."""
+        if self.info_text.toPlainText():
+            clipboard = QApplication.clipboard()
+            clipboard.setText(self.info_text.toPlainText())
+            self.statusBar().showMessage("Info copied to clipboard", 2000)
+    
+    def show_about(self):
+        """Show about dialog."""
+        QMessageBox.about(self, "About HVSR Pro",
+            "<h2>HVSR Pro v2.0</h2>"
+            "<p>Professional Horizontal-to-Vertical Spectral Ratio Analysis</p>"
+            "<p>A comprehensive tool for seismic data processing and HVSR computation.</p>"
+            "<br>"
+            "<p><b>Features:</b></p>"
+            "<ul>"
+            "<li>Single file processing</li>"
+            "<li>Advanced quality control algorithms</li>"
+            "<li>Cox FDWRA peak consistency analysis</li>"
+            "<li>Interactive visualization</li>"
+            "<li>Customizable processing parameters</li>"
+            "</ul>"
+            "<br>"
+            "<p>© 2024 HVSR Pro Development Team</p>")
+    
+    def show_shortcuts(self):
+        """Show keyboard shortcuts dialog."""
+        shortcuts_text = """
+        <h3>Keyboard Shortcuts</h3>
+        <table>
+        <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
+        <tr><td><b>Ctrl+S</b></td><td>Save results</td></tr>
+        <tr><td><b>Ctrl+E</b></td><td>Export figure</td></tr>
+        <tr><td><b>Ctrl+P</b></td><td>Toggle plot window</td></tr>
+        <tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>
+        <tr><td><b>Alt+1</b></td><td>Single file mode</td></tr>
+        <tr><td><b>F1</b></td><td>Show this help</td></tr>
+        <tr><td><b>Space</b></td><td>Start processing</td></tr>
+        </table>
+        """
+        QMessageBox.information(self, "Keyboard Shortcuts", shortcuts_text)
+    
+    def _get_cpu_count(self) -> int:
+        """Get number of CPU cores."""
+        try:
+            from multiprocessing import cpu_count
+            return cpu_count()
+        except:
+            return 4  # Default fallback
+        
+    def init_ui(self):
+        """Initialize user interface."""
+        # Central widget - just control panel (no embedded canvas by default)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Add menu bar
+        self.create_menu_bar()
+        
+        # Main layout
+        main_layout = QHBoxLayout(central_widget)
+        
+        # Create tab widget for Single/Batch modes
+        self.mode_tabs = QTabWidget()
+        
+        # Single file tab (original interface)
+        single_tab = QWidget()
+        single_layout = QHBoxLayout(single_tab)
+        
+        # Left panel - controls with scroll area
+        left_panel = self.create_control_panel()
+        
+        # Wrap control panel in scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(left_panel)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setMinimumWidth(300)
+        
+        single_layout.addWidget(scroll_area, stretch=1)
+        
+        # Add single tab
+        self.mode_tabs.addTab(single_tab, "Single File")
+        
+        main_layout.addWidget(self.mode_tabs)
+        
+        # Right side - docks
+        # Create layers dock
+        self.layers_dock = WindowLayersDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.layers_dock)
+        
+        # Create peak picker dock
+        self.peak_picker_dock = PeakPickerDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.peak_picker_dock)
+        
+        # Create properties dock
+        from hvsr_pro.gui.properties_dock import PropertiesDock
+        self.properties_dock = PropertiesDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
+        
+        # Stack docks (layers, peak picker, properties as tabs)
+        self.tabifyDockWidget(self.layers_dock, self.peak_picker_dock)
+        self.tabifyDockWidget(self.peak_picker_dock, self.properties_dock)
+        self.layers_dock.raise_()  # Layers dock visible by default
+        
+        # Connect layer dock references
+        self.layers_dock.set_references(self.plot_manager, None)  # Windows set later
+        
+        # Connect layer dock signals
+        self.layers_dock.visibility_changed.connect(self.on_layer_visibility_changed)
+        
+        # Connect peak picker dock signals
+        self.peak_picker_dock.peaks_changed.connect(self.on_peaks_changed)
+        self.peak_picker_dock.detect_peaks_requested.connect(self.on_detect_peaks_requested)
+        self.peak_picker_dock.manual_mode_requested.connect(self.on_manual_mode_requested)
+        
+        # Connect properties dock signals
+        self.properties_dock.properties_changed.connect(self.on_properties_changed)
+        
+        # Interactive canvas (old - keep for compatibility)
+        self.canvas = InteractiveHVSRCanvas(self)
+        # Don't add to layout - will use plot_manager instead
+        
+        # Status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Ready")
+        
+        # Menu bar
+        self.setup_menu_bar()
+    
+    def setup_menu_bar(self):
+        """Setup menu bar."""
+        menu_bar = self.menuBar()
+        
+        # File menu
+        file_menu = menu_bar.addMenu("File")
+        
+        # Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+    
+    def create_control_panel(self) -> QWidget:
+        """Create left control panel."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        
+        # Title with version
+        title = QLabel("HVSR Pro v2.0")
+        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            QLabel {
+                color: #2C3E50;
+                padding: 10px;
+                background-color: #ECF0F1;
+                border-radius: 5px;
+            }
+        """)
+        layout.addWidget(title)
+        
+        # File import group
+        file_group = self.create_file_group()
+        layout.addWidget(file_group)
+        
+        # Processing settings group
+        settings_group = self.create_settings_group()
+        layout.addWidget(settings_group)
+        
+        # View mode selector
+        self.view_mode_selector = ViewModeSelector()
+        self.view_mode_selector.mode_changed.connect(self.on_view_mode_changed)
+        layout.addWidget(self.view_mode_selector)
+        
+        # Plot window toggle button
+        self.plot_mode_button = QPushButton("Show Plot Window")
+        self.plot_mode_button.clicked.connect(self.toggle_plot_window)
+        self.plot_mode_button.setToolTip("Open plot in separate window")
+        layout.addWidget(self.plot_mode_button)
+        
+        # Window management group
+        window_group = self.create_window_group()
+        layout.addWidget(window_group)
+        
+        # Actions group
+        actions_group = self.create_actions_group()
+        layout.addWidget(actions_group)
+        
+        # Info display
+        self.info_text = QTextEdit()
+        self.info_text.setReadOnly(True)
+        self.info_text.setMaximumHeight(200)
+        self.info_text.setPlaceholderText("Processing information will appear here...")
+        layout.addWidget(self.info_text)
+        
+        # Progress bar with text
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid grey;
+                border-radius: 5px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+        
+        layout.addStretch()
+        return panel
+    
+    def create_file_group(self) -> QGroupBox:
+        """Create file import group."""
+        group = QGroupBox("Data Import")
+        layout = QVBoxLayout()
+        
+        # File path display
+        self.file_label = QLabel("No file loaded")
+        self.file_label.setWordWrap(True)
+        layout.addWidget(self.file_label)
+        
+        # Load button with shortcut and tooltip
+        load_btn = QPushButton("Load Data File")
+        load_btn.clicked.connect(self.load_data_file)
+        load_btn.setShortcut("Ctrl+O")
+        load_btn.setToolTip("Load seismic data file (Ctrl+O)\nSupported formats: .txt, .csv, .mseed")
+        load_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 4px;
+                padding: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        layout.addWidget(load_btn)
+        
+        # Recent files combo (placeholder)
+        self.recent_combo = QComboBox()
+        self.recent_combo.addItem("Recent files...")
+        self.recent_combo.setEnabled(False)
+        layout.addWidget(self.recent_combo)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_settings_group(self) -> QGroupBox:
+        """Create processing settings group."""
+        group = QGroupBox("Processing Settings")
+        layout = QVBoxLayout()
+        
+        # Window length
+        wl_layout = QHBoxLayout()
+        wl_layout.addWidget(QLabel("Window Length (s):"))
+        self.window_length_spin = QDoubleSpinBox()
+        self.window_length_spin.setRange(10, 300)
+        self.window_length_spin.setValue(30)
+        self.window_length_spin.setSingleStep(5)
+        wl_layout.addWidget(self.window_length_spin)
+        layout.addLayout(wl_layout)
+        
+        # Overlap
+        ov_layout = QHBoxLayout()
+        ov_layout.addWidget(QLabel("Overlap (%):"))
+        self.overlap_spin = QSpinBox()
+        self.overlap_spin.setRange(0, 90)
+        self.overlap_spin.setValue(50)
+        self.overlap_spin.setSingleStep(10)
+        ov_layout.addWidget(self.overlap_spin)
+        layout.addLayout(ov_layout)
+        
+        # Smoothing bandwidth
+        sb_layout = QHBoxLayout()
+        sb_layout.addWidget(QLabel("Konno-Ohmachi (b):"))
+        self.smoothing_spin = QDoubleSpinBox()
+        self.smoothing_spin.setRange(10, 100)
+        self.smoothing_spin.setValue(40)
+        self.smoothing_spin.setSingleStep(5)
+        self.smoothing_spin.setToolTip("Konno-Ohmachi smoothing bandwidth parameter (b)\n"
+                                       "Higher values = more smoothing\n"
+                                       "Standard: b=40 (recommended)")
+        sb_layout.addWidget(self.smoothing_spin)
+        layout.addLayout(sb_layout)
+        
+        # === FREQUENCY RANGE SECTION ===
+        freq_label = QLabel("<b>Frequency Range (HVSR Computation):</b>")
+        layout.addWidget(freq_label)
+        
+        # Min frequency
+        fmin_layout = QHBoxLayout()
+        fmin_layout.addWidget(QLabel("Min Freq (Hz):"))
+        self.freq_min_spin = QDoubleSpinBox()
+        self.freq_min_spin.setRange(0.1, 100.0)
+        self.freq_min_spin.setValue(0.2)
+        self.freq_min_spin.setDecimals(2)
+        self.freq_min_spin.setSingleStep(0.1)
+        self.freq_min_spin.setToolTip("Minimum frequency for HVSR computation")
+        fmin_layout.addWidget(self.freq_min_spin)
+        layout.addLayout(fmin_layout)
+        
+        # Max frequency
+        fmax_layout = QHBoxLayout()
+        fmax_layout.addWidget(QLabel("Max Freq (Hz):"))
+        self.freq_max_spin = QDoubleSpinBox()
+        self.freq_max_spin.setRange(0.1, 100.0)
+        self.freq_max_spin.setValue(20.0)
+        self.freq_max_spin.setDecimals(1)
+        self.freq_max_spin.setSingleStep(1.0)
+        self.freq_max_spin.setToolTip("Maximum frequency for HVSR computation")
+        fmax_layout.addWidget(self.freq_max_spin)
+        layout.addLayout(fmax_layout)
+        
+        # Number of frequency points
+        nfreq_layout = QHBoxLayout()
+        nfreq_layout.addWidget(QLabel("Freq Points:"))
+        self.n_freq_spin = QSpinBox()
+        self.n_freq_spin.setRange(50, 500)
+        self.n_freq_spin.setValue(100)
+        self.n_freq_spin.setSingleStep(10)
+        self.n_freq_spin.setToolTip("Number of frequency points (log-spaced)")
+        nfreq_layout.addWidget(self.n_freq_spin)
+        layout.addLayout(nfreq_layout)
+
+        # === SAMPLING RATE OVERRIDE SECTION ===
+        sampling_label = QLabel("<b>Sampling Rate Override:</b>")
+        layout.addWidget(sampling_label)
+
+        # Override checkbox
+        self.override_sampling_check = QCheckBox("Override Sampling Rate")
+        self.override_sampling_check.setChecked(False)
+        self.override_sampling_check.setToolTip("Manually specify sampling rate instead of auto-detection")
+        self.override_sampling_check.toggled.connect(self._on_override_sampling_toggled)
+        layout.addWidget(self.override_sampling_check)
+
+        # Manual sampling rate input
+        sampling_layout = QHBoxLayout()
+        sampling_layout.addWidget(QLabel("Sampling Rate (Hz):"))
+        self.sampling_rate_spin = QDoubleSpinBox()
+        self.sampling_rate_spin.setRange(0.1, 10000.0)
+        self.sampling_rate_spin.setValue(100.0)
+        self.sampling_rate_spin.setDecimals(4)
+        self.sampling_rate_spin.setSingleStep(0.1)
+        self.sampling_rate_spin.setEnabled(False)  # Disabled by default
+        self.sampling_rate_spin.setToolTip("Manual sampling rate (Hz)")
+        sampling_layout.addWidget(self.sampling_rate_spin)
+        layout.addLayout(sampling_layout)
+
+        # QC mode
+        qc_layout = QHBoxLayout()
+        qc_layout.addWidget(QLabel("QC Mode:"))
+        self.qc_combo = QComboBox()
+        self.qc_combo.addItem("Conservative", "conservative")
+        self.qc_combo.addItem("Balanced (Recommended)", "balanced")
+        self.qc_combo.addItem("Aggressive", "aggressive")
+        self.qc_combo.addItem("SESAME + Cox FDWRA", "sesame")
+        self.qc_combo.setCurrentIndex(1)  # Default to balanced
+        self.qc_combo.setToolTip("Window rejection strictness:\n"
+                                 "Conservative: Amplitude + quality check (0.2)\n"
+                                 "Balanced: Amplitude only (safest, recommended) ✅\n"
+                                 "Aggressive: + STA/LTA + freq + stats (strict)\n"
+                                 "SESAME: Lenient time-domain + Cox FDWRA")
+        qc_layout.addWidget(self.qc_combo)
+        layout.addLayout(qc_layout)
+        
+        # Cox FDWRA Section
+        cox_group = QGroupBox("Cox FDWRA (Peak Consistency)")
+        cox_layout = QVBoxLayout()
+        
+        self.cox_fdwra_check = QCheckBox("Apply Cox FDWRA")
+        self.cox_fdwra_check.setChecked(False)
+        self.cox_fdwra_check.setToolTip("Apply Cox et al. (2020) Frequency-Domain Window Rejection\n"
+                                        "after HVSR computation to ensure peak frequency consistency.\n"
+                                        "Industry-standard algorithm for publication-quality HVSR analysis.\n"
+                                        "Recommended for rigorous site characterization studies.")
+        cox_layout.addWidget(self.cox_fdwra_check)
+        
+        # Cox parameters (only enabled when Cox is checked)
+        from PyQt5.QtWidgets import QGridLayout
+        cox_params_layout = QGridLayout()
+        cox_params_layout.setColumnStretch(1, 1)  # Make value column stretch
+        
+        cox_params_layout.addWidget(QLabel("  n-value:"), 0, 0)
+        self.cox_n_spin = QDoubleSpinBox()
+        self.cox_n_spin.setRange(1.0, 5.0)
+        self.cox_n_spin.setValue(2.0)
+        self.cox_n_spin.setDecimals(1)
+        self.cox_n_spin.setEnabled(False)
+        self.cox_n_spin.setToolTip("Standard deviation multiplier for outlier detection (1-5)")
+        cox_params_layout.addWidget(self.cox_n_spin, 0, 1)
+        
+        cox_params_layout.addWidget(QLabel("  Max Iterations:"), 1, 0)
+        self.cox_iterations_spin = QSpinBox()
+        self.cox_iterations_spin.setRange(1, 50)
+        self.cox_iterations_spin.setValue(20)
+        self.cox_iterations_spin.setEnabled(False)
+        self.cox_iterations_spin.setToolTip("Maximum iterations for convergence")
+        cox_params_layout.addWidget(self.cox_iterations_spin, 1, 1)
+        
+        cox_params_layout.addWidget(QLabel("  Distribution:"), 2, 0)
+        self.cox_dist_combo = QComboBox()
+        self.cox_dist_combo.addItems(["lognormal", "normal"])
+        self.cox_dist_combo.setEnabled(False)
+        self.cox_dist_combo.setToolTip("Statistical distribution for peak modeling")
+        cox_params_layout.addWidget(self.cox_dist_combo, 2, 1)
+        
+        cox_layout.addLayout(cox_params_layout)
+        cox_group.setLayout(cox_layout)
+        layout.addWidget(cox_group)
+        
+        # Connect Cox checkbox to enable/disable parameters
+        self.cox_fdwra_check.toggled.connect(self.cox_n_spin.setEnabled)
+        self.cox_fdwra_check.toggled.connect(self.cox_iterations_spin.setEnabled)
+        self.cox_fdwra_check.toggled.connect(self.cox_dist_combo.setEnabled)
+
+        # Advanced QC Settings button
+        self.advanced_qc_btn = QPushButton("⚙️ Advanced QC Settings")
+        self.advanced_qc_btn.clicked.connect(self.open_advanced_qc_settings)
+        self.advanced_qc_btn.setToolTip("Customize individual QC algorithms and thresholds")
+        layout.addWidget(self.advanced_qc_btn)
+        
+        # Parallel processing checkbox
+        self.parallel_check = QCheckBox("⚡ Enable parallel processing (faster)")
+        self.parallel_check.setChecked(True)  # Enabled by default
+        self.parallel_check.setToolTip("Use multiple CPU cores for faster HVSR computation.\n"
+                                      "Recommended for datasets with >100 windows.\n"
+                                      f"Your system has {self._get_cpu_count()} CPU cores.\n"
+                                      "Speed improvement: ~1.5-3x faster for large datasets.")
+        layout.addWidget(self.parallel_check)
+        
+        # Process button
+        self.process_btn = QPushButton("Process HVSR")
+        self.process_btn.clicked.connect(self.process_hvsr)
+        self.process_btn.setEnabled(False)
+        layout.addWidget(self.process_btn)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_window_group(self) -> QGroupBox:
+        """Create window management group."""
+        group = QGroupBox("Window Management")
+        layout = QVBoxLayout()
+        
+        # Window info
+        self.window_info_label = QLabel("No windows")
+        layout.addWidget(self.window_info_label)
+        
+        # Toggle buttons
+        btn_layout = QHBoxLayout()
+        
+        self.reject_all_btn = QPushButton("Reject All")
+        self.reject_all_btn.clicked.connect(self.reject_all_windows)
+        self.reject_all_btn.setEnabled(False)
+        btn_layout.addWidget(self.reject_all_btn)
+        
+        self.accept_all_btn = QPushButton("Accept All")
+        self.accept_all_btn.clicked.connect(self.accept_all_windows)
+        self.accept_all_btn.setEnabled(False)
+        btn_layout.addWidget(self.accept_all_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # Recompute button
+        self.recompute_btn = QPushButton("Recompute HVSR")
+        self.recompute_btn.clicked.connect(self.recompute_hvsr)
+        self.recompute_btn.setEnabled(False)
+        layout.addWidget(self.recompute_btn)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_actions_group(self) -> QGroupBox:
+        """Create actions group."""
+        group = QGroupBox("Actions")
+        layout = QVBoxLayout()
+        
+        # Export Plot as Image button (NEW - HIGH PRIORITY)
+        export_plot_btn = QPushButton("Export Plot as Image")
+        export_plot_btn.clicked.connect(self.export_plot_image)
+        export_plot_btn.setEnabled(False)
+        export_plot_btn.setStyleSheet("font-weight: bold; background-color: #2196F3; color: white; padding: 6px;")
+        export_plot_btn.setToolTip("Save current plot view as PNG/PDF (high DPI)")
+        self.export_plot_btn = export_plot_btn
+        layout.addWidget(export_plot_btn)
+        
+        # Generate Report Plots button
+        report_btn = QPushButton("Generate Report Plots")
+        report_btn.clicked.connect(self.generate_report_plots)
+        report_btn.setEnabled(False)
+        report_btn.setStyleSheet("font-weight: bold; background-color: #4CAF50; color: white; padding: 6px;")
+        self.report_btn = report_btn
+        layout.addWidget(report_btn)
+        
+        # Export button
+        export_btn = QPushButton("Export Results (CSV/JSON)")
+        export_btn.clicked.connect(self.export_results)
+        export_btn.setEnabled(False)
+        self.export_btn = export_btn
+        layout.addWidget(export_btn)
+        
+        # Save session
+        save_btn = QPushButton("Save Session")
+        save_btn.clicked.connect(self.save_session)
+        save_btn.setEnabled(False)
+        self.save_btn = save_btn
+        layout.addWidget(save_btn)
+        
+        # Load session
+        load_session_btn = QPushButton("Load Session")
+        load_session_btn.clicked.connect(self.load_session)
+        layout.addWidget(load_session_btn)
+        
+        group.setLayout(layout)
+        return group
+    
+    def connect_signals(self):
+        """Connect signals and slots."""
+        # Canvas signals (old compatibility)
+        self.canvas.window_toggled.connect(self.on_window_toggled)
+        self.canvas.status_message.connect(self.status_bar.showMessage)
+    
+    def toggle_plot_window(self):
+        """Toggle between separate and embedded plot modes."""
+        if self.plot_manager.mode == 'separate':
+            self.plot_manager.show_separate()
+            self.plot_mode_button.setText("Dock Plot")
+        else:
+            self.plot_manager.show_embedded()
+            self.plot_mode_button.setText("Show Plot")
+    
+    def on_view_mode_changed(self, mode: str):
+        """Handle view mode change."""
+        self.add_info(f"View mode changed to: {mode}")
+        
+        if not self.window_lines or not self.stat_lines:
+            return
+        
+        # Update line visibility based on mode
+        if mode == 'statistical':
+            # Hide individual windows, show statistics
+            for line in self.window_lines.values():
+                line.set_visible(False)
+            for line in self.stat_lines.values():
+                line.set_visible(True)
+        
+        elif mode == 'windows':
+            # Show individual windows + stats, respect visibility flags
+            if self.windows:
+                for idx, line in self.window_lines.items():
+                    window = self.windows.get_window(idx)
+                    if window:
+                        line.set_visible(window.is_active() and window.visible)
+            for line in self.stat_lines.values():
+                line.set_visible(True)
+        
+        elif mode == 'both':
+            # Show everything
+            if self.windows:
+                for idx, line in self.window_lines.items():
+                    window = self.windows.get_window(idx)
+                    if window:
+                        line.set_visible(window.is_active() and window.visible)
+            for line in self.stat_lines.values():
+                line.set_visible(True)
+        
+        # Redraw
+        if self.plot_manager:
+            self.plot_manager.fig.canvas.draw_idle()
+
+        self.add_info(f"Switched to {mode} view")
+
+    def _on_override_sampling_toggled(self, checked: bool):
+        """Handle sampling rate override checkbox toggle."""
+        self.sampling_rate_spin.setEnabled(checked)
+        if checked:
+            self.add_info("Sampling rate override enabled")
+        else:
+            self.add_info("Using auto-detected sampling rate")
+
+    def open_advanced_qc_settings(self):
+        """Open Advanced QC Settings dialog."""
+        from hvsr_pro.gui.advanced_qc_dialog import AdvancedQCDialog
+        dialog = AdvancedQCDialog(self, self.custom_qc_settings)
+        if dialog.exec_():
+            self.custom_qc_settings = dialog.get_settings()
+            self.add_info("Advanced QC settings updated")
+            # Update QC mode combo to show "Custom"
+            if self.custom_qc_settings and self.custom_qc_settings.get('enabled'):
+                custom_idx = self.qc_combo.findData("custom")
+                if custom_idx == -1:
+                    self.qc_combo.addItem("Custom (Advanced)", "custom")
+                    custom_idx = self.qc_combo.count() - 1
+                self.qc_combo.setCurrentIndex(custom_idx)
+
+    def on_layer_visibility_changed(self, window_idx: int, is_visible: bool):
+        """Handle layer visibility toggle from dock."""
+        action = "shown" if is_visible else "hidden"
+        self.add_info(f"Window {window_idx + 1} {action}")
+        
+        # Real-time mean recalculation
+        self.recalculate_mean_from_visible_windows()
+    
+    def load_data_file(self):
+        """Load seismic data file using enhanced dialog."""
+        dialog = DataInputDialog(self)
+        dialog.files_selected.connect(self.on_files_selected)
+        dialog.exec_()
+    
+    def on_files_selected(self, result: dict):
+        """Handle files selected from DataInputDialog."""
+        mode = result['mode']
+        files = result['files']
+        groups = result['groups']
+        options = result['options']
+        time_range = result.get('time_range')  # May be None
+        
+        # Store load mode and time range
+        self.load_mode = mode
+        self.current_time_range = time_range
+        
+        # Log time range if enabled
+        if time_range and time_range.get('enabled'):
+            start = time_range['start']
+            end = time_range['end']
+            tz_name = time_range.get('timezone_name', 'UTC')
+            self.add_info(f"Time range selected: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({tz_name})")
+        
+        if mode == 'single':
+            # Single file mode
+            self.current_file = files[0]
+            self.file_label.setText(f"File: {Path(files[0]).name}")
+            self.process_btn.setEnabled(True)
+            self.add_info(f"Loaded: {Path(files[0]).name}")
+        
+        elif mode == 'multi_type1':
+            # Multiple files with E,N,Z in each
+            self.current_file = files  # Store as list
+            self.file_label.setText(f"{len(files)} files (Type 1)")
+            self.process_btn.setEnabled(True)
+            self.add_info(f"Loaded {len(files)} MiniSEED files (3-channel each)")
+            self.add_info("  Files will be merged chronologically")
+        
+        elif mode == 'multi_type2':
+            # Separate E, N, Z files
+            self.current_file = groups  # Store as dict
+            complete = sum(1 for g in groups.values() if 'E' in g and 'N' in g and 'Z' in g)
+            self.file_label.setText(f"{complete} groups (Type 2)")
+            self.process_btn.setEnabled(True)
+            self.add_info(f"Loaded {complete} file groups (separate E, N, Z)")
+            self.add_info("  Each group will be merged into 3-component stream")
+    
+    def process_hvsr(self):
+        """Start HVSR processing in background thread."""
+        if not self.current_file:
+            QMessageBox.warning(self, "No File", "Please load a data file first.")
+            return
+        
+        # Disable controls
+        self.process_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        
+        # Get settings
+        window_length = self.window_length_spin.value()
+        overlap = self.overlap_spin.value() / 100.0
+        smoothing = self.smoothing_spin.value()
+        freq_min = self.freq_min_spin.value()
+        freq_max = self.freq_max_spin.value()
+        n_frequencies = self.n_freq_spin.value()
+        qc_mode = self.qc_combo.currentData()  # Get QC mode
+        apply_cox_fdwra = self.cox_fdwra_check.isChecked()  # Get Cox FDWRA setting
+        use_parallel = self.parallel_check.isChecked()  # Get parallel processing setting
+
+        # Get sampling rate override
+        override_sampling = self.override_sampling_check.isChecked()
+        manual_sampling_rate = self.sampling_rate_spin.value() if override_sampling else None
+        
+        # Validate frequency range
+        if freq_min >= freq_max:
+            QMessageBox.warning(self, "Invalid Range", "Minimum frequency must be less than maximum frequency.")
+            self.process_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            return
+        
+        # Log settings
+        self.add_info(f"Frequency range: {freq_min:.2f} - {freq_max:.1f} Hz ({n_frequencies} points)")
+        if manual_sampling_rate:
+            self.add_info(f"Sampling rate: {manual_sampling_rate:.4f} Hz (manual override)")
+        self.add_info(f"QC Mode: {self.qc_combo.currentText()}")
+        if apply_cox_fdwra or qc_mode == 'sesame':
+            self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
+        if use_parallel:
+            self.add_info(f"⚡ Parallel processing: Enabled ({self._get_cpu_count()} cores)")
+
+        # Start processing thread with load mode and time range
+        self.thread = ProcessingThread(
+            self.current_file, window_length, overlap, smoothing,
+            self.load_mode, self.current_time_range,
+            freq_min, freq_max, n_frequencies, qc_mode, apply_cox_fdwra, use_parallel,
+            manual_sampling_rate, self.custom_qc_settings
+        )
+        self.thread.progress.connect(self.on_progress)
+        self.thread.finished.connect(self.on_processing_finished)
+        self.thread.error.connect(self.on_processing_error)
+        self.thread.start()
+    
+    def on_progress(self, value: int, message: str):
+        """Update progress bar."""
+        self.progress_bar.setValue(value)
+        self.status_bar.showMessage(message)
+        self.add_info(message)
+    
+    def on_processing_finished(self, result, windows, data):
+        """Handle processing completion."""
+        # CRITICAL: Validate results before attempting to use them
+        is_valid, error_msg = self._validate_processing_results(result, windows)
+
+        if not is_valid:
+            # Show QC failure dialog with diagnostic information
+            self._show_qc_failure_dialog(windows, error_msg)
+
+            # Re-enable controls
+            self.progress_bar.setVisible(False)
+            self.process_btn.setEnabled(True)
+            return  # Don't proceed with plotting
+
+        self.hvsr_result = result
+        self.windows = windows
+        self.data = data
+        
+        # Update UI
+        self.progress_bar.setVisible(False)
+        self.process_btn.setEnabled(True)
+        self.export_plot_btn.setEnabled(True)  # Enable plot export button
+        self.report_btn.setEnabled(True)  # Enable report plots button
+        self.export_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
+        self.reject_all_btn.setEnabled(True)
+        self.accept_all_btn.setEnabled(True)
+        self.recompute_btn.setEnabled(True)
+        
+        # Update window info
+        self.update_window_info()
+        
+        # Update canvas (old method - keep for compatibility)
+        self.canvas.set_data(result, windows, data)
+        
+        # Update layers dock with windows reference BEFORE plotting
+        self.layers_dock.set_references(self.plot_manager, windows)
+        
+        # Update peak picker dock with HVSR data
+        self.peak_picker_dock.set_hvsr_data(result, result.frequencies, result.mean_hvsr)
+        
+        # === NEW: Plot in separate window ===
+        self.plot_results_separate_window(result, windows, data)
+        
+        # Add info
+        self.add_info(f"Processing complete!")
+        self.add_info(f"   Windows: {windows.n_active}/{windows.n_windows}")
+        if result.primary_peak:
+            self.add_info(f"   Primary peak: f0 = {result.primary_peak.frequency:.2f} Hz")
+        
+        self.status_bar.showMessage("Ready - Use layer dock to toggle visibility")
+    
+    def plot_results_separate_window(self, result, windows, data):
+        """Plot results in separate plot window."""
+        # Check if this is a QC failure result
+        if hasattr(result, 'metadata') and result.metadata.get('qc_failure', False):
+            # Don't try to plot QC failure results in separate window
+            # The interactive canvas will show the error message
+            return
+        
+        # Recreate axes with current visibility settings
+        self.plot_manager._create_axes()
+        
+        # Get axes from plot manager (some may be None if hidden)
+        ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
+        
+        # Plot timeline (if visible)
+        if ax_timeline is not None:
+            ax_timeline.clear()
+            ax_timeline.set_title('Window Timeline (Click to Toggle State)')
+            ax_timeline.set_xlabel('Time (s)')
+            ax_timeline.set_ylabel('Window')
+            
+            # Simple timeline visualization
+            for i, window in enumerate(windows.windows):
+                color = 'green' if window.is_active() else 'gray'
+                ax_timeline.barh(i, window.duration, left=window.start_time, 
+                               height=0.8, color=color, alpha=0.7)
+            
+            ax_timeline.set_ylim(-1, len(windows.windows))
+            ax_timeline.invert_yaxis()
+        
+        # Plot HVSR curves - Individual Windows Mode
+        self.window_lines = {}
+        color_palette = self._get_color_palette()
+        
+        print(f"\n=== DEBUG: Plotting Window Lines ===")
+        print(f"Total windows: {len(windows.windows)}")
+        print(f"Window spectra available: {len(result.window_spectra)}")
+        
+        # Extract individual window HVSR from result
+        # IMPORTANT: Plot ALL windows (active AND rejected) so layers panel can manage them
+        for i, window in enumerate(windows.windows):
+            if i < len(result.window_spectra):
+                # Use gray color for rejected windows, normal color for active
+                if window.is_active():
+                    color = color_palette[i % len(color_palette)]
+                    alpha = 0.5
+                else:
+                    color = 'gray'
+                    alpha = 0.3  # More transparent for rejected
+                
+                # Get this window's HVSR curve
+                window_spectrum = result.window_spectra[i]
+                window_hvsr = window_spectrum.hvsr
+                
+                # Plot individual window curve
+                # visibility controlled by window.visible (layer panel manages this)
+                line, = ax_hvsr.plot(result.frequencies, window_hvsr,
+                                    color=color, linewidth=0.8, alpha=alpha,
+                                    visible=window.is_active() and window.visible,
+                                    label=f'W{i+1}' if i < 5 else '')
+                self.window_lines[i] = line
+                
+                if i < 3:  # Log first 3 windows
+                    print(f"  Window {i}: active={window.is_active()}, visible={window.visible}, plotted={line is not None}")
+        
+        print(f"Total window_lines created: {len(self.window_lines)}")
+        print(f"=================================\n")
+        
+        # Plot mean and std
+        mean_line, = ax_hvsr.plot(result.frequencies, result.mean_hvsr,
+                                 'k-', linewidth=2.5, label='Mean', zorder=100)
+        
+        std_plus, = ax_hvsr.plot(result.frequencies, 
+                                result.mean_hvsr + result.std_hvsr,
+                                'k--', linewidth=1.5, label='+1σ', zorder=99)
+        
+        std_minus, = ax_hvsr.plot(result.frequencies,
+                                 result.mean_hvsr - result.std_hvsr,
+                                 'k--', linewidth=1.5, label='-1σ', zorder=99)
+        
+        self.stat_lines = {
+            'mean': mean_line,
+            'std_plus': std_plus,
+            'std_minus': std_minus
+        }
+        
+        ax_hvsr.set_xscale('log')
+        ax_hvsr.set_xlabel('Frequency (Hz)')
+        ax_hvsr.set_ylabel('H/V Ratio')
+        ax_hvsr.set_title('HVSR Curve - Individual Windows Mode')
+        ax_hvsr.grid(True, which='both', alpha=0.3)
+        ax_hvsr.legend(loc='upper right', fontsize=8)
+        
+        # Plot quality statistics (if visible)
+        if ax_stats is not None:
+            ax_stats.clear()
+            ax_stats.set_title('Window Quality Statistics')
+            ax_stats.set_xlabel('Window Index')
+            ax_stats.set_ylabel('Quality Score')
+            
+            qualities = [w.quality_metrics.get('overall', 0.0) for w in windows.windows]
+            colors = ['green' if w.is_active() else 'gray' for w in windows.windows]
+            ax_stats.scatter(range(len(windows.windows)), qualities, 
+                            c=colors, alpha=0.7, s=50)
+            ax_stats.axhline(0.5, color='red', linestyle='--', alpha=0.5, label='Threshold')
+            ax_stats.legend()
+            ax_stats.grid(True, alpha=0.3)
+        
+        # Adjust layout
+        self.plot_manager.fig.tight_layout()
+        self.plot_manager.canvas.draw()
+        
+        # Rebuild layer dock with lines
+        self.layers_dock.rebuild(self.window_lines, self.stat_lines)
+        
+        # Show plot window
+        self.plot_manager.show_separate()
+        self.add_info("Plot window opened")
+    
+    def refresh_plot(self):
+        """Refresh plot with current panel visibility settings."""
+        if not self.hvsr_result or not self.windows or not self.data:
+            print("[Main] Cannot refresh: no data available")
+            return
+        
+        print(f"[Main] Refreshing plot (timeline={self.plot_manager.show_timeline}, stats={self.plot_manager.show_quality_stats})")
+        
+        # Replot with current settings
+        self.plot_results_separate_window(self.hvsr_result, self.windows, self.data)
+        
+        self.add_info(f"Plot refreshed")
+    
+    def _get_color_palette(self):
+        """Get color palette for window curves."""
+        return [
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+            '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
+            '#c49c94', '#f7b6d2', '#c7c7c7', '#dbdb8d', '#9edae5'
+        ]
+    
+    def recalculate_mean_from_visible_windows(self):
+        """
+        Recalculate mean HVSR from currently visible windows in real-time.
+        
+        This provides instant visual feedback when user toggles window visibility.
+        """
+        if not self.hvsr_result or not self.windows or not self.stat_lines:
+            return
+        
+        # Collect visible window HVSR curves
+        visible_hvsr_curves = []
+        
+        for i, window in enumerate(self.windows.windows):
+            # Include if: state==ACTIVE AND visible==True
+            if window.should_include_in_hvsr() and i < len(self.hvsr_result.window_spectra):
+                window_spectrum = self.hvsr_result.window_spectra[i]
+                visible_hvsr_curves.append(window_spectrum.hvsr)
+        
+        if not visible_hvsr_curves:
+            # No visible windows - hide mean lines
+            for line in self.stat_lines.values():
+                line.set_visible(False)
+            self.plot_manager.fig.canvas.draw_idle()
+            self.add_info("WARNING: No visible windows - mean hidden")
+            return
+        
+        # Compute new mean and std from visible curves
+        visible_hvsr_array = np.array(visible_hvsr_curves)
+        new_mean = np.mean(visible_hvsr_array, axis=0)
+        new_std = np.std(visible_hvsr_array, axis=0)
+        
+        # Update mean line
+        if 'mean' in self.stat_lines:
+            self.stat_lines['mean'].set_ydata(new_mean)
+        
+        # Update +1σ line
+        if 'std_plus' in self.stat_lines:
+            self.stat_lines['std_plus'].set_ydata(new_mean + new_std)
+        
+        # Update -1σ line
+        if 'std_minus' in self.stat_lines:
+            self.stat_lines['std_minus'].set_ydata(new_mean - new_std)
+        
+        # Redraw canvas
+        self.plot_manager.fig.canvas.draw_idle()
+        
+        # Log update
+        n_visible = len(visible_hvsr_curves)
+        self.add_info(f"Mean recalculated from {n_visible} visible windows")
+
+    def _validate_processing_results(self, result, windows):
+        """
+        Validate HVSR processing results before plotting.
+
+        Returns:
+            tuple: (is_valid: bool, error_message: str)
+        """
+        # Check 1: Any windows passed QC?
+        if windows.n_active == 0:
+            return False, f"No windows passed QC (0/{windows.n_windows} rejected)"
+
+        # Check 2: Valid frequency data?
+        if result is None or len(result.frequencies) == 0:
+            return False, "No frequency data generated"
+
+        # Check 3: Valid HVSR values?
+        if result.mean_hvsr is None:
+            return False, "HVSR computation failed - no mean values"
+
+        if np.all(np.isnan(result.mean_hvsr)):
+            return False, "All HVSR values are NaN"
+
+        # All checks passed
+        return True, "OK"
+
+    def _show_qc_failure_dialog(self, windows, error_msg):
+        """
+        Show detailed QC failure dialog with diagnostic information.
+
+        Args:
+            windows: WindowCollection object
+            error_msg: Primary error message
+        """
+        # Generate QC diagnostic report
+        report = self._generate_qc_diagnostic_report(windows)
+
+        # Create detailed message
+        message = f"<h3>QC Failure: Cannot Process Data</h3>"
+        message += f"<p><b>Error:</b> {error_msg}</p>"
+        message += f"<hr>"
+        message += f"<h4>QC Diagnostic Report:</h4>"
+        message += f"<pre>{report}</pre>"
+        message += f"<hr>"
+        message += f"<h4>Suggested Solutions:</h4>"
+        message += f"<ul>"
+        message += f"<li>Click <b>⚙️ Advanced QC Settings</b> and:"
+        message += f"<ul>"
+        message += f"<li>UNCHECK 'Enable Quality Control' to bypass QC entirely</li>"
+        message += f"<li>OR adjust individual algorithm thresholds</li>"
+        message += f"</ul>"
+        message += f"</li>"
+        message += f"<li>Check your input data quality</li>"
+        message += f"<li>Try different QC modes (Conservative, Balanced, Aggressive)</li>"
+        message += f"<li>Verify sampling rate is correct</li>"
+        message += f"</ul>"
+
+        # Show message box
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle("QC Failure")
+        msg_box.setTextFormat(Qt.RichText)
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec_()
+
+        # Log to info panel
+        self.add_info("=" * 60)
+        self.add_info("QC FAILURE - No windows passed quality control")
+        self.add_info("=" * 60)
+        self.add_info(report)
+        self.add_info("=" * 60)
+
+    def _generate_qc_diagnostic_report(self, windows):
+        """
+        Generate diagnostic report showing why windows failed QC.
+
+        Args:
+            windows: WindowCollection object
+
+        Returns:
+            str: Formatted diagnostic report
+        """
+        total = windows.n_windows
+        active = windows.n_active
+        rejected = windows.n_rejected
+
+        report = f"Total Windows: {total}\n"
+        report += f"Passed: {active} ({active/total*100:.1f}%)\n"
+        report += f"Failed: {rejected} ({rejected/total*100:.1f}%)\n"
+        report += f"\n"
+
+        # Analyze rejection reasons
+        rejection_reasons = {}
+        for window in windows.windows:
+            if not window.is_active():
+                reason = window.rejection_reason if window.rejection_reason else "Unknown"
+                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+
+        if rejection_reasons:
+            report += f"Failure Breakdown:\n"
+            report += f"{'-' * 40}\n"
+            for reason, count in sorted(rejection_reasons.items(), key=lambda x: -x[1]):
+                pct = count / total * 100
+                report += f"{reason}: {count} ({pct:.1f}%)\n"
+        else:
+            report += f"No rejection reason data available\n"
+
+        report += f"\n"
+        report += f"Recommendations:\n"
+        if rejected == total:
+            report += f"  • ALL windows failed - QC may be too strict\n"
+            report += f"  • Consider disabling QC entirely for diagnosis\n"
+            report += f"  • Check if data has unusual characteristics\n"
+        elif rejected > total * 0.9:
+            report += f"  • >90% rejection rate - QC very strict\n"
+            report += f"  • Try relaxing QC thresholds\n"
+            report += f"  • Review individual algorithm settings\n"
+
+        report += f"  • Use Advanced QC Settings to customize\n"
+        report += f"  • Verify data quality and sensor response\n"
+
+        return report
+
+    def on_processing_error(self, error_msg: str):
+        """Handle processing error."""
+        self.progress_bar.setVisible(False)
+        self.process_btn.setEnabled(True)
+        QMessageBox.critical(self, "Processing Error", error_msg)
+        self.add_info(f"ERROR: {error_msg}")
+    
+    def on_window_toggled(self, window_index: int):
+        """Handle window toggle event from canvas."""
+        if self.windows is None:
+            return
+        
+        window = self.windows.get_window(window_index)
+        if window is None:
+            return
+        
+        # Toggle state
+        if window.is_active():
+            window.reject("Manual rejection", manual=True)
+            self.add_info(f"Rejected window {window_index}")
+        else:
+            window.activate()
+            self.add_info(f"Activated window {window_index}")
+        
+        # Update info
+        self.update_window_info()
+        
+        # Refresh canvas
+        self.canvas.update_window_states()
+    
+    def reject_all_windows(self):
+        """Reject all windows."""
+        if self.windows is None:
+            return
+        
+        for window in self.windows.windows:
+            if window.is_active():
+                window.reject("Batch rejection", manual=True)
+        
+        self.update_window_info()
+        self.canvas.update_window_states()
+        self.add_info("Rejected all windows")
+    
+    def accept_all_windows(self):
+        """Accept all windows."""
+        if self.windows is None:
+            return
+        
+        for window in self.windows.windows:
+            if window.is_rejected():
+                window.activate()
+        
+        self.update_window_info()
+        self.canvas.update_window_states()
+        self.add_info("Accepted all windows")
+    
+    def recompute_hvsr(self):
+        """Recompute HVSR with current window selection."""
+        if self.windows is None:
+            return
+        
+        self.add_info("Recomputing HVSR...")
+        self.status_bar.showMessage("Recomputing HVSR...")
+        
+        try:
+            # Recompute with current windows
+            smoothing = self.smoothing_spin.value()
+            processor = HVSRProcessor(smoothing_bandwidth=smoothing)
+            self.hvsr_result = processor.process(self.windows, detect_peaks_flag=True, save_window_spectra=True)
+            
+            # Update canvas
+            self.canvas.set_data(self.hvsr_result, self.windows, self.data)
+            
+            self.add_info(f"HVSR recomputed!")
+            if self.hvsr_result.primary_peak:
+                self.add_info(f"   Primary peak: f0 = {self.hvsr_result.primary_peak.frequency:.2f} Hz")
+            
+            self.status_bar.showMessage("HVSR recomputed successfully")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to recompute HVSR: {str(e)}")
+            self.add_info(f"ERROR - Recompute: {str(e)}")
+    
+    def update_window_info(self):
+        """Update window information display."""
+        if self.windows is None:
+            self.window_info_label.setText("No windows")
+            return
+        
+        info = (f"Total: {self.windows.n_windows}\n"
+                f"Active: {self.windows.n_active} "
+                f"({self.windows.acceptance_rate*100:.1f}%)\n"
+                f"Rejected: {self.windows.n_rejected}")
+        self.window_info_label.setText(info)
+    
+    def generate_report_plots(self):
+        """Open advanced export dialog for comprehensive visualizations."""
+        if self.hvsr_result is None:
+            QMessageBox.warning(self, "No Results", "No results to export.")
+            return
+        
+        from hvsr_pro.gui.export_dialog import ExportDialog
+        
+        dialog = ExportDialog(self, self.hvsr_result, self.windows, self.data)
+        dialog.exec_()
+    
+    def export_results(self):
+        """Export HVSR results (curve data, peaks, metadata)."""
+        if self.hvsr_result is None:
+            QMessageBox.warning(self, "No Results", "No results to export.")
+            return
+        
+        # Select output directory
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory"
+        )
+        
+        if output_dir:
+            try:
+                from hvsr_pro.utils.export_utils import export_complete_dataset
+                
+                # Export complete dataset
+                created_files = export_complete_dataset(
+                    self.hvsr_result,
+                    output_dir,
+                    base_filename="hvsr"
+                )
+                
+                self.add_info(f"✓ Exported to: {output_dir}")
+                for file_type, filepath in created_files.items():
+                    filename = Path(filepath).name
+                    self.add_info(f"   - {filename} ({file_type})")
+                
+                QMessageBox.information(
+                    self, "Export Complete",
+                    f"Results exported to:\n{output_dir}\n\n"
+                    f"Files created:\n" +
+                    "\n".join([f"• {Path(f).name}" for f in created_files.values()])
+                )
+                
+            except Exception as e:
+                import traceback
+                error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
+                QMessageBox.critical(self, "Export Error", error_msg)
+                self.add_info(f"ERROR - Export: {str(e)}")
+    
+    def save_session(self):
+        """Save current session."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Session", "", "JSON Files (*.json)"
+        )
+        
+        if file_path and self.hvsr_result:
+            try:
+                self.hvsr_result.save(file_path, include_windows=False)
+                self.add_info(f"Session saved: {file_path}")
+                QMessageBox.information(self, "Saved", "Session saved successfully")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", str(e))
+    
+    def load_session(self):
+        """Load saved session."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Session", "", "JSON Files (*.json)"
+        )
+        
+        if file_path:
+            try:
+                from hvsr_pro.processing.hvsr_structures import HVSRResult
+                result = HVSRResult.load(file_path)
+                self.hvsr_result = result
+                self.add_info(f"Session loaded: {file_path}")
+                # Note: Full reconstruction would need window data
+                QMessageBox.information(
+                    self, "Loaded",
+                    "Session loaded successfully\n"
+                    "(Note: Window states not restored)"
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Load Error", str(e))
+    
+    def on_peaks_changed(self, peaks: list):
+        """Handle peak list changes from dock."""
+        # Update plot markers
+        self.plot_manager.add_peak_markers(peaks)
+        self.add_info(f"Peaks updated: {len(peaks)} peak(s) - markers updated on plot")
+    
+    def on_detect_peaks_requested(self, mode: str, settings: dict):
+        """Handle peak detection request from dock."""
+        if self.hvsr_result is None:
+            QMessageBox.warning(self, "No Data", "Please process HVSR data first.")
+            return
+        
+        self.add_info(f"Peak detection: mode={mode}, settings={settings}")
+        
+        try:
+            from hvsr_pro.processing.peak_detection import find_top_n_peaks, find_multi_peaks
+            
+            frequencies = self.hvsr_result.frequencies
+            mean_hvsr = self.hvsr_result.mean_hvsr
+            
+            # Run appropriate detection algorithm
+            if mode == "auto_top_n":
+                peaks = find_top_n_peaks(
+                    frequencies,
+                    mean_hvsr,
+                    n_peaks=settings['n_peaks'],
+                    prominence=settings['prominence'],
+                    freq_range=(settings['freq_min'], settings['freq_max'])
+                )
+                self.add_info(f"Auto Top N: Found {len(peaks)} peak(s)")
+                
+            elif mode == "auto_multi":
+                peaks = find_multi_peaks(
+                    frequencies,
+                    mean_hvsr,
+                    prominence=settings['prominence'],
+                    min_distance=settings['min_distance'],
+                    freq_range=(settings['freq_min'], settings['freq_max'])
+                )
+                self.add_info(f"Auto Multi: Found {len(peaks)} peak(s)")
+            
+            else:
+                self.add_info(f"Unknown mode: {mode}")
+                return
+            
+            # Add peaks to dock
+            if peaks:
+                self.peak_picker_dock.add_peaks(peaks)
+                
+                # Log peak details
+                for i, peak in enumerate(peaks, 1):
+                    self.add_info(f"  Peak {i}: f={peak['frequency']:.2f} Hz, A={peak['amplitude']:.2f}")
+            else:
+                QMessageBox.information(self, "No Peaks", "No peaks found with current settings.\nTry lowering prominence threshold.")
+                self.add_info("No peaks detected - try different settings")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Detection Error", f"Peak detection failed:\n{str(e)}")
+            self.add_info(f"ERROR - Peak detection: {str(e)}")
+    
+    def on_manual_mode_requested(self, activate: bool):
+        """Handle manual peak picking mode toggle."""
+        if activate:
+            # Enable manual picking on plot
+            self.plot_manager.enable_manual_picking(self.on_manual_peak_selected)
+            self.add_info("✓ Manual peak picking ACTIVE - Click on HVSR curve to add peak")
+            self.status_bar.showMessage("MANUAL MODE: Click on HVSR curve to add peak")
+        else:
+            # Disable manual picking
+            self.plot_manager.disable_manual_picking()
+            self.add_info("Manual peak picking deactivated")
+            self.status_bar.showMessage("Ready")
+    
+    def on_manual_peak_selected(self, frequency: float, amplitude: float):
+        """
+        Handle manual peak selection from plot click.
+        
+        Args:
+            frequency: Clicked frequency (Hz)
+            amplitude: Clicked amplitude (H/V ratio)
+        """
+        # Add peak to dock with 'Manual' source
+        self.peak_picker_dock.add_peak(frequency, amplitude, source='Manual')
+        self.add_info(f"✓ Manual peak added: f={frequency:.2f} Hz, A={amplitude:.2f}")
+    
+    def on_properties_changed(self, properties):
+        """
+        Handle plot properties changes from properties dock.
+        
+        Args:
+            properties: PlotProperties object with new settings
+        """
+        if not self.hvsr_result or not self.windows or not self.data:
+            self.add_info("No data to apply properties to")
+            return
+        
+        self.add_info(f"✓ Properties applied: {properties.style_preset} style")
+        
+        # Store data in plot manager
+        self.plot_manager.set_plot_data(self.hvsr_result, self.windows, self.data)
+        
+        # Replot with properties
+        self.replot_with_properties(properties)
+    
+    def replot_with_properties(self, properties):
+        """
+        Replot with given properties.
+        
+        Args:
+            properties: PlotProperties object
+        """
+        import numpy as np
+        
+        # Recreate axes
+        self.plot_manager._create_axes()
+        
+        # Get axes
+        ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
+        
+        result = self.hvsr_result
+        windows = self.windows
+        
+        # Plot timeline (if visible)
+        if ax_timeline is not None:
+            ax_timeline.clear()
+            ax_timeline.set_title('Window Timeline')
+            ax_timeline.set_xlabel('Time (s)')
+            ax_timeline.set_ylabel('Window')
+            
+            for i, window in enumerate(windows.windows):
+                color = 'green' if window.is_active() else 'gray'
+                ax_timeline.barh(i, window.duration, left=window.start_time, 
+                               height=0.8, color=color, alpha=0.7)
+            
+            ax_timeline.set_ylim(-1, len(windows.windows))
+            ax_timeline.invert_yaxis()
+        
+        # === PLOT HVSR WITH PROPERTIES ===
+        self.window_lines = {}
+        color_palette = self._get_color_palette()
+        
+        # Set background color
+        bg_color = self.plot_manager.get_background_color(properties)
+        ax_hvsr.set_facecolor(bg_color)
+        
+        # Plot individual windows (if enabled)
+        if properties.show_windows:
+            for i, window in enumerate(windows.windows):
+                if i < len(result.window_spectra):
+                    if window.is_active():
+                        color = color_palette[i % len(color_palette)]
+                        alpha = properties.window_alpha
+                    else:
+                        color = 'gray'
+                        alpha = properties.window_alpha * 0.6
+                    
+                    window_spectrum = result.window_spectra[i]
+                    window_hvsr = window_spectrum.hvsr
+                    
+                    line, = ax_hvsr.plot(result.frequencies, window_hvsr,
+                                        color=color, linewidth=0.8, alpha=alpha,
+                                        visible=window.is_active() and window.visible)
+                    self.window_lines[i] = line
+        
+        # Plot percentile shading (if enabled)
+        if properties.show_percentile_shading and result.percentile_16 is not None:
+            ax_hvsr.fill_between(result.frequencies,
+                                result.percentile_16,
+                                result.percentile_84,
+                                color='blue', alpha=0.2, zorder=50,
+                                label='16th-84th percentile')
+        
+        # Plot mean curve (if enabled)
+        if properties.show_mean:
+            mean_line, = ax_hvsr.plot(result.frequencies, result.mean_hvsr,
+                                     'b-', linewidth=properties.mean_linewidth,
+                                     label='Mean H/V', zorder=100)
+            self.stat_lines = {'mean': mean_line}
+        else:
+            self.stat_lines = {}
+        
+        # Plot std bands (if enabled)
+        if properties.show_std_bands and result.std_hvsr is not None:
+            std_plus, = ax_hvsr.plot(result.frequencies, 
+                                    result.mean_hvsr + result.std_hvsr,
+                                    'k--', linewidth=1.5, label='+1σ', zorder=99)
+            
+            std_minus, = ax_hvsr.plot(result.frequencies,
+                                     result.mean_hvsr - result.std_hvsr,
+                                     'k--', linewidth=1.5, label='-1σ', zorder=99)
+            
+            self.stat_lines['std_plus'] = std_plus
+            self.stat_lines['std_minus'] = std_minus
+        
+        # Plot median (if enabled)
+        if properties.show_median and result.median_hvsr is not None:
+            median_line, = ax_hvsr.plot(result.frequencies, result.median_hvsr,
+                                        'r-', linewidth=1.5, label='Median', zorder=98)
+            self.stat_lines['median'] = median_line
+        
+        # Set Y-axis limits based on properties
+        y_min, y_max = self.plot_manager.calculate_y_limits(properties, result)
+        ax_hvsr.set_ylim(y_min, y_max)
+        
+        # Axis properties
+        ax_hvsr.set_xscale('log')
+        ax_hvsr.set_xlabel('Frequency (Hz)')
+        ax_hvsr.set_ylabel('H/V Spectral Ratio')
+        ax_hvsr.set_title('HVSR Curve')
+        ax_hvsr.set_xlim(result.frequencies[0], result.frequencies[-1])
+        
+        # Grid (if enabled)
+        if properties.show_grid:
+            ax_hvsr.grid(True, which='both', alpha=0.3)
+        
+        # Legend (if enabled)
+        if properties.show_legend:
+            ax_hvsr.legend(loc='upper right', fontsize=9)
+        
+        # Acceptance badge (if enabled)
+        if properties.show_acceptance_badge:
+            acceptance_rate = windows.acceptance_rate * 100
+            badge_text = f'Acceptance: {acceptance_rate:.1f}%'
+            ax_hvsr.text(0.02, 0.98, badge_text,
+                        transform=ax_hvsr.transAxes,
+                        fontsize=10, verticalalignment='top',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                                edgecolor='black', alpha=0.8))
+        
+        # Add peak markers (with property-controlled style)
+        if properties.show_peak_labels and hasattr(self, 'peak_picker_dock'):
+            peaks = self.peak_picker_dock.peaks
+            if peaks:
+                # Modify peak label style based on properties
+                self.plot_manager.add_peak_markers(peaks, label_style=properties.peak_label_style)
+        
+        # Plot stats panel (if visible)
+        if ax_stats is not None:
+            ax_stats.clear()
+            ax_stats.set_title('Window Quality Statistics')
+            ax_stats.set_xlabel('Window Index')
+            ax_stats.set_ylabel('Quality Score')
+            
+            qualities = [w.quality_metrics.get('overall', 0.0) for w in windows.windows]
+            colors = ['green' if w.is_active() else 'gray' for w in windows.windows]
+            ax_stats.scatter(range(len(windows.windows)), qualities, 
+                            c=colors, alpha=0.7, s=50)
+            ax_stats.axhline(0.5, color='red', linestyle='--', alpha=0.5, label='Threshold')
+            ax_stats.legend()
+            if properties.show_grid:
+                ax_stats.grid(True, alpha=0.3)
+        
+        # Adjust layout and redraw
+        self.plot_manager.fig.tight_layout()
+        self.plot_manager.canvas.draw()
+        
+        # Rebuild layer dock
+        self.layers_dock.rebuild(self.window_lines, self.stat_lines)
+        
+        # Show plot window
+        self.plot_manager.show_separate()
+    
+    def export_figure(self):
+        """Export current plot as image (alias for export_plot_image)."""
+        self.export_plot_image()
+    
+    def export_plot_image(self):
+        """Export current plot view as high-DPI image."""
+        if self.hvsr_result is None or self.plot_manager.fig is None:
+            QMessageBox.warning(self, "No Plot", "No plot to export. Please process data first.")
+            return
+        
+        # Ask user for file path and format
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Plot as Image",
+            "hvsr_plot.png",
+            "PNG Image (*.png);;PDF Document (*.pdf);;SVG Vector (*.svg);;JPEG Image (*.jpg)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        try:
+            # Determine DPI based on format
+            if file_path.endswith('.pdf') or file_path.endswith('.svg'):
+                dpi = 300  # Vector formats
+            else:
+                # Ask for DPI for raster formats
+                dpi, ok = QInputDialog.getItem(
+                    self,
+                    "Select Resolution",
+                    "Choose image resolution (DPI):",
+                    ["150 (Screen)", "300 (Print)", "600 (High Quality)"],
+                    1,  # Default to 300
+                    False
+                )
+                
+                if not ok:
+                    return  # User cancelled
+                
+                # Extract DPI number
+                dpi = int(dpi.split()[0])
+            
+            # Save the figure
+            self.plot_manager.fig.savefig(
+                file_path,
+                dpi=dpi,
+                bbox_inches='tight',
+                facecolor='white',
+                edgecolor='none'
+            )
+            
+            # Log success
+            file_size = Path(file_path).stat().st_size / 1024  # KB
+            self.add_info(f"✓ Plot exported to: {Path(file_path).name}")
+            self.add_info(f"  Resolution: {dpi} DPI, Size: {file_size:.1f} KB")
+            
+            QMessageBox.information(
+                self,
+                "Export Success",
+                f"Plot saved successfully!\n\n"
+                f"File: {Path(file_path).name}\n"
+                f"Resolution: {dpi} DPI\n"
+                f"Size: {file_size:.1f} KB"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export plot:\n{str(e)}")
+            self.add_info(f"ERROR - Plot export: {str(e)}")
+    
+    def add_info(self, message: str):
+        """Add information message to log."""
+        self.info_text.append(message)
+        # Auto-scroll to bottom
+        scrollbar = self.info_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+
+if not HAS_PYQT5:
+    class HVSRMainWindow:
+        """Dummy class when PyQt5 not available."""
+        def __init__(self):
+            raise ImportError("PyQt5 is required for GUI functionality")
