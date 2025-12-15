@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
-    QMessageBox, QAbstractItemView, QCheckBox
+    QMessageBox, QAbstractItemView, QCheckBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -105,8 +105,14 @@ class PeakPickerDock(QDockWidget):
         self.status_label = QLabel("No peaks detected")
         self.status_label.setStyleSheet("QLabel { color: gray; font-size: 10px; }")
         main_layout.addWidget(self.status_label)
-        
-        self.setWidget(widget)
+
+        # Wrap in scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.setWidget(scroll_area)
     
     def _create_mode_selector(self) -> QGroupBox:
         """Create mode selection group."""

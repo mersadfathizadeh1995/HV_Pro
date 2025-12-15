@@ -17,7 +17,8 @@ try:
     from PyQt5.QtWidgets import (
         QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
         QGroupBox, QComboBox, QPushButton, QCheckBox,
-        QLabel, QDoubleSpinBox, QSpinBox, QFrame
+        QLabel, QDoubleSpinBox, QSpinBox, QFrame, QScrollArea,
+        QRadioButton
     )
     from PyQt5.QtCore import pyqtSignal, Qt
     from PyQt5.QtGui import QFont
@@ -29,31 +30,40 @@ except ImportError:
 @dataclass
 class PlotProperties:
     """Data class for plot appearance properties."""
-    
+
     # Style preset
     style_preset: str = "analysis"  # publication, analysis, minimal, custom
-    
+
     # Y-axis control
     y_mode: str = "auto"  # auto, mean_std, percentile, manual
     y_min: float = 0.0
     y_max: float = 10.0
     y_std_multiplier: float = 2.0
     y_percentile: float = 95.0
-    
+
+    # X-axis control
+    x_mode: str = "auto"  # auto, manual
+    x_min: float = 0.1
+    x_max: float = 50.0
+    x_scale: str = "log"  # log, linear
+
+    # Visualization mode
+    visualization_mode: str = "windows"  # statistical, windows, both
+
     # Curve visibility
     show_mean: bool = True
     show_windows: bool = True
     show_std_bands: bool = True
     show_percentile_shading: bool = False
     show_median: bool = False
-    
+
     # Annotations and stats
     show_acceptance_badge: bool = True
     show_peak_labels: bool = True
     peak_label_style: str = "full"  # full, freq_only, amp_only, minimal
     show_legend: bool = True
     show_grid: bool = False
-    
+
     # Aesthetics
     background_color: str = "white"  # white, gray, light_gray
     mean_linewidth: float = 2.0
@@ -194,10 +204,12 @@ if HAS_PYQT5:
         
         Signals:
             properties_changed: Emitted when any property changes
+            visualization_mode_changed: Emitted when visualization mode changes
         """
-        
+
         properties_changed = pyqtSignal(object)  # PlotProperties object
-        
+        visualization_mode_changed = pyqtSignal(str)  # mode: 'statistical', 'windows', or 'both'
+
         def __init__(self, parent=None):
             super().__init__("Properties", parent)
             
@@ -229,7 +241,15 @@ if HAS_PYQT5:
             # === Y-AXIS CONTROL ===
             yaxis_section = self._create_yaxis_section()
             layout.addWidget(yaxis_section)
-            
+
+            # === X-AXIS CONTROL ===
+            xaxis_section = self._create_xaxis_section()
+            layout.addWidget(xaxis_section)
+
+            # === VISUALIZATION MODE ===
+            vizmode_section = self._create_visualization_mode_section()
+            layout.addWidget(vizmode_section)
+
             # === CURVE VISIBILITY ===
             curves_section = self._create_curves_section()
             layout.addWidget(curves_section)
@@ -255,10 +275,16 @@ if HAS_PYQT5:
             btn_layout.addWidget(reset_btn)
             
             layout.addLayout(btn_layout)
-            
+
             layout.addStretch()
-            
-            self.setWidget(widget)
+
+            # Wrap in scroll area
+            scroll_area = QScrollArea()
+            scroll_area.setWidget(widget)
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+            self.setWidget(scroll_area)
         
         def _create_preset_section(self) -> CollapsibleSection:
             """Create plot style preset section."""
@@ -344,9 +370,107 @@ if HAS_PYQT5:
             manual_layout.addWidget(self.ymax_spin)
             
             section.add_layout(manual_layout)
-            
+
             return section
-        
+
+        def _create_xaxis_section(self) -> CollapsibleSection:
+            """Create X-axis control section."""
+            section = CollapsibleSection("X-Axis (Frequency) Limits")
+
+            # Mode dropdown
+            mode_layout = QHBoxLayout()
+            mode_layout.addWidget(QLabel("Mode:"))
+
+            self.xmode_combo = QComboBox()
+            self.xmode_combo.addItem("Auto (Data-driven)", "auto")
+            self.xmode_combo.addItem("Manual", "manual")
+            self.xmode_combo.currentIndexChanged.connect(self.on_xmode_changed)
+            mode_layout.addWidget(self.xmode_combo)
+
+            section.add_layout(mode_layout)
+
+            # Scale selection
+            scale_layout = QHBoxLayout()
+            scale_layout.addWidget(QLabel("Scale:"))
+
+            self.xscale_combo = QComboBox()
+            self.xscale_combo.addItem("Logarithmic", "log")
+            self.xscale_combo.addItem("Linear", "linear")
+            scale_layout.addWidget(self.xscale_combo)
+
+            section.add_layout(scale_layout)
+
+            # Manual limits
+            manual_layout = QHBoxLayout()
+            manual_layout.addWidget(QLabel("Min (Hz):"))
+            self.xmin_spin = QDoubleSpinBox()
+            self.xmin_spin.setRange(0.01, 1000.0)
+            self.xmin_spin.setValue(0.1)
+            self.xmin_spin.setSingleStep(0.1)
+            self.xmin_spin.setDecimals(2)
+            manual_layout.addWidget(self.xmin_spin)
+
+            manual_layout.addWidget(QLabel("Max (Hz):"))
+            self.xmax_spin = QDoubleSpinBox()
+            self.xmax_spin.setRange(0.1, 1000.0)
+            self.xmax_spin.setValue(50.0)
+            self.xmax_spin.setSingleStep(1.0)
+            self.xmax_spin.setDecimals(1)
+            manual_layout.addWidget(self.xmax_spin)
+
+            section.add_layout(manual_layout)
+
+            return section
+
+        def _create_visualization_mode_section(self) -> CollapsibleSection:
+            """Create visualization mode section."""
+            section = CollapsibleSection("Visualization Mode")
+
+            # Radio buttons for visualization modes
+            self.viz_rb_statistical = QRadioButton("Statistical View")
+            self.viz_rb_statistical.setToolTip("Mean + uncertainty band (clean, publication-ready)")
+            self.viz_rb_statistical.toggled.connect(self._on_viz_mode_changed)
+            section.add_widget(self.viz_rb_statistical)
+
+            self.viz_rb_windows = QRadioButton("Individual Windows")
+            self.viz_rb_windows.setToolTip("All window curves + mean (best for QC)")
+            self.viz_rb_windows.toggled.connect(self._on_viz_mode_changed)
+            section.add_widget(self.viz_rb_windows)
+
+            self.viz_rb_both = QRadioButton("Both (Combined)")
+            self.viz_rb_both.setToolTip("All curves + statistics (comprehensive)")
+            self.viz_rb_both.toggled.connect(self._on_viz_mode_changed)
+            section.add_widget(self.viz_rb_both)
+
+            # Set default
+            self.viz_rb_windows.setChecked(True)
+
+            # Info label
+            info_label = QLabel("Changes apply immediately to plot")
+            info_label.setStyleSheet("QLabel { color: #666; font-size: 9px; font-style: italic; }")
+            section.add_widget(info_label)
+
+            return section
+
+        def _on_viz_mode_changed(self):
+            """Handle visualization mode change."""
+            if not self.sender().isChecked():
+                return  # Only respond to the checked button
+
+            mode = 'windows'  # default
+            if self.viz_rb_statistical.isChecked():
+                mode = 'statistical'
+            elif self.viz_rb_windows.isChecked():
+                mode = 'windows'
+            elif self.viz_rb_both.isChecked():
+                mode = 'both'
+
+            # Update property
+            self.properties.visualization_mode = mode
+
+            # Emit signal for immediate update
+            self.visualization_mode_changed.emit(mode)
+
         def _create_curves_section(self) -> CollapsibleSection:
             """Create curve visibility section."""
             section = CollapsibleSection("Curve Display")
@@ -461,11 +585,23 @@ if HAS_PYQT5:
         def on_ymode_changed(self, index: int):
             """Handle Y-axis mode change."""
             mode = self.ymode_combo.itemData(index)
-            
+
             # Show/hide relevant controls
             # For now, just update property
             self.properties.y_mode = mode
-        
+
+        def on_xmode_changed(self, index: int):
+            """Handle X-axis mode change."""
+            mode = self.xmode_combo.itemData(index)
+
+            # Update property
+            self.properties.x_mode = mode
+
+            # Enable/disable manual controls
+            is_manual = (mode == "manual")
+            self.xmin_spin.setEnabled(is_manual)
+            self.xmax_spin.setEnabled(is_manual)
+
         def apply_preset(self, preset: str):
             """Apply a preset and update UI."""
             if preset == "publication":
@@ -484,12 +620,37 @@ if HAS_PYQT5:
             y_mode_index = self.ymode_combo.findData(self.properties.y_mode)
             if y_mode_index >= 0:
                 self.ymode_combo.setCurrentIndex(y_mode_index)
-            
+
             self.std_spin.setValue(self.properties.y_std_multiplier)
             self.percentile_spin.setValue(self.properties.y_percentile)
             self.ymin_spin.setValue(self.properties.y_min)
             self.ymax_spin.setValue(self.properties.y_max)
-            
+
+            # X-axis
+            x_mode_index = self.xmode_combo.findData(self.properties.x_mode)
+            if x_mode_index >= 0:
+                self.xmode_combo.setCurrentIndex(x_mode_index)
+
+            x_scale_index = self.xscale_combo.findData(self.properties.x_scale)
+            if x_scale_index >= 0:
+                self.xscale_combo.setCurrentIndex(x_scale_index)
+
+            self.xmin_spin.setValue(self.properties.x_min)
+            self.xmax_spin.setValue(self.properties.x_max)
+
+            # Enable/disable manual controls based on mode
+            is_manual = (self.properties.x_mode == "manual")
+            self.xmin_spin.setEnabled(is_manual)
+            self.xmax_spin.setEnabled(is_manual)
+
+            # Visualization mode
+            if self.properties.visualization_mode == "statistical":
+                self.viz_rb_statistical.setChecked(True)
+            elif self.properties.visualization_mode == "windows":
+                self.viz_rb_windows.setChecked(True)
+            elif self.properties.visualization_mode == "both":
+                self.viz_rb_both.setChecked(True)
+
             # Curves
             self.show_mean_cb.setChecked(self.properties.show_mean)
             self.show_windows_cb.setChecked(self.properties.show_windows)
@@ -529,7 +690,25 @@ if HAS_PYQT5:
             self.properties.y_percentile = self.percentile_spin.value()
             self.properties.y_min = self.ymin_spin.value()
             self.properties.y_max = self.ymax_spin.value()
-            
+
+            # X-axis
+            xmode_index = self.xmode_combo.currentIndex()
+            self.properties.x_mode = self.xmode_combo.itemData(xmode_index)
+
+            xscale_index = self.xscale_combo.currentIndex()
+            self.properties.x_scale = self.xscale_combo.itemData(xscale_index)
+
+            self.properties.x_min = self.xmin_spin.value()
+            self.properties.x_max = self.xmax_spin.value()
+
+            # Visualization mode
+            if self.viz_rb_statistical.isChecked():
+                self.properties.visualization_mode = "statistical"
+            elif self.viz_rb_windows.isChecked():
+                self.properties.visualization_mode = "windows"
+            elif self.viz_rb_both.isChecked():
+                self.properties.visualization_mode = "both"
+
             # Curves
             self.properties.show_mean = self.show_mean_cb.isChecked()
             self.properties.show_windows = self.show_windows_cb.isChecked()

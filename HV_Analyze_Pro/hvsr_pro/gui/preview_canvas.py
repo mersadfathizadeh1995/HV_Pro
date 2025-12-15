@@ -1,0 +1,979 @@
+"""
+Preview Canvas for HVSR Pro
+============================
+
+Dockable/detachable canvas for previewing seismic data before processing.
+
+Features:
+- Component signal display (E, N, Z)
+- Spectrograms
+- Time series plots
+- Can be detached into separate window
+"""
+
+import numpy as np
+from typing import Optional
+
+try:
+    from PyQt5.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+        QRadioButton, QPushButton, QButtonGroup, QMainWindow,
+        QCheckBox, QLabel, QDoubleSpinBox, QDateTimeEdit, QComboBox
+    )
+    from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_qt5agg import (
+        FigureCanvasQTAgg as FigureCanvas,
+        NavigationToolbar2QT
+    )
+    HAS_PYQT5 = True
+except ImportError:
+    HAS_PYQT5 = False
+
+
+if HAS_PYQT5:
+
+    class PreviewCanvas(QWidget):
+        """
+        Preview canvas widget for displaying seismic data.
+
+        Supports multiple view modes:
+        - E, N, Z component signals
+        - Spectrograms
+        - Time series
+
+        Can be detached into separate window.
+        """
+
+        # Signals
+        detached = pyqtSignal()
+        attached = pyqtSignal()
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+
+            # Data storage
+            self.seismic_data = None
+            self.current_view = 'E'  # Default view
+
+            # Time filtering
+            self.time_filter_enabled = False
+            self.time_start = 0.0
+            self.time_end = None  # None means end of data
+            self.data_start_datetime = None  # Store actual datetime from data
+            self.selected_timezone = 'UTC'  # Default timezone for input interpretation
+
+            # Detached window reference
+            self.detached_window = None
+            self.is_detached = False
+
+            # Store icons for later use
+            from PyQt5.QtWidgets import QApplication, QStyle
+            style = QApplication.style()
+            self.detach_icon = style.standardIcon(QStyle.SP_TitleBarMaxButton)
+            self.attach_icon = style.standardIcon(QStyle.SP_TitleBarNormalButton)
+
+            # Create UI
+            self.init_ui()
+
+        def init_ui(self):
+            """Initialize user interface."""
+            layout = QVBoxLayout(self)
+
+            # Matplotlib figure and canvas
+            self.fig = Figure(figsize=(10, 6), dpi=100)
+            self.canvas = FigureCanvas(self.fig)
+            self.ax = self.fig.add_subplot(111)
+
+            # Navigation toolbar
+            self.toolbar = NavigationToolbar2QT(self.canvas, self)
+
+            # Add detach/attach button to toolbar with proper icon
+            self.detach_action = self.toolbar.addAction(self.detach_icon, "Detach")
+            self.detach_action.setToolTip("Detach preview to separate window")
+            self.detach_action.triggered.connect(self.toggle_detach)
+
+            layout.addWidget(self.toolbar)
+
+            # Canvas
+            layout.addWidget(self.canvas)
+
+            # Enable context menu for canvas
+            self.canvas.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.canvas.customContextMenuRequested.connect(self.show_context_menu)
+
+            # Preview options group
+            options_group = QGroupBox("Preview Options")
+            options_layout = QHBoxLayout()
+
+            # Radio buttons for view modes
+            self.button_group = QButtonGroup(self)
+
+            self.radio_e = QRadioButton("E Component")
+            self.radio_e.setChecked(True)
+            self.radio_e.toggled.connect(lambda checked: checked and self.show_component_signal('E'))
+            self.button_group.addButton(self.radio_e)
+            options_layout.addWidget(self.radio_e)
+
+            self.radio_n = QRadioButton("N Component")
+            self.radio_n.toggled.connect(lambda checked: checked and self.show_component_signal('N'))
+            self.button_group.addButton(self.radio_n)
+            options_layout.addWidget(self.radio_n)
+
+            self.radio_z = QRadioButton("Z Component")
+            self.radio_z.toggled.connect(lambda checked: checked and self.show_component_signal('Z'))
+            self.button_group.addButton(self.radio_z)
+            options_layout.addWidget(self.radio_z)
+
+            self.radio_spec = QRadioButton("Spectrogram")
+            self.radio_spec.toggled.connect(lambda checked: checked and self.show_spectrogram())
+            self.button_group.addButton(self.radio_spec)
+            options_layout.addWidget(self.radio_spec)
+
+            self.radio_time = QRadioButton("Time Series (All)")
+            self.radio_time.toggled.connect(lambda checked: checked and self.show_timeseries())
+            self.button_group.addButton(self.radio_time)
+            options_layout.addWidget(self.radio_time)
+
+            options_layout.addStretch()
+
+            options_group.setLayout(options_layout)
+            layout.addWidget(options_group)
+
+            # Time filtering controls
+            time_filter_group = QGroupBox("Time Range Filter")
+            time_filter_layout = QVBoxLayout()
+
+            # Enable checkbox - default to checked
+            self.time_filter_checkbox = QCheckBox("Use Custom Time Range (default: use full data range)")
+            self.time_filter_checkbox.setChecked(False)
+            self.time_filter_checkbox.stateChanged.connect(self.on_time_filter_toggled)
+            time_filter_layout.addWidget(self.time_filter_checkbox)
+
+            # Timezone selector
+            tz_layout = QHBoxLayout()
+            tz_layout.addWidget(QLabel("Input Timezone:"))
+            self.timezone_combo = QComboBox()
+            self.timezone_combo.addItems([
+                'UTC (GMT+0)',
+                'GMT+1 (CET)',
+                'GMT+2 (EET)',
+                'GMT+3',
+                'GMT+3:30 (IRST - Iran)',
+                'GMT+4',
+                'GMT+4:30',
+                'GMT+5',
+                'GMT+5:30 (IST - India)',
+                'GMT+6',
+                'GMT+7',
+                'GMT+8 (CST - China)',
+                'GMT+9 (JST - Japan)',
+                'GMT+10 (AEST)',
+                'GMT+11',
+                'GMT+12',
+                'GMT-1',
+                'GMT-2',
+                'GMT-3',
+                'GMT-4 (AST)',
+                'GMT-5 (EST)',
+                'GMT-6 (CST)',
+                'GMT-7 (MST)',
+                'GMT-8 (PST)',
+                'GMT-9',
+                'GMT-10',
+                'GMT-11',
+                'GMT-12'
+            ])
+            self.timezone_combo.setCurrentText('UTC (GMT+0)')
+            self.timezone_combo.currentTextChanged.connect(self.on_timezone_changed)
+            self.timezone_combo.setToolTip("Select the timezone for the date/time inputs below.\nTimes will be converted to UTC for processing.")
+            tz_layout.addWidget(self.timezone_combo)
+            tz_layout.addStretch()
+            time_filter_layout.addLayout(tz_layout)
+
+            # Info about timezone
+            tz_info = QLabel("⚠ Enter times in the selected timezone. They will be converted to UTC for data processing.")
+            tz_info.setStyleSheet("color: #FF9800; font-size: 9px; font-style: italic;")
+            tz_info.setWordWrap(True)
+            time_filter_layout.addWidget(tz_info)
+
+            # DateTime inputs
+            datetime_layout = QVBoxLayout()
+
+            # Start datetime
+            start_layout = QHBoxLayout()
+            start_layout.addWidget(QLabel("Start:"))
+            self.datetime_start = QDateTimeEdit()
+            self.datetime_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz")
+            self.datetime_start.setCalendarPopup(True)
+            self.datetime_start.setEnabled(False)
+            self.datetime_start.dateTimeChanged.connect(self.on_time_range_changed)
+            start_layout.addWidget(self.datetime_start)
+            datetime_layout.addLayout(start_layout)
+
+            # End datetime
+            end_layout = QHBoxLayout()
+            end_layout.addWidget(QLabel("End:"))
+            self.datetime_end = QDateTimeEdit()
+            self.datetime_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz")
+            self.datetime_end.setCalendarPopup(True)
+            self.datetime_end.setEnabled(False)
+            self.datetime_end.dateTimeChanged.connect(self.on_time_range_changed)
+            end_layout.addWidget(self.datetime_end)
+            datetime_layout.addLayout(end_layout)
+
+            time_filter_layout.addLayout(datetime_layout)
+
+            # Apply button
+            button_layout = QHBoxLayout()
+            self.apply_time_btn = QPushButton("Apply Time Range")
+            self.apply_time_btn.setEnabled(False)
+            self.apply_time_btn.clicked.connect(self.apply_time_filter)
+            button_layout.addWidget(self.apply_time_btn)
+            button_layout.addStretch()
+            time_filter_layout.addLayout(button_layout)
+
+            # Info label
+            self.time_filter_info = QLabel("Using full data range")
+            self.time_filter_info.setStyleSheet("color: gray; font-size: 9px;")
+            time_filter_layout.addWidget(self.time_filter_info)
+
+            time_filter_group.setLayout(time_filter_layout)
+            layout.addWidget(time_filter_group)
+
+        def set_data(self, seismic_data, time_range=None):
+            """
+            Set seismic data for preview.
+
+            Args:
+                seismic_data: SeismicData object with E, N, Z components
+                time_range: Optional dict with 'start' and 'end' datetime objects or times in seconds
+            """
+            from datetime import datetime, timedelta
+
+            self.seismic_data = seismic_data
+
+            if seismic_data:
+                # Get start datetime from data (if available)
+                # IMPORTANT: We assume data timestamps are in UTC
+                # Try to get from metadata, otherwise use current time as placeholder
+                if hasattr(seismic_data, 'start_time') and seismic_data.start_time:
+                    data_start_raw = seismic_data.start_time
+                elif hasattr(seismic_data, 'metadata') and 'start_time' in seismic_data.metadata:
+                    data_start_raw = seismic_data.metadata['start_time']
+                else:
+                    # Use current date/time as placeholder
+                    data_start_raw = datetime.now()
+
+                # Strip timezone info to avoid QDateTime local timezone conversion
+                # We'll handle timezone explicitly through the combo box
+                if hasattr(data_start_raw, 'tzinfo') and data_start_raw.tzinfo is not None:
+                    # Convert to naive datetime (assume UTC)
+                    self.data_start_datetime = data_start_raw.replace(tzinfo=None)
+                else:
+                    self.data_start_datetime = data_start_raw
+
+                # Default to full data range
+                self.time_start = 0.0
+                self.time_end = seismic_data.duration
+
+                # Convert to QDateTime for the pickers
+                # Use local time spec to avoid automatic timezone conversion
+                start_qdatetime = QDateTime(self.data_start_datetime)
+                start_qdatetime.setTimeSpec(Qt.LocalTime)
+
+                end_qdatetime = start_qdatetime.addMSecs(int(seismic_data.duration * 1000))
+
+                # Set datetime range
+                self.datetime_start.setDateTime(start_qdatetime)
+                self.datetime_end.setDateTime(end_qdatetime)
+
+                # Set time range from provided range if available
+                if time_range:
+                    if 'start' in time_range and 'end' in time_range:
+                        if isinstance(time_range['start'], (datetime,)):
+                            # If datetime objects provided
+                            self.datetime_start.setDateTime(QDateTime(time_range['start']))
+                            self.datetime_end.setDateTime(QDateTime(time_range['end']))
+                            # Calculate seconds from start
+                            self.time_start = (time_range['start'] - self.data_start_datetime).total_seconds()
+                            self.time_end = (time_range['end'] - self.data_start_datetime).total_seconds()
+                        else:
+                            # If seconds provided
+                            self.time_start = time_range['start']
+                            self.time_end = time_range['end']
+                            # Update datetime pickers
+                            self.datetime_start.setDateTime(start_qdatetime.addMSecs(int(self.time_start * 1000)))
+                            self.datetime_end.setDateTime(start_qdatetime.addMSecs(int(self.time_end * 1000)))
+
+                        self.time_filter_enabled = True
+                        self.time_filter_checkbox.setChecked(True)
+
+            # Update preview with current view mode
+            if self.radio_e.isChecked():
+                self.show_component_signal('E')
+            elif self.radio_n.isChecked():
+                self.show_component_signal('N')
+            elif self.radio_z.isChecked():
+                self.show_component_signal('Z')
+            elif self.radio_spec.isChecked():
+                self.show_spectrogram()
+            elif self.radio_time.isChecked():
+                self.show_timeseries()
+
+        def set_data_from_files(self, data_list, time_range=None):
+            """
+            Set data from multiple files (concatenated).
+
+            This method concatenates data from multiple SeismicData objects
+            and previews them as a single combined dataset.
+
+            Args:
+                data_list: List of SeismicData objects to concatenate
+                time_range: Optional time range to apply to combined data
+            """
+            if not data_list:
+                return
+
+            # If only one file, use regular set_data
+            if len(data_list) == 1:
+                self.set_data(data_list[0], time_range)
+                return
+
+            # Concatenate multiple files
+            combined_data = self.concatenate_seismic_data(data_list)
+
+            # Use existing set_data method
+            if combined_data:
+                self.set_data(combined_data, time_range)
+
+        def concatenate_seismic_data(self, data_list):
+            """
+            Concatenate multiple SeismicData objects into one.
+
+            Args:
+                data_list: List of SeismicData objects
+
+            Returns:
+                Combined SeismicData object or None if concatenation fails
+            """
+            if not data_list:
+                return None
+
+            try:
+                # Import SeismicData class
+                from hvsr_pro.data.seismic import SeismicData
+
+                # Collect components from all files
+                e_arrays = []
+                n_arrays = []
+                z_arrays = []
+
+                # Track metadata
+                first_data = data_list[0]
+                sampling_rate = first_data.E.sampling_rate if hasattr(first_data.E, 'sampling_rate') else None
+                start_time = first_data.start_time if hasattr(first_data, 'start_time') else None
+
+                # Concatenate each component
+                for data in data_list:
+                    # Validate sampling rate consistency
+                    if sampling_rate and hasattr(data.E, 'sampling_rate'):
+                        if abs(data.E.sampling_rate - sampling_rate) > 0.01:
+                            # Sampling rates don't match - warn but continue
+                            print(f"Warning: Inconsistent sampling rates detected ({sampling_rate} vs {data.E.sampling_rate})")
+
+                    # Get component data
+                    e_data = data.E.data if hasattr(data.E, 'data') else data.E
+                    n_data = data.N.data if hasattr(data.N, 'data') else data.N
+                    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+
+                    e_arrays.append(e_data)
+                    n_arrays.append(n_data)
+                    z_arrays.append(z_data)
+
+                # Concatenate arrays
+                combined_e = np.concatenate(e_arrays)
+                combined_n = np.concatenate(n_arrays)
+                combined_z = np.concatenate(z_arrays)
+
+                # Create combined SeismicData object
+                # Try to create with proper structure
+                try:
+                    combined = SeismicData(
+                        e=combined_e,
+                        n=combined_n,
+                        z=combined_z,
+                        sampling_rate=sampling_rate,
+                        start_time=start_time
+                    )
+                except Exception as e:
+                    # Fallback: create simple object with basic attributes
+                    class CombinedSeismicData:
+                        def __init__(self, e, n, z, fs, start_time):
+                            self.E = type('Component', (), {'data': e, 'sampling_rate': fs})()
+                            self.N = type('Component', (), {'data': n, 'sampling_rate': fs})()
+                            self.Z = type('Component', (), {'data': z, 'sampling_rate': fs})()
+                            self.sampling_rate = fs
+                            self.start_time = start_time
+                            self.duration = len(e) / fs if fs else len(e)
+                            self.metadata = {'combined': True, 'n_files': len(data_list)}
+
+                    combined = CombinedSeismicData(combined_e, combined_n, combined_z, sampling_rate, start_time)
+
+                return combined
+
+            except Exception as e:
+                print(f"Error concatenating seismic data: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return None
+
+        def on_time_filter_toggled(self, state):
+            """Handle time filter checkbox toggle."""
+            from PyQt5.QtCore import Qt
+            enabled = (state == Qt.Checked)
+
+            self.time_filter_enabled = enabled
+            self.datetime_start.setEnabled(enabled)
+            self.datetime_end.setEnabled(enabled)
+            self.apply_time_btn.setEnabled(enabled)
+
+            if enabled:
+                start_str = self.datetime_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                end_str = self.datetime_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                self.time_filter_info.setText(f"Custom range: {start_str} to {end_str}")
+                self.time_filter_info.setStyleSheet("color: green; font-size: 9px;")
+            else:
+                self.time_filter_info.setText("Using full data range")
+                self.time_filter_info.setStyleSheet("color: gray; font-size: 9px;")
+                # Reset to full range when disabled
+                if self.seismic_data and self.data_start_datetime:
+                    self.time_start = 0.0
+                    self.time_end = self.seismic_data.duration
+
+            # Refresh plot
+            self.apply_time_filter()
+
+        def on_timezone_changed(self, tz_text):
+            """Handle timezone selection change."""
+            # Extract timezone name for storage
+            self.selected_timezone = tz_text
+
+            # Update info label to remind user
+            if self.time_filter_enabled:
+                start_str = self.datetime_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                end_str = self.datetime_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                self.time_filter_info.setText(f"Range in {tz_text}: {start_str} to {end_str}")
+
+        def _parse_timezone_offset(self, tz_text):
+            """
+            Parse timezone offset from combo box text.
+
+            Args:
+                tz_text: Text like 'UTC (GMT+0)', 'GMT+3:30 (IRST - Iran)', etc.
+
+            Returns:
+                offset in hours as float (e.g., 3.5 for GMT+3:30)
+            """
+            import re
+
+            # Extract GMT offset from text
+            # Patterns: GMT+3, GMT-5, GMT+3:30, etc.
+            if 'UTC' in tz_text or 'GMT+0' in tz_text or 'GMT-0' in tz_text:
+                return 0.0
+
+            # Match GMT+/-N or GMT+/-N:MM
+            match = re.search(r'GMT([+-])(\d+)(?::(\d+))?', tz_text)
+            if match:
+                sign = 1 if match.group(1) == '+' else -1
+                hours = int(match.group(2))
+                minutes = int(match.group(3)) if match.group(3) else 0
+                return sign * (hours + minutes / 60.0)
+
+            return 0.0  # Default to UTC if parsing fails
+
+        def on_time_range_changed(self):
+            """Handle time range value changes."""
+            # Update info label with new range
+            if self.time_filter_enabled:
+                start_str = self.datetime_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                end_str = self.datetime_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                tz_name = self.selected_timezone.split('(')[0].strip()
+                self.time_filter_info.setText(f"Range in {tz_name}: {start_str} to {end_str}")
+
+        def apply_time_filter(self):
+            """Apply time filter and refresh plot."""
+            if self.time_filter_enabled and self.data_start_datetime:
+                from datetime import timedelta
+
+                # Get user input times (these are in the selected timezone)
+                start_dt = self.datetime_start.dateTime().toPyDateTime()
+                end_dt = self.datetime_end.dateTime().toPyDateTime()
+
+                # Get timezone offset in hours
+                tz_offset_hours = self._parse_timezone_offset(self.selected_timezone)
+
+                # Convert from selected timezone to UTC
+                # If user enters time in GMT+3:30, we subtract 3.5 hours to get UTC
+                tz_offset_delta = timedelta(hours=tz_offset_hours)
+                start_dt_utc = start_dt - tz_offset_delta
+                end_dt_utc = end_dt - tz_offset_delta
+
+                # Assume data_start_datetime is in UTC (or naive)
+                # If data_start_datetime is timezone-aware, handle accordingly
+                data_start = self.data_start_datetime
+                if hasattr(data_start, 'tzinfo') and data_start.tzinfo is not None:
+                    # Data start is timezone-aware
+                    # Make sure our UTC times are also timezone-aware for comparison
+                    import pytz
+                    utc = pytz.UTC
+                    if start_dt_utc.tzinfo is None:
+                        start_dt_utc = utc.localize(start_dt_utc)
+                    if end_dt_utc.tzinfo is None:
+                        end_dt_utc = utc.localize(end_dt_utc)
+                else:
+                    # Data start is naive - treat both as naive
+                    if start_dt_utc.tzinfo is not None:
+                        start_dt_utc = start_dt_utc.replace(tzinfo=None)
+                    if end_dt_utc.tzinfo is not None:
+                        end_dt_utc = end_dt_utc.replace(tzinfo=None)
+
+                # Convert to seconds from data start
+                self.time_start = (start_dt_utc - data_start).total_seconds()
+                self.time_end = (end_dt_utc - data_start).total_seconds()
+
+                # Ensure valid range
+                if self.seismic_data:
+                    self.time_start = max(0.0, self.time_start)
+                    self.time_end = min(self.seismic_data.duration, self.time_end)
+
+            # Refresh current view
+            if self.radio_e.isChecked():
+                self.show_component_signal('E')
+            elif self.radio_n.isChecked():
+                self.show_component_signal('N')
+            elif self.radio_z.isChecked():
+                self.show_component_signal('Z')
+            elif self.radio_spec.isChecked():
+                self.show_spectrogram()
+            elif self.radio_time.isChecked():
+                self.show_timeseries()
+
+        def _get_time_slice(self, time_vector, data):
+            """
+            Get time-sliced data based on current filter settings.
+
+            Args:
+                time_vector: Original time vector
+                data: Original data array
+
+            Returns:
+                tuple: (sliced_time, sliced_data)
+            """
+            if not self.time_filter_enabled:
+                return time_vector, data
+
+            # Find indices for time range
+            start_idx = np.searchsorted(time_vector, self.time_start)
+            end_idx = np.searchsorted(time_vector, self.time_end)
+
+            # Ensure valid range
+            start_idx = max(0, start_idx)
+            end_idx = min(len(data), end_idx)
+
+            if start_idx >= end_idx:
+                return time_vector, data  # Invalid range, return full data
+
+            return time_vector[start_idx:end_idx], data[start_idx:end_idx]
+
+        def show_component_signal(self, component: str):
+            """
+            Display single component signal with metadata.
+
+            Args:
+                component: 'E', 'N', or 'Z'
+            """
+            if not self.seismic_data:
+                self.clear_preview()
+                return
+
+            self.current_view = component
+
+            # Get component data
+            comp_data = self.seismic_data.get_component(component)
+            if not comp_data:
+                self.clear_preview()
+                return
+
+            # IMPORTANT: Clear figure completely and recreate single subplot
+            # This is necessary when switching from multi-subplot views (timeseries)
+            self.fig.clear()
+            self.ax = self.fig.add_subplot(111)
+
+            time = comp_data.time_vector
+            data = comp_data.data
+
+            # Apply time slicing if enabled
+            time, data = self._get_time_slice(time, data)
+
+            # Component colors
+            colors = {'E': '#d62728', 'N': '#2ca02c', 'Z': '#1f77b4'}
+            color = colors.get(component, 'b')
+
+            self.ax.plot(time, data, color=color, linewidth=0.6, alpha=0.9)
+            self.ax.set_xlabel('Time (s)', fontsize=10)
+            self.ax.set_ylabel(f'Amplitude ({comp_data.units})', fontsize=10)
+
+            # Create comprehensive title with metadata
+            duration = time[-1] - time[0] if len(time) > 0 else 0
+            title = f'{component} Component Signal'
+            if self.time_filter_enabled:
+                title += f' (Filtered: {self.time_start:.1f}-{self.time_end:.1f}s)'
+            title += f'\nDuration: {duration:.2f} s | '
+            title += f'Sampling Rate: {comp_data.sampling_rate:.2f} Hz | '
+            title += f'Samples: {len(data):,} | '
+            title += f'Range: [{np.min(data):.2e}, {np.max(data):.2e}]'
+            self.ax.set_title(title, fontsize=9, pad=10)
+
+            self.ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+            # Add statistics box
+            stats_text = f'Mean: {np.mean(data):.2e}\n'
+            stats_text += f'Std: {np.std(data):.2e}\n'
+            stats_text += f'RMS: {np.sqrt(np.mean(data**2)):.2e}'
+            self.ax.text(0.02, 0.98, stats_text,
+                        transform=self.ax.transAxes,
+                        verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+                        fontsize=8)
+
+            self.fig.tight_layout()
+            self.canvas.draw()
+
+        def show_spectrogram(self):
+            """Display spectrogram of currently selected component."""
+            if not self.seismic_data:
+                self.clear_preview()
+                return
+
+            # Determine which component to show
+            if self.radio_e.isChecked() or self.current_view == 'E':
+                component = 'E'
+            elif self.radio_n.isChecked() or self.current_view == 'N':
+                component = 'N'
+            elif self.radio_z.isChecked() or self.current_view == 'Z':
+                component = 'Z'
+            else:
+                component = 'E'  # Default
+
+            comp_data = self.seismic_data.get_component(component)
+            if not comp_data:
+                self.clear_preview()
+                return
+
+            # IMPORTANT: Clear figure completely and recreate single subplot
+            # This is necessary when switching from multi-subplot views (timeseries)
+            self.fig.clear()
+            self.ax = self.fig.add_subplot(111)
+
+            # Get data and apply time slicing
+            time_vector = comp_data.time_vector
+            data = comp_data.data
+
+            # Apply time slicing if enabled
+            time_vector, data = self._get_time_slice(time_vector, data)
+
+            # Compute spectrogram
+            fs = comp_data.sampling_rate
+
+            # Calculate appropriate NFFT based on sampling rate
+            # Use ~1 second windows for better frequency resolution
+            nfft = min(2048, int(fs))
+            noverlap = int(nfft * 0.75)  # 75% overlap
+
+            # Use matplotlib's specgram
+            try:
+                spectrum, freqs, times, im = self.ax.specgram(
+                    data,
+                    Fs=fs,
+                    NFFT=nfft,
+                    noverlap=noverlap,
+                    cmap='viridis',
+                    scale='dB',
+                    mode='magnitude'
+                )
+
+                # Adjust time axis to account for time slicing
+                if self.time_filter_enabled and len(time_vector) > 0:
+                    times = times + time_vector[0]  # Offset by start time
+
+                self.ax.set_xlabel('Time (s)', fontsize=10)
+                self.ax.set_ylabel('Frequency (Hz)', fontsize=10)
+
+                duration = time_vector[-1] - time_vector[0] if len(time_vector) > 0 else 0
+                title = f'{component} Component Spectrogram'
+                if self.time_filter_enabled:
+                    title += f' (Filtered: {self.time_start:.1f}-{self.time_end:.1f}s)'
+                title += f'\nSampling Rate: {fs:.2f} Hz | Duration: {duration:.2f} s'
+                self.ax.set_title(title, fontsize=9, pad=10)
+
+                # Limit frequency range to 0-50 Hz (typical HVSR range)
+                self.ax.set_ylim(0, min(50, fs/2))
+
+                # Add colorbar
+                self.fig.colorbar(im, ax=self.ax, label='Magnitude (dB)')
+
+                self.fig.tight_layout()
+            except Exception as e:
+                self.ax.text(0.5, 0.5, f'Error computing spectrogram:\n{str(e)}',
+                           horizontalalignment='center',
+                           verticalalignment='center',
+                           transform=self.ax.transAxes,
+                           fontsize=12, color='red')
+
+            self.canvas.draw()
+
+        def show_timeseries(self):
+            """Display all three components as time series (hvsrpy style)."""
+            if not self.seismic_data:
+                self.clear_preview()
+                return
+
+            # Clear figure and create 3 subplots
+            self.fig.clear()
+
+            components = ['E', 'N', 'Z']
+            colors = {'E': '#d62728', 'N': '#2ca02c', 'Z': '#1f77b4'}
+            comp_labels = {'E': 'East', 'N': 'North', 'Z': 'Vertical'}
+
+            # Find normalization factor (like hvsrpy)
+            norm_factor = 0.
+            for comp in components:
+                comp_data = self.seismic_data.get_component(comp)
+                if comp_data:
+                    c_max = np.max(np.abs(comp_data.data))
+                    if c_max > norm_factor:
+                        norm_factor = c_max
+
+            axes = []
+            for i, comp in enumerate(components):
+                if i == 0:
+                    ax = self.fig.add_subplot(3, 1, i + 1)
+                else:
+                    ax = self.fig.add_subplot(3, 1, i + 1, sharex=axes[0])
+                axes.append(ax)
+
+                comp_data = self.seismic_data.get_component(comp)
+
+                if comp_data:
+                    time = comp_data.time_vector
+                    data = comp_data.data
+
+                    # Apply time slicing if enabled
+                    time, data = self._get_time_slice(time, data)
+
+                    data = data / norm_factor  # Normalized
+
+                    ax.plot(time, data, color=colors[comp], linewidth=0.6, alpha=0.9)
+                    ax.set_ylabel(f'{comp_labels[comp]}\n(Normalized)', fontsize=9)
+                    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                    ax.axhline(0, color='k', linewidth=0.5, linestyle='-', alpha=0.3)
+
+                    # Set y-limits symmetric
+                    ylim = max(abs(ax.get_ylim()[0]), abs(ax.get_ylim()[1]))
+                    ax.set_ylim(-ylim, ylim)
+
+                    if i == 0:
+                        duration = time[-1] - time[0] if len(time) > 0 else 0
+                        title = f'Three-Component Seismic Data (Normalized)'
+                        if self.time_filter_enabled:
+                            title += f' (Filtered: {self.time_start:.1f}-{self.time_end:.1f}s)'
+                        title += f'\nSampling Rate: {comp_data.sampling_rate:.2f} Hz | '
+                        title += f'Duration: {duration:.2f} s | '
+                        title += f'Samples: {len(data):,}'
+                        ax.set_title(title, fontsize=9, pad=10)
+
+                    if i == 2:  # Bottom plot
+                        ax.set_xlabel('Time (s)', fontsize=10)
+                    else:
+                        ax.set_xticklabels([])
+
+            self.fig.tight_layout(pad=1.0)
+            self.canvas.draw()
+
+            # Store reference to main axis for future use
+            self.ax = axes[0] if axes else None
+
+        def clear_preview(self):
+            """Clear preview canvas."""
+            if hasattr(self, 'ax') and self.ax:
+                self.ax.clear()
+                self.ax.text(0.5, 0.5, 'No data loaded\n\nLoad a file to preview',
+                           horizontalalignment='center',
+                           verticalalignment='center',
+                           transform=self.ax.transAxes,
+                           fontsize=14, color='gray')
+                self.ax.set_xticks([])
+                self.ax.set_yticks([])
+                self.canvas.draw()
+
+        def show_context_menu(self, position):
+            """Show context menu for preview canvas."""
+            from PyQt5.QtWidgets import QMenu, QFileDialog, QMessageBox, QApplication
+
+            menu = QMenu(self)
+
+            # Export figure action
+            export_action = menu.addAction("Export Figure...")
+            export_action.triggered.connect(self.export_figure)
+
+            # Copy to clipboard action
+            copy_action = menu.addAction("Copy to Clipboard")
+            copy_action.triggered.connect(self.copy_to_clipboard)
+
+            menu.addSeparator()
+
+            # Grid toggle
+            grid_action = menu.addAction("Toggle Grid")
+            grid_action.setCheckable(True)
+            grid_action.setChecked(True)
+            grid_action.triggered.connect(self.toggle_grid)
+
+            # Tight layout toggle
+            tight_action = menu.addAction("Tight Layout")
+            tight_action.setCheckable(True)
+            tight_action.setChecked(True)
+            tight_action.triggered.connect(lambda: self.fig.tight_layout())
+
+            menu.addSeparator()
+
+            # Refresh action
+            refresh_action = menu.addAction("Refresh Plot")
+            refresh_action.triggered.connect(lambda: self.canvas.draw())
+
+            # Show menu
+            menu.exec_(self.canvas.mapToGlobal(position))
+
+        def export_figure(self):
+            """Export figure to file."""
+            from PyQt5.QtWidgets import QFileDialog
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Figure",
+                "",
+                "PNG Image (*.png);;PDF Document (*.pdf);;SVG Vector (*.svg);;All Files (*)"
+            )
+            if filename:
+                try:
+                    self.fig.savefig(filename, dpi=300, bbox_inches='tight')
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.information(self, "Export Successful", f"Figure saved to:\n{filename}")
+                except Exception as e:
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Export Failed", f"Failed to export figure:\n{str(e)}")
+
+        def copy_to_clipboard(self):
+            """Copy figure to clipboard."""
+            try:
+                import io
+                from PyQt5.QtWidgets import QApplication
+                from PyQt5.QtGui import QImage, QPixmap
+
+                # Save figure to bytes buffer
+                buf = io.BytesIO()
+                self.fig.savefig(buf, format='png', dpi=150)
+                buf.seek(0)
+
+                # Load to QImage and copy to clipboard
+                img = QImage()
+                img.loadFromData(buf.read())
+                clipboard = QApplication.clipboard()
+                clipboard.setImage(img)
+
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.information(self, "Success", "Figure copied to clipboard!")
+            except Exception as e:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Copy Failed", f"Failed to copy to clipboard:\n{str(e)}")
+
+        def toggle_grid(self):
+            """Toggle grid visibility on all axes."""
+            if hasattr(self, 'ax') and self.ax:
+                current = self.ax.get_axisbelow()
+                self.ax.grid(not current)
+                self.canvas.draw()
+
+        def toggle_detach(self):
+            """Toggle between attached and detached modes."""
+            if self.is_detached:
+                self.attach_window()
+            else:
+                self.detach_window()
+
+        def detach_window(self):
+            """Detach preview canvas into separate window."""
+            if self.is_detached:
+                return
+
+            # Create separate window
+            self.detached_window = QMainWindow()
+            self.detached_window.setWindowTitle("Preview Canvas - HVSR Pro")
+            self.detached_window.resize(1000, 700)
+
+            # Move this widget to the new window
+            self.setParent(None)
+            self.detached_window.setCentralWidget(self)
+
+            # Show the window
+            self.detached_window.show()
+
+            # Update state
+            self.is_detached = True
+
+            # Update action safely
+            try:
+                if hasattr(self, 'detach_action') and self.detach_action is not None:
+                    self.detach_action.setIcon(self.attach_icon)
+                    self.detach_action.setText("Attach")
+                    self.detach_action.setToolTip("Attach preview back to main window")
+            except RuntimeError:
+                pass  # Action was deleted, ignore
+
+            # Emit signal
+            self.detached.emit()
+
+        def attach_window(self):
+            """Attach preview canvas back to main window."""
+            if not self.is_detached or not self.detached_window:
+                return
+
+            # Update state BEFORE closing window
+            self.is_detached = False
+
+            # Update action safely BEFORE closing
+            try:
+                if hasattr(self, 'detach_action') and self.detach_action is not None:
+                    self.detach_action.setIcon(self.detach_icon)
+                    self.detach_action.setText("Detach")
+                    self.detach_action.setToolTip("Detach preview to separate window")
+            except RuntimeError:
+                pass  # Action was deleted, ignore
+
+            # IMPORTANT: Emit signal BEFORE closing window
+            # This allows parent to re-add widget before it's destroyed
+            try:
+                self.attached.emit()
+            except RuntimeError:
+                pass  # Widget already deleted
+
+            # Now close detached window
+            if self.detached_window:
+                self.detached_window.close()
+                self.detached_window = None
+
+
+else:
+    # Dummy class when PyQt5 not available
+    class PreviewCanvas:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyQt5 is required for GUI functionality")

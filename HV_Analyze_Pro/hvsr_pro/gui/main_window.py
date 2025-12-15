@@ -17,7 +17,7 @@ try:
         QComboBox, QCheckBox, QGroupBox, QTextEdit,
         QProgressBar, QFileDialog, QMessageBox,
         QSplitter, QTabWidget, QScrollArea, QDockWidget,
-        QApplication, QInputDialog, QStatusBar, QAction
+        QApplication, QInputDialog, QStatusBar, QAction, QMenu
     )
     from PyQt5.QtCore import Qt, QThread, pyqtSignal
     from PyQt5.QtGui import QFont
@@ -38,8 +38,10 @@ if HAS_PYQT5:
     from hvsr_pro.gui.plot_window_manager import PlotWindowManager
     from hvsr_pro.gui.layers_dock import WindowLayersDock
     from hvsr_pro.gui.peak_picker_dock import PeakPickerDock
-    from hvsr_pro.gui.view_mode_selector import ViewModeSelector
+    from hvsr_pro.gui.export_dock import ExportDock
+    # from hvsr_pro.gui.view_mode_selector import ViewModeSelector  # Moved to Properties panel
     from hvsr_pro.gui.data_input_dialog import DataInputDialog
+    from hvsr_pro.gui.data_load_tab import DataLoadTab
 
 
 class ProcessingThread(QThread):
@@ -51,7 +53,7 @@ class ProcessingThread(QThread):
     
     def __init__(self, file_input, window_length, overlap, smoothing_bandwidth, load_mode='single', time_range=None,
                  freq_min=0.2, freq_max=20.0, n_frequencies=100, qc_mode='balanced', apply_cox_fdwra=False,
-                 use_parallel=False, manual_sampling_rate=None, custom_qc_settings=None):
+                 use_parallel=False, n_cores=None, manual_sampling_rate=None, custom_qc_settings=None):
         super().__init__()
         self.file_input = file_input  # Can be str, list, or dict
         self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2'
@@ -65,6 +67,7 @@ class ProcessingThread(QThread):
         self.qc_mode = qc_mode  # QC strictness mode
         self.apply_cox_fdwra = apply_cox_fdwra  # Apply Cox FDWRA after HVSR
         self.use_parallel = use_parallel  # Enable parallel processing
+        self.n_cores = n_cores  # Number of cores to use for parallel processing
         self.manual_sampling_rate = manual_sampling_rate  # Optional manual sampling rate override
         self.custom_qc_settings = custom_qc_settings  # Optional custom QC settings
     
@@ -187,10 +190,13 @@ class ProcessingThread(QThread):
             
             # Step 4: Compute HVSR
             if self.use_parallel:
-                self.progress.emit(70, "Computing HVSR (parallel processing)...")
+                cores_msg = f" using {self.n_cores} cores" if self.n_cores else ""
+                self.progress.emit(70, f"Computing HVSR (parallel processing{cores_msg})...")
             else:
                 self.progress.emit(70, "Computing HVSR...")
-            
+
+            # Note: n_cores is stored for future use when HVSRProcessor supports it
+            # Currently, parallel processing uses all available cores
             processor = HVSRProcessor(
                 smoothing_bandwidth=self.smoothing_bandwidth,
                 f_min=self.freq_min,
@@ -348,7 +354,8 @@ class HVSRMainWindow(QMainWindow):
     def create_menu_bar(self):
         """Create menu bar with common actions."""
         menubar = self.menuBar()
-        
+        menubar.setNativeMenuBar(False)  # Fix for Windows menu bar click issues
+
         # File menu
         file_menu = menubar.addMenu('&File')
         
@@ -390,36 +397,69 @@ class HVSRMainWindow(QMainWindow):
         
         # View menu
         view_menu = menubar.addMenu('&View')
-        
-        # Toggle plot window
+
+        # Processing Tab section
+        processing_submenu = QMenu('Processing Tab', self)
+
+        self.layers_action = processing_submenu.addAction('&Layers Dock')
+        self.layers_action.setShortcut('Ctrl+Shift+L')
+        self.layers_action.setCheckable(True)
+        self.layers_action.setChecked(True)
+        self.layers_action.triggered.connect(lambda checked: self.layers_dock.setVisible(checked))
+
+        self.peaks_action = processing_submenu.addAction('&Peak Picker Dock')
+        self.peaks_action.setShortcut('Ctrl+Shift+P')
+        self.peaks_action.setCheckable(True)
+        self.peaks_action.setChecked(True)
+        self.peaks_action.triggered.connect(lambda checked: self.peak_picker_dock.setVisible(checked))
+
+        self.props_action = processing_submenu.addAction('P&roperties Dock')
+        self.props_action.setShortcut('Ctrl+Shift+R')
+        self.props_action.setCheckable(True)
+        self.props_action.setChecked(True)
+        self.props_action.triggered.connect(lambda checked: self.properties_dock.setVisible(checked))
+
+        view_menu.addMenu(processing_submenu)
+        view_menu.addSeparator()
+
+        # Data Load Tab section
+        dataload_submenu = QMenu('Data Load Tab', self)
+
+        self.preview_action = dataload_submenu.addAction('&Preview Canvas')
+        self.preview_action.setShortcut('Ctrl+Shift+V')
+        self.preview_action.setCheckable(True)
+        self.preview_action.setChecked(True)
+        self.preview_action.triggered.connect(self.toggle_preview_canvas)
+
+        view_menu.addMenu(dataload_submenu)
+        view_menu.addSeparator()
+
+        # Loaded Data Column (global)
+        self.loaded_data_action = view_menu.addAction('&Loaded Data Column')
+        self.loaded_data_action.setShortcut('Ctrl+Shift+D')
+        self.loaded_data_action.setCheckable(True)
+        self.loaded_data_action.setChecked(True)
+        self.loaded_data_action.triggered.connect(self.toggle_loaded_data_column)
+
+        view_menu.addSeparator()
+
+        # Plot Window (global)
         plot_action = view_menu.addAction('&Plot Window')
         plot_action.setShortcut('Ctrl+P')
         plot_action.triggered.connect(self.toggle_plot_window)
         
-        view_menu.addSeparator()
-        
-        # Toggle docks
-        layers_action = view_menu.addAction('&Layers Dock')
-        layers_action.setCheckable(True)
-        layers_action.setChecked(True)
-        layers_action.triggered.connect(lambda checked: self.layers_dock.setVisible(checked))
-        
-        peaks_action = view_menu.addAction('P&eaks Dock')
-        peaks_action.setCheckable(True)
-        peaks_action.setChecked(True)
-        peaks_action.triggered.connect(lambda checked: self.peak_picker_dock.setVisible(checked))
-        
-        props_action = view_menu.addAction('P&roperties Dock')
-        props_action.setCheckable(True)
-        props_action.setChecked(True)
-        props_action.triggered.connect(lambda checked: self.properties_dock.setVisible(checked))
-        
         # Mode menu
         mode_menu = menubar.addMenu('&Mode')
-        
-        single_action = mode_menu.addAction('&Single File')
-        single_action.setShortcut('Alt+1')
-        single_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(0))
+
+        dataload_action = mode_menu.addAction('&Data Load')
+        dataload_action.setShortcut('Ctrl+1')
+        dataload_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(0))
+        dataload_action.setToolTip("Switch to Data Load tab (Ctrl+1)")
+
+        processing_action = mode_menu.addAction('&Processing')
+        processing_action.setShortcut('Ctrl+2')
+        processing_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(1))
+        processing_action.setToolTip("Switch to Processing tab (Ctrl+2)")
         
         # Help menu
         help_menu = menubar.addMenu('&Help')
@@ -460,15 +500,27 @@ class HVSRMainWindow(QMainWindow):
         """Show keyboard shortcuts dialog."""
         shortcuts_text = """
         <h3>Keyboard Shortcuts</h3>
-        <table>
+        <table cellpadding="5">
+        <tr><th colspan="2" align="left">File Operations</th></tr>
         <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
         <tr><td><b>Ctrl+S</b></td><td>Save results</td></tr>
         <tr><td><b>Ctrl+E</b></td><td>Export figure</td></tr>
-        <tr><td><b>Ctrl+P</b></td><td>Toggle plot window</td></tr>
         <tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>
-        <tr><td><b>Alt+1</b></td><td>Single file mode</td></tr>
+
+        <tr><th colspan="2" align="left"><br>Tab Navigation</th></tr>
+        <tr><td><b>Ctrl+1</b></td><td>Switch to Data Load tab</td></tr>
+        <tr><td><b>Ctrl+2</b></td><td>Switch to Processing tab</td></tr>
+
+        <tr><th colspan="2" align="left"><br>View Controls</th></tr>
+        <tr><td><b>Ctrl+P</b></td><td>Toggle plot window</td></tr>
+        <tr><td><b>Ctrl+Shift+L</b></td><td>Toggle Layers Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+P</b></td><td>Toggle Peak Picker Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+R</b></td><td>Toggle Properties Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+V</b></td><td>Toggle Preview Canvas</td></tr>
+        <tr><td><b>Ctrl+Shift+D</b></td><td>Toggle Loaded Data Column</td></tr>
+
+        <tr><th colspan="2" align="left"><br>Other</th></tr>
         <tr><td><b>F1</b></td><td>Show this help</td></tr>
-        <tr><td><b>Space</b></td><td>Start processing</td></tr>
         </table>
         """
         QMessageBox.information(self, "Keyboard Shortcuts", shortcuts_text)
@@ -480,7 +532,12 @@ class HVSRMainWindow(QMainWindow):
             return cpu_count()
         except:
             return 4  # Default fallback
-        
+
+    def _on_parallel_toggled(self, state):
+        """Handle parallel processing checkbox toggle."""
+        enabled = (state == Qt.Checked)
+        self.cores_spin.setEnabled(enabled)
+
     def init_ui(self):
         """Initialize user interface."""
         # Central widget - just control panel (no embedded canvas by default)
@@ -493,16 +550,22 @@ class HVSRMainWindow(QMainWindow):
         # Main layout
         main_layout = QHBoxLayout(central_widget)
         
-        # Create tab widget for Single/Batch modes
+        # Create tab widget for Data Load / Processing modes
         self.mode_tabs = QTabWidget()
-        
-        # Single file tab (original interface)
-        single_tab = QWidget()
-        single_layout = QHBoxLayout(single_tab)
-        
-        # Left panel - controls with scroll area
+
+        # === Tab 1: Data Load ===
+        self.data_load_tab = DataLoadTab(self)
+        self.data_load_tab.load_file_requested.connect(self.load_data_file)
+        self.data_load_tab.file_selected.connect(self.on_data_file_selected_for_preview)
+        self.mode_tabs.addTab(self.data_load_tab, "Data Load")
+
+        # === Tab 2: Processing (renamed from Single File) ===
+        processing_tab = QWidget()
+        processing_layout = QHBoxLayout(processing_tab)
+
+        # Left panel - processing controls with scroll area
         left_panel = self.create_control_panel()
-        
+
         # Wrap control panel in scroll area
         scroll_area = QScrollArea()
         scroll_area.setWidget(left_panel)
@@ -510,11 +573,14 @@ class HVSRMainWindow(QMainWindow):
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setMinimumWidth(300)
-        
-        single_layout.addWidget(scroll_area, stretch=1)
-        
-        # Add single tab
-        self.mode_tabs.addTab(single_tab, "Single File")
+
+        processing_layout.addWidget(scroll_area, stretch=1)
+
+        # Add processing tab
+        self.mode_tabs.addTab(processing_tab, "Processing")
+
+        # Connect tab change signal
+        self.mode_tabs.currentChanged.connect(self.on_tab_changed)
         
         main_layout.addWidget(self.mode_tabs)
         
@@ -531,11 +597,22 @@ class HVSRMainWindow(QMainWindow):
         from hvsr_pro.gui.properties_dock import PropertiesDock
         self.properties_dock = PropertiesDock(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
-        
-        # Stack docks (layers, peak picker, properties as tabs)
+
+        # Create export dock
+        self.export_dock = ExportDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.export_dock)
+
+        # Stack docks (layers, peak picker, properties, export as tabs)
         self.tabifyDockWidget(self.layers_dock, self.peak_picker_dock)
         self.tabifyDockWidget(self.peak_picker_dock, self.properties_dock)
+        self.tabifyDockWidget(self.properties_dock, self.export_dock)
         self.layers_dock.raise_()  # Layers dock visible by default
+
+        # Initially hide docks since we start on Data Load tab
+        self.layers_dock.setVisible(False)
+        self.peak_picker_dock.setVisible(False)
+        self.properties_dock.setVisible(False)
+        self.export_dock.setVisible(False)
         
         # Connect layer dock references
         self.layers_dock.set_references(self.plot_manager, None)  # Windows set later
@@ -550,7 +627,8 @@ class HVSRMainWindow(QMainWindow):
         
         # Connect properties dock signals
         self.properties_dock.properties_changed.connect(self.on_properties_changed)
-        
+        self.properties_dock.visualization_mode_changed.connect(self.on_view_mode_changed)
+
         # Interactive canvas (old - keep for compatibility)
         self.canvas = InteractiveHVSRCanvas(self)
         # Don't add to layout - will use plot_manager instead
@@ -559,22 +637,46 @@ class HVSRMainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
-        
-        # Menu bar
-        self.setup_menu_bar()
-    
-    def setup_menu_bar(self):
-        """Setup menu bar."""
-        menu_bar = self.menuBar()
-        
-        # File menu
-        file_menu = menu_bar.addMenu("File")
-        
-        # Exit action
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+
+    def on_tab_changed(self, index):
+        """
+        Handle tab change - manage dock visibility.
+
+        Args:
+            index: Tab index (0 = Data Load, 1 = Processing)
+        """
+        if index == 0:  # Data Load tab
+            # Hide processing docks
+            self.layers_dock.setVisible(False)
+            self.peak_picker_dock.setVisible(False)
+            self.properties_dock.setVisible(False)
+            self.export_dock.setVisible(False)
+            self.status_bar.showMessage("Data Load mode - Load and preview seismic data")
+
+        elif index == 1:  # Processing tab
+            # Show processing docks
+            self.layers_dock.setVisible(True)
+            self.peak_picker_dock.setVisible(True)
+            self.properties_dock.setVisible(True)
+            self.export_dock.setVisible(True)
+            self.status_bar.showMessage("Processing mode - Configure and run HVSR analysis")
+
+    def on_data_file_selected_for_preview(self, file_path: str):
+        """
+        Handle file selection from Data Load tab for preview.
+
+        Args:
+            file_path: Path to selected file
+        """
+        # Get data from cache
+        data = self.data_load_tab.get_loaded_data(file_path)
+
+        if data:
+            # Already cached, just show info
+            self.add_info(f"Previewing: {Path(file_path).name}")
+        else:
+            # Need to load - this shouldn't happen normally
+            self.add_info(f"Loading for preview: {Path(file_path).name}")
     
     def create_control_panel(self) -> QWidget:
         """Create left control panel."""
@@ -594,20 +696,20 @@ class HVSRMainWindow(QMainWindow):
             }
         """)
         layout.addWidget(title)
-        
-        # File import group
-        file_group = self.create_file_group()
-        layout.addWidget(file_group)
-        
+
+        # Info label
+        info_label = QLabel("Configure processing parameters below.\nLoad data in the 'Data Load' tab first.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("QLabel { color: #666; padding: 5px; }")
+        layout.addWidget(info_label)
+
         # Processing settings group
         settings_group = self.create_settings_group()
         layout.addWidget(settings_group)
-        
-        # View mode selector
-        self.view_mode_selector = ViewModeSelector()
-        self.view_mode_selector.mode_changed.connect(self.on_view_mode_changed)
-        layout.addWidget(self.view_mode_selector)
-        
+
+        # Note: View mode selector has been moved to Properties panel
+        # (see properties_dock.py - Visualization Mode section)
+
         # Plot window toggle button
         self.plot_mode_button = QPushButton("Show Plot Window")
         self.plot_mode_button.clicked.connect(self.toggle_plot_window)
@@ -864,12 +966,29 @@ class HVSRMainWindow(QMainWindow):
         # Parallel processing checkbox
         self.parallel_check = QCheckBox("⚡ Enable parallel processing (faster)")
         self.parallel_check.setChecked(True)  # Enabled by default
+        cpu_count = self._get_cpu_count()
         self.parallel_check.setToolTip("Use multiple CPU cores for faster HVSR computation.\n"
                                       "Recommended for datasets with >100 windows.\n"
-                                      f"Your system has {self._get_cpu_count()} CPU cores.\n"
+                                      f"Your system has {cpu_count} CPU cores.\n"
                                       "Speed improvement: ~1.5-3x faster for large datasets.")
+        self.parallel_check.stateChanged.connect(self._on_parallel_toggled)
         layout.addWidget(self.parallel_check)
-        
+
+        # CPU core count selector
+        cores_layout = QHBoxLayout()
+        cores_layout.addWidget(QLabel("   Number of cores to use:"))
+
+        self.cores_spin = QSpinBox()
+        self.cores_spin.setRange(1, max(1, cpu_count))
+        self.cores_spin.setValue(max(1, cpu_count - 1))  # Default: leave one core free
+        self.cores_spin.setToolTip(f"Select number of CPU cores to use (1-{cpu_count}).\n"
+                                   "Using all cores may make your system unresponsive.\n"
+                                   "Recommended: Leave at least 1 core free for system tasks.")
+        cores_layout.addWidget(self.cores_spin)
+        cores_layout.addStretch()
+
+        layout.addLayout(cores_layout)
+
         # Process button
         self.process_btn = QPushButton("Process HVSR")
         self.process_btn.clicked.connect(self.process_hvsr)
@@ -970,6 +1089,26 @@ class HVSRMainWindow(QMainWindow):
         else:
             self.plot_manager.show_embedded()
             self.plot_mode_button.setText("Show Plot")
+
+    def toggle_preview_canvas(self, checked):
+        """
+        Toggle preview canvas visibility.
+
+        Args:
+            checked: True to show, False to hide
+        """
+        if hasattr(self, 'data_load_tab'):
+            self.data_load_tab.preview_canvas.setVisible(checked)
+
+    def toggle_loaded_data_column(self, checked):
+        """
+        Toggle loaded data column visibility.
+
+        Args:
+            checked: True to show, False to hide
+        """
+        if hasattr(self, 'data_load_tab'):
+            self.data_load_tab.set_loaded_list_visible(checked)
     
     def on_view_mode_changed(self, mode: str):
         """Handle view mode change."""
@@ -1056,41 +1195,127 @@ class HVSRMainWindow(QMainWindow):
         groups = result['groups']
         options = result['options']
         time_range = result.get('time_range')  # May be None
-        
+
         # Store load mode and time range
         self.load_mode = mode
         self.current_time_range = time_range
-        
+
         # Log time range if enabled
         if time_range and time_range.get('enabled'):
             start = time_range['start']
             end = time_range['end']
             tz_name = time_range.get('timezone_name', 'UTC')
             self.add_info(f"Time range selected: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({tz_name})")
-        
-        if mode == 'single':
-            # Single file mode
-            self.current_file = files[0]
-            self.file_label.setText(f"File: {Path(files[0]).name}")
-            self.process_btn.setEnabled(True)
-            self.add_info(f"Loaded: {Path(files[0]).name}")
-        
-        elif mode == 'multi_type1':
-            # Multiple files with E,N,Z in each
-            self.current_file = files  # Store as list
-            self.file_label.setText(f"{len(files)} files (Type 1)")
-            self.process_btn.setEnabled(True)
-            self.add_info(f"Loaded {len(files)} MiniSEED files (3-channel each)")
-            self.add_info("  Files will be merged chronologically")
-        
-        elif mode == 'multi_type2':
-            # Separate E, N, Z files
-            self.current_file = groups  # Store as dict
-            complete = sum(1 for g in groups.values() if 'E' in g and 'N' in g and 'Z' in g)
-            self.file_label.setText(f"{complete} groups (Type 2)")
-            self.process_btn.setEnabled(True)
-            self.add_info(f"Loaded {complete} file groups (separate E, N, Z)")
-            self.add_info("  Each group will be merged into 3-component stream")
+
+        # Load data and add to Data Load tab
+        try:
+            handler = HVSRDataHandler()
+
+            if mode == 'single':
+                # Single file mode
+                file_path = files[0]
+                self.add_info(f"Loading: {Path(file_path).name}...")
+
+                data = handler.load_data(file_path)
+
+                # Get file metadata
+                file_size = Path(file_path).stat().st_size / (1024 * 1024)  # MB
+                metadata = {
+                    'duration': data.duration,
+                    'sampling_rate': data.east.sampling_rate,
+                    'size_mb': file_size,
+                    'status': 'loaded'
+                }
+
+                # Convert time_range to seconds if provided
+                tr_seconds = None
+                if time_range and time_range.get('enabled'):
+                    start_dt = time_range['start']
+                    end_dt = time_range['end']
+                    # Calculate duration in seconds
+                    duration_seconds = (end_dt - start_dt).total_seconds()
+                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
+
+                # Add to data load tab
+                self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
+
+                # Store for processing
+                self.current_file = file_path
+                self.process_btn.setEnabled(True)
+                self.add_info(f"✓ Loaded: {Path(file_path).name}")
+
+            elif mode == 'multi_type1':
+                # Multiple files with E,N,Z in each
+                self.add_info(f"Loading {len(files)} MiniSEED files...")
+                data = handler.load_multi_miniseed_type1(files)
+
+                # Convert time_range to seconds if provided
+                tr_seconds = None
+                if time_range and time_range.get('enabled'):
+                    start_dt = time_range['start']
+                    end_dt = time_range['end']
+                    duration_seconds = (end_dt - start_dt).total_seconds()
+                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
+
+                # Add each file individually to the list
+                for file_path in files:
+                    file_size = Path(file_path).stat().st_size / (1024 * 1024)
+                    # Estimate duration per file (approximate)
+                    file_duration = data.duration / len(files)
+                    metadata = {
+                        'duration': file_duration,
+                        'sampling_rate': data.east.sampling_rate,
+                        'size_mb': file_size,
+                        'status': 'loaded'
+                    }
+                    self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
+
+                # Store for processing
+                self.current_file = files
+                self.process_btn.setEnabled(True)
+                self.add_info(f"✓ Loaded {len(files)} files (merged chronologically)")
+
+            elif mode == 'multi_type2':
+                # Separate E, N, Z files
+                complete = sum(1 for g in groups.values() if 'E' in g and 'N' in g and 'Z' in g)
+                self.add_info(f"Loading {complete} file groups...")
+                data = handler.load_multi_miniseed_type2(groups)
+
+                # Convert time_range to seconds if provided
+                tr_seconds = None
+                if time_range and time_range.get('enabled'):
+                    start_dt = time_range['start']
+                    end_dt = time_range['end']
+                    duration_seconds = (end_dt - start_dt).total_seconds()
+                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
+
+                # Add each file group to the list
+                file_duration_per_group = data.duration / complete if complete > 0 else data.duration
+                for group_name, group_files in groups.items():
+                    if all(c in group_files for c in ['E', 'N', 'Z']):
+                        # Calculate size for this group
+                        group_size = sum(Path(str(f)).stat().st_size for f in group_files.values()) / (1024 * 1024)
+
+                        # Use group name as display name
+                        display_name = f"{group_name} (E/N/Z)"
+                        metadata = {
+                            'duration': file_duration_per_group,
+                            'sampling_rate': data.east.sampling_rate,
+                            'size_mb': group_size,
+                            'status': 'loaded'
+                        }
+                        self.data_load_tab.add_loaded_file(display_name, data, metadata, tr_seconds)
+
+                # Store for processing
+                self.current_file = groups
+                self.process_btn.setEnabled(True)
+                self.add_info(f"✓ Loaded {complete} groups (3-component streams)")
+
+        except Exception as e:
+            import traceback
+            error_msg = f"Failed to load data: {str(e)}\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "Load Error", error_msg)
+            self.add_info(f"ERROR: {str(e)}")
     
     def process_hvsr(self):
         """Start HVSR processing in background thread."""
@@ -1113,6 +1338,7 @@ class HVSRMainWindow(QMainWindow):
         qc_mode = self.qc_combo.currentData()  # Get QC mode
         apply_cox_fdwra = self.cox_fdwra_check.isChecked()  # Get Cox FDWRA setting
         use_parallel = self.parallel_check.isChecked()  # Get parallel processing setting
+        n_cores = self.cores_spin.value() if use_parallel else 1  # Get number of cores to use
 
         # Get sampling rate override
         override_sampling = self.override_sampling_check.isChecked()
@@ -1133,14 +1359,14 @@ class HVSRMainWindow(QMainWindow):
         if apply_cox_fdwra or qc_mode == 'sesame':
             self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
         if use_parallel:
-            self.add_info(f"⚡ Parallel processing: Enabled ({self._get_cpu_count()} cores)")
+            self.add_info(f"⚡ Parallel processing: Enabled (using {n_cores} of {self._get_cpu_count()} cores)")
 
         # Start processing thread with load mode and time range
         self.thread = ProcessingThread(
             self.current_file, window_length, overlap, smoothing,
             self.load_mode, self.current_time_range,
             freq_min, freq_max, n_frequencies, qc_mode, apply_cox_fdwra, use_parallel,
-            manual_sampling_rate, self.custom_qc_settings
+            n_cores, manual_sampling_rate, self.custom_qc_settings
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)
@@ -1193,7 +1419,10 @@ class HVSRMainWindow(QMainWindow):
         
         # Update peak picker dock with HVSR data
         self.peak_picker_dock.set_hvsr_data(result, result.frequencies, result.mean_hvsr)
-        
+
+        # Update export dock with results
+        self.export_dock.set_references(result, windows, self.plot_manager)
+
         # === NEW: Plot in separate window ===
         self.plot_results_separate_window(result, windows, data)
         

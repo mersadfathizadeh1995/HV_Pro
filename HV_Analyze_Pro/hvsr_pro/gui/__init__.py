@@ -12,6 +12,10 @@ try:
     from hvsr_pro.gui.layers_dock import WindowLayersDock
     from hvsr_pro.gui.view_mode_selector import ViewModeSelector
     from hvsr_pro.gui.data_input_dialog import DataInputDialog
+    from hvsr_pro.gui.preview_canvas import PreviewCanvas
+    from hvsr_pro.gui.loaded_data_list import LoadedDataList
+    from hvsr_pro.gui.loaded_data_tree import LoadedDataTree
+    from hvsr_pro.gui.data_load_tab import DataLoadTab
     HAS_GUI = True
 except ImportError:
     HAS_GUI = False
@@ -25,5 +29,9 @@ __all__ = [
     'WindowLayersDock',
     'ViewModeSelector',
     'DataInputDialog',
+    'PreviewCanvas',
+    'LoadedDataList',
+    'LoadedDataTree',
+    'DataLoadTab',
     'HAS_GUI'
 ]
