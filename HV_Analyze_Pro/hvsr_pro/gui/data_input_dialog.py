@@ -7,11 +7,13 @@ Multi-tab dialog for loading various data formats:
 - Multiple MiniSEED files (Type 1: 3-channel per file)
 - Separate component MiniSEED files (Type 2: E, N, Z separate)
 - Automatic pattern matching and file grouping
+- Visual waveform preview with time range selection
 """
 
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import re
+import numpy as np
 
 try:
     from PyQt5.QtWidgets import (
@@ -19,16 +21,111 @@ try:
         QPushButton, QLabel, QLineEdit, QFileDialog, QListWidget,
         QGroupBox, QRadioButton, QCheckBox, QTextEdit, QComboBox,
         QMessageBox, QListWidgetItem, QTableWidget, QTableWidgetItem,
-        QHeaderView, QSpinBox, QDoubleSpinBox, QDateTimeEdit
+        QHeaderView, QSpinBox, QDoubleSpinBox, QDateTimeEdit, QSplitter,
+        QButtonGroup, QFrame
     )
     from PyQt5.QtCore import Qt, pyqtSignal
     from PyQt5.QtGui import QFont, QColor
     HAS_PYQT5 = True
+    
+    # Try to import matplotlib for visual preview
+    try:
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+        HAS_MATPLOTLIB = True
+    except ImportError:
+        HAS_MATPLOTLIB = False
+        
 except ImportError:
     HAS_PYQT5 = False
+    HAS_MATPLOTLIB = False
 
 
 if HAS_PYQT5:
+    
+    class CollapsibleGroupBox(QWidget):
+        """A collapsible group box widget with toggle button."""
+        
+        def __init__(self, title: str = "", parent=None):
+            super().__init__(parent)
+            self._is_collapsed = False
+            
+            # Main layout
+            main_layout = QVBoxLayout(self)
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setSpacing(0)
+            
+            # Header frame with toggle button
+            self.header_frame = QFrame()
+            self.header_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                }
+                QFrame:hover {
+                    background-color: #e0e0e0;
+                }
+            """)
+            self.header_frame.setCursor(Qt.PointingHandCursor)
+            header_layout = QHBoxLayout(self.header_frame)
+            header_layout.setContentsMargins(8, 4, 8, 4)
+            
+            # Toggle indicator
+            self.toggle_indicator = QLabel("[+]")
+            self.toggle_indicator.setStyleSheet("font-size: 10pt; color: #555; font-weight: bold;")
+            header_layout.addWidget(self.toggle_indicator)
+            
+            # Title label
+            self.title_label = QLabel(title)
+            self.title_label.setStyleSheet("font-weight: bold; font-size: 10pt;")
+            header_layout.addWidget(self.title_label)
+            header_layout.addStretch()
+            
+            main_layout.addWidget(self.header_frame)
+            
+            # Content container
+            self.content_widget = QWidget()
+            self.content_layout = QVBoxLayout(self.content_widget)
+            self.content_layout.setContentsMargins(5, 5, 5, 5)
+            main_layout.addWidget(self.content_widget)
+            
+            # Make header clickable
+            self.header_frame.mousePressEvent = self._on_header_clicked
+            
+        def _on_header_clicked(self, event):
+            """Toggle collapsed state on header click."""
+            self.setCollapsed(not self._is_collapsed)
+            
+        def setCollapsed(self, collapsed: bool):
+            """Set the collapsed state."""
+            self._is_collapsed = collapsed
+            self.content_widget.setVisible(not collapsed)
+            self.toggle_indicator.setText("[+]" if collapsed else "[-]")
+            
+        def isCollapsed(self) -> bool:
+            """Return whether the group box is collapsed."""
+            return self._is_collapsed
+            
+        def setContentLayout(self, layout):
+            """Set the content layout."""
+            # Clear existing content layout
+            while self.content_layout.count():
+                item = self.content_layout.takeAt(0)
+                if item.widget():
+                    item.widget().setParent(None)
+            
+            # If layout has items, move them to content_layout
+            if layout is not None:
+                while layout.count():
+                    item = layout.takeAt(0)
+                    if item.widget():
+                        self.content_layout.addWidget(item.widget())
+                    elif item.layout():
+                        self.content_layout.addLayout(item.layout())
+
+
+
     
     class DataInputDialog(QDialog):
         """
@@ -48,7 +145,11 @@ if HAS_PYQT5:
             super().__init__(parent)
             self.setWindowTitle("Load Seismic Data")
             self.setModal(True)
-            self.resize(800, 600)
+            self.resize(900, 700)
+            self.setMinimumSize(600, 400)
+            
+            # Make dialog resizable
+            self.setSizeGripEnabled(True)
             
             # Storage
             self.selected_files = []
@@ -61,7 +162,9 @@ if HAS_PYQT5:
             
         def init_ui(self):
             """Initialize user interface."""
-            layout = QVBoxLayout(self)
+            from PyQt5.QtWidgets import QScrollArea
+            
+            main_layout = QVBoxLayout(self)
             
             # Title
             title = QLabel("Load Seismic Data")
@@ -70,7 +173,19 @@ if HAS_PYQT5:
             title_font.setBold(True)
             title.setFont(title_font)
             title.setAlignment(Qt.AlignCenter)
-            layout.addWidget(title)
+            main_layout.addWidget(title)
+            
+            # Create scroll area for main content
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll_area.setFrameShape(QFrame.NoFrame)
+            
+            # Container widget for scrollable content
+            scroll_content = QWidget()
+            scroll_layout = QVBoxLayout(scroll_content)
+            scroll_layout.setContentsMargins(5, 5, 5, 5)
             
             # Tab widget
             self.tabs = QTabWidget()
@@ -78,18 +193,90 @@ if HAS_PYQT5:
             self.tabs.addTab(self.create_multi_type1_tab(), "Multi-File (3-channel)")
             self.tabs.addTab(self.create_multi_type2_tab(), "Multi-File (Separate E,N,Z)")
             self.tabs.addTab(self.create_advanced_tab(), "Advanced Options")
-            layout.addWidget(self.tabs)
+            scroll_layout.addWidget(self.tabs)
             
-            # Preview section
-            preview_group = QGroupBox("Preview")
-            preview_layout = QVBoxLayout(preview_group)
+            # Collapsible Preview section
+            self.preview_group = CollapsibleGroupBox("Data Preview (click to expand/collapse)")
+            preview_layout = QVBoxLayout()
+            
+            # Simple text preview (collapsible)
             self.preview_text = QTextEdit()
             self.preview_text.setReadOnly(True)
             self.preview_text.setMaximumHeight(150)
+            self.preview_text.setPlaceholderText("Select a file to see preview info...")
             preview_layout.addWidget(self.preview_text)
-            layout.addWidget(preview_group)
             
-            # Buttons
+            # Visual preview panel (matplotlib canvas) - also collapsible
+            if HAS_MATPLOTLIB:
+                visual_group = QGroupBox("Visual Preview")
+                visual_layout = QVBoxLayout(visual_group)
+                
+                # View mode buttons
+                view_mode_layout = QHBoxLayout()
+                self.preview_button_group = QButtonGroup(self)
+                
+                self.preview_radio_all = QRadioButton("All Components")
+                self.preview_radio_all.setChecked(True)
+                self.preview_radio_all.toggled.connect(lambda checked: checked and self.update_visual_preview())
+                self.preview_button_group.addButton(self.preview_radio_all)
+                view_mode_layout.addWidget(self.preview_radio_all)
+                
+                self.preview_radio_e = QRadioButton("E")
+                self.preview_radio_e.toggled.connect(lambda checked: checked and self.update_visual_preview())
+                self.preview_button_group.addButton(self.preview_radio_e)
+                view_mode_layout.addWidget(self.preview_radio_e)
+                
+                self.preview_radio_n = QRadioButton("N")
+                self.preview_radio_n.toggled.connect(lambda checked: checked and self.update_visual_preview())
+                self.preview_button_group.addButton(self.preview_radio_n)
+                view_mode_layout.addWidget(self.preview_radio_n)
+                
+                self.preview_radio_z = QRadioButton("Z")
+                self.preview_radio_z.toggled.connect(lambda checked: checked and self.update_visual_preview())
+                self.preview_button_group.addButton(self.preview_radio_z)
+                view_mode_layout.addWidget(self.preview_radio_z)
+                
+                view_mode_layout.addStretch()
+                
+                # Refresh button
+                refresh_btn = QPushButton("Refresh")
+                refresh_btn.clicked.connect(self.refresh_visual_preview)
+                refresh_btn.setMaximumWidth(80)
+                view_mode_layout.addWidget(refresh_btn)
+                
+                visual_layout.addLayout(view_mode_layout)
+                
+                # Matplotlib figure and canvas
+                self.preview_fig = Figure(figsize=(5, 2.5), dpi=80)
+                self.preview_canvas = FigureCanvas(self.preview_fig)
+                self.preview_canvas.setMinimumHeight(150)
+                self.preview_canvas.setMaximumHeight(250)
+                visual_layout.addWidget(self.preview_canvas)
+                
+                # Status label for preview
+                self.preview_status = QLabel("Load a file to see preview")
+                self.preview_status.setStyleSheet("color: gray; font-size: 9pt;")
+                visual_layout.addWidget(self.preview_status)
+                
+                preview_layout.addWidget(visual_group)
+                
+                # Initialize preview data storage
+                self.preview_data = None
+            else:
+                # Fallback if matplotlib not available
+                fallback_label = QLabel("(Visual preview requires matplotlib)")
+                fallback_label.setStyleSheet("color: gray; font-style: italic;")
+                preview_layout.addWidget(fallback_label)
+            
+            self.preview_group.setContentLayout(preview_layout)
+            self.preview_group.setCollapsed(True)  # Start collapsed
+            scroll_layout.addWidget(self.preview_group)
+            
+            # Set scroll content
+            scroll_area.setWidget(scroll_content)
+            main_layout.addWidget(scroll_area, 1)  # stretch factor 1
+            
+            # Buttons (outside scroll area)
             button_layout = QHBoxLayout()
             button_layout.addStretch()
             
@@ -102,7 +289,7 @@ if HAS_PYQT5:
             self.load_btn.setEnabled(False)
             button_layout.addWidget(self.load_btn)
             
-            layout.addLayout(button_layout)
+            main_layout.addLayout(button_layout)
         
         def create_single_file_tab(self) -> QWidget:
             """Create single file loading tab."""
@@ -134,7 +321,7 @@ if HAS_PYQT5:
             file_layout.addLayout(select_layout)
 
             # Column mapping checkbox (for CSV/text files) - Make it prominent
-            self.use_column_mapping = QCheckBox("✓ Enable Column Mapping (for CSV/text files)")
+            self.use_column_mapping = QCheckBox("Enable Column Mapping (for CSV/text files)")
             self.use_column_mapping.setChecked(False)
             self.use_column_mapping.setStyleSheet("""
                 QCheckBox {
@@ -258,65 +445,94 @@ if HAS_PYQT5:
             
             dir_layout.addLayout(select_layout)
 
-            # Channel mapping checkbox (for MiniSEED files with multiple channels)
-            self.use_channel_mapping_type1 = QCheckBox("✓ Enable Channel Mapping (map channels to E/N/Z)")
-            self.use_channel_mapping_type1.setChecked(False)
-            self.use_channel_mapping_type1.setStyleSheet("""
-                QCheckBox {
-                    font-weight: bold;
-                    color: #FF9800;
-                    padding: 5px;
-                    background-color: #FFF3E0;
-                    border-radius: 3px;
-                }
-                QCheckBox:hover {
-                    background-color: #FFE0B2;
-                }
-            """)
-            self.use_channel_mapping_type1.setToolTip(
-                "Enable this for MiniSEED files where channel codes (HHE, HHN, HHZ, etc.) need to be mapped.\n"
-                "When enabled, you'll be able to specify which channels represent E, N, Z components.\n\n"
-                "Useful for non-standard channel naming conventions."
-            )
-            dir_layout.addWidget(self.use_channel_mapping_type1)
-
-            # Info label for channel mapping
-            mapping_info_type1 = QLabel(
-                "<i>Note: For MiniSEED files with non-standard channel names, check the box above to manually map channels.</i>"
-            )
-            mapping_info_type1.setWordWrap(True)
-            mapping_info_type1.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
-            dir_layout.addWidget(mapping_info_type1)
-
             layout.addWidget(dir_group)
 
-            # Storage for channel mapping
-            self.channel_mapping_type1 = None
+            # Storage for per-file channel mapping and channel info
+            self.channel_mapping_type1 = {}  # {file_path: {'E': 'HHE', 'N': 'HHN', 'Z': 'HHZ'}}
+            self.type1_file_channels = {}  # {file_path: [{'code': 'HHE', ...}, ...]}
 
-            # File list
+            # File list with enhanced display
             files_group = QGroupBox("Detected Files")
             files_layout = QVBoxLayout(files_group)
             
-            self.type1_file_list = QListWidget()
-            self.type1_file_list.setSelectionMode(QListWidget.MultiSelection)
-            files_layout.addWidget(self.type1_file_list)
+            # Use a table for better display with channel info
+            self.type1_file_table = QTableWidget()
+            self.type1_file_table.setColumnCount(4)
+            self.type1_file_table.setHorizontalHeaderLabels([
+                "File Name", "Channels", "Mapping Status", "Select"
+            ])
+            self.type1_file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            self.type1_file_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            self.type1_file_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            self.type1_file_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            self.type1_file_table.setSelectionBehavior(QTableWidget.SelectRows)
+            self.type1_file_table.setSelectionMode(QTableWidget.ExtendedSelection)
+            self.type1_file_table.setAlternatingRowColors(True)
+            files_layout.addWidget(self.type1_file_table)
             
-            # Selection buttons
+            # Selection and mapping buttons
             button_layout = QHBoxLayout()
+            
             select_all_btn = QPushButton("Select All")
-            select_all_btn.clicked.connect(lambda: self.type1_file_list.selectAll())
+            select_all_btn.clicked.connect(self.type1_select_all)
             button_layout.addWidget(select_all_btn)
             
             select_none_btn = QPushButton("Select None")
-            select_none_btn.clicked.connect(lambda: self.type1_file_list.clearSelection())
+            select_none_btn.clicked.connect(self.type1_select_none)
             button_layout.addWidget(select_none_btn)
+            
+            button_layout.addStretch()
+            
+            # Per-file channel mapping button
+            self.map_channels_btn = QPushButton("Map Channels for Selected")
+            self.map_channels_btn.clicked.connect(self.map_channels_for_selected)
+            self.map_channels_btn.setEnabled(False)
+            self.map_channels_btn.setToolTip(
+                "Map channels to E/N/Z components for selected files.\n"
+                "Select one or more files, then click to configure channel mapping.\n"
+                "Similar files will share the same mapping."
+            )
+            self.map_channels_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #FF9800;
+                    color: white;
+                    font-weight: bold;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #F57C00;
+                }
+                QPushButton:disabled {
+                    background-color: #ccc;
+                    color: #888;
+                }
+            """)
+            button_layout.addWidget(self.map_channels_btn)
+            
             files_layout.addLayout(button_layout)
             
-            count_label = QLabel("0 files detected | 0 selected")
+            count_label = QLabel("0 files detected | 0 selected | 0 mapped")
             self.type1_count_label = count_label
             files_layout.addWidget(count_label)
             
+            # Info label for channel mapping
+            mapping_info_type1 = QLabel(
+                "<i>Tip: Select files and click 'Map Channels' to configure how channels are mapped to E/N/Z components. "
+                "Files with standard naming (ending in E/N/Z) are auto-detected.</i>"
+            )
+            mapping_info_type1.setWordWrap(True)
+            mapping_info_type1.setStyleSheet("color: #666; font-size: 9pt; padding: 5px; background: #f5f5f5; border-radius: 3px;")
+            files_layout.addWidget(mapping_info_type1)
+            
             layout.addWidget(files_group)
+            
+            # Connect table selection change
+            self.type1_file_table.itemSelectionChanged.connect(self.on_type1_table_selection_changed)
+            
+            # Keep old list widget for backward compatibility (hidden)
+            self.type1_file_list = QListWidget()
+            self.type1_file_list.setVisible(False)
             
             # Time Range Selection (PRIMARY FEATURE)
             time_group = QGroupBox("Time Range (Optional)")
@@ -558,7 +774,17 @@ if HAS_PYQT5:
             else:
                 # For non-CSV or when mapping disabled, just enable load button
                 self.load_btn.setEnabled(True)
-                self.preview_text.setPlainText(f"File selected: {Path(file_path).name}\n\nReady to load.")
+                
+                # Update text preview
+                file_size = Path(file_path).stat().st_size / (1024 * 1024)
+                preview_text = f"File: {Path(file_path).name}\n"
+                preview_text += f"Size: {file_size:.2f} MB\n"
+                preview_text += f"Type: {'MiniSEED' if file_ext in ['.mseed', '.miniseed'] else 'Text/CSV'}\n"
+                preview_text += f"\nReady to load"
+                self.preview_text.setPlainText(preview_text)
+                
+                # Load visual preview
+                self.load_preview_data_from_file(file_path)
 
         def _show_column_mapper(self, file_path: str):
             """Show column mapping dialog for CSV/text file."""
@@ -724,12 +950,12 @@ if HAS_PYQT5:
                     self.load_btn.setEnabled(True)
 
                     # Show mapping summary in preview
-                    mapping_text = "✓ Column Mapping Applied Successfully!\n\n"
+                    mapping_text = "Column Mapping Applied Successfully!\n\n"
                     mapping_text += f"File: {Path(file_path).name}\n"
                     mapping_text += f"Total Columns: {len(columns_data)}\n\n"
                     mapping_text += "Mapped Columns:\n"
                     for type_str, col_idx in sorted(self.column_mapping.items(), key=lambda x: x[1]):
-                        mapping_text += f"  Column {col_idx + 1} → {type_str}\n"
+                        mapping_text += f"  Column {col_idx + 1} -> {type_str}\n"
                     mapping_text += "\nReady to load. Click 'Load Data' to proceed."
                     self.preview_text.setPlainText(mapping_text)
                 else:
@@ -752,160 +978,19 @@ if HAS_PYQT5:
                 self.load_btn.setEnabled(False)
 
         def _show_channel_mapper_type1(self, mseed_files: List[Path]):
-            """Show channel mapping dialog for MiniSEED files - handles multiple unique channel structures."""
-            try:
-                from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
-
-                try:
-                    from obspy import read
-                except ImportError:
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        "ObsPy is required for MiniSEED channel mapping.\n"
-                        "Please install ObsPy: pip install obspy"
-                    )
-                    self.use_channel_mapping_type1.setChecked(False)
-                    self.load_btn.setEnabled(True)
-                    self.update_preview_type1(mseed_files)
-                    return
-
-                # Step 1: Scan all files and group by unique channel structures
-                from PyQt5.QtWidgets import QProgressDialog
-                from PyQt5.QtCore import Qt
-
-                progress = QProgressDialog(
-                    "Scanning files for channel structures...",
-                    "Cancel",
-                    0,
-                    len(mseed_files),
-                    self
-                )
-                progress.setWindowModality(Qt.WindowModal)
-                progress.setMinimumDuration(0)
-
-                # Dictionary to group files by channel signature
-                # signature = frozenset of channel codes
-                channel_groups = {}  # {signature: {'channels_info': [...], 'files': [...]}}
-
-                for i, file_path in enumerate(mseed_files):
-                    progress.setValue(i)
-                    if progress.wasCanceled():
-                        self.use_channel_mapping_type1.setChecked(False)
-                        self.load_btn.setEnabled(True)
-                        self.update_preview_type1(mseed_files)
-                        return
-
-                    try:
-                        stream = read(str(file_path))
-
-                        # Extract channel codes
-                        channel_codes = tuple(sorted(trace.stats.channel for trace in stream))
-                        signature = channel_codes  # Use sorted tuple as signature
-
-                        if signature not in channel_groups:
-                            # Extract full channel info for this structure
-                            channels_info = []
-                            for trace in stream:
-                                channel_info = {
-                                    'code': trace.stats.channel,
-                                    'location': trace.stats.location,
-                                    'sampling_rate': trace.stats.sampling_rate,
-                                    'npts': trace.stats.npts,
-                                    'station': trace.stats.station,
-                                    'network': trace.stats.network
-                                }
-                                channels_info.append(channel_info)
-
-                            channel_groups[signature] = {
-                                'channels_info': channels_info,
-                                'files': []
-                            }
-
-                        channel_groups[signature]['files'].append(file_path)
-
-                    except Exception as e:
-                        print(f"Failed to read {file_path.name}: {e}")
-                        continue
-
-                progress.setValue(len(mseed_files))
-
-                if not channel_groups:
-                    QMessageBox.warning(
-                        self,
-                        "No Valid Files",
-                        "No valid MiniSEED files could be read."
-                    )
-                    self.use_channel_mapping_type1.setChecked(False)
-                    self.load_btn.setEnabled(True)
-                    self.update_preview_type1(mseed_files)
-                    return
-
-                # Step 2: Show mapping dialog for each unique channel structure
-                # Store mappings: {signature: mapping_dict}
-                all_mappings = {}
-
-                for signature, group_data in channel_groups.items():
-                    channels_info = group_data['channels_info']
-                    group_files = group_data['files']
-
-                    # Show dialog with info about how many files have this structure
-                    info_msg = f"{len(group_files)} file(s) with channels: {', '.join(signature)}"
-                    sample_file = group_files[0]
-
-                    dlg = ChannelMapperDialog(channels_info, str(sample_file), self)
-                    dlg.setWindowTitle(f"Map Channels - {info_msg}")
-
-                    if dlg.exec_() == QDialog.Accepted:
-                        mapping = dlg.get_mapping()
-                        all_mappings[signature] = mapping
-                    else:
-                        # User cancelled - abort entire process
-                        self.use_channel_mapping_type1.setChecked(False)
-                        self.channel_mapping_type1 = None
-                        self.load_btn.setEnabled(True)
-                        self.update_preview_type1(mseed_files)
-                        return
-
-                # Step 3: Store the mappings (we'll need to pass file-specific mappings to the loader)
-                # For now, store as a dict: {file_path: mapping}
-                self.channel_mapping_type1 = {}
-                for signature, mapping in all_mappings.items():
-                    for file_path in channel_groups[signature]['files']:
-                        self.channel_mapping_type1[str(file_path)] = mapping
-
-                self.load_btn.setEnabled(True)
-
-                # Show mapping summary in preview
-                mapping_text = "✓ Channel Mapping Applied Successfully!\n\n"
-                mapping_text += f"Total Files: {len(mseed_files)}\n"
-                mapping_text += f"Unique Channel Structures: {len(channel_groups)}\n\n"
-
-                for signature, group_data in channel_groups.items():
-                    mapping = all_mappings[signature]
-                    mapping_text += f"Group: {', '.join(signature)} ({len(group_data['files'])} files)\n"
-                    for component, channel_code in sorted(mapping.items()):
-                        mapping_text += f"  {component} → {channel_code}\n"
-                    mapping_text += "\n"
-
-                mapping_text += "Ready to load. Click 'Load Data' to proceed."
-                self.preview_text.setPlainText(mapping_text)
-
-            except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to show channel mapper:\n{str(e)}"
-                )
-                self.use_channel_mapping_type1.setChecked(False)
-                self.channel_mapping_type1 = None
-                self.load_btn.setEnabled(True)
-                self.update_preview_type1(mseed_files)
+            """
+            Legacy method for bulk channel mapping.
+            Now replaced by per-file mapping via map_channels_for_selected().
+            This method is kept for backward compatibility but simplified.
+            """
+            # Simply update the table and let user use the new per-file mapping
+            self.load_btn.setEnabled(True)
+            self.update_preview_type1(mseed_files)
 
         def browse_type1_directory(self):
             """Browse for Type 1 directory (3-channel files)."""
             dir_path = QFileDialog.getExistingDirectory(
-                self,
+                        self,
                 "Select Directory with MiniSEED Files"
             )
             
@@ -925,58 +1010,336 @@ if HAS_PYQT5:
                 self.detect_type2_files(dir_path)
         
         def detect_type1_files(self, dir_path: str):
-            """Detect Type 1 MiniSEED files (3-channel per file)."""
+            """Detect Type 1 MiniSEED files (3-channel per file) and populate table with channel info."""
+            from PyQt5.QtWidgets import QProgressDialog, QCheckBox
+            from PyQt5.QtCore import Qt
+
             path = Path(dir_path)
             mseed_files = sorted(list(path.glob("*.mseed")) + list(path.glob("*.miniseed")))
 
             self.type1_file_list.clear()
             self.type1_all_files = []  # Store all detected files
+            self.type1_file_channels = {}  # Store channel info per file
+            self.channel_mapping_type1 = {}  # Reset mappings
+            
+            # Clear table
+            self.type1_file_table.setRowCount(0)
 
-            for file in mseed_files:
+            if not mseed_files:
+                self.type1_count_label.setText("0 files detected | 0 selected | 0 mapped")
+                self.load_btn.setEnabled(False)
+                self.preview_text.setText("No MiniSEED files found in directory.")
+                return
+
+            # Progress dialog for scanning files
+            progress = QProgressDialog(
+                "Scanning files for channel information...",
+                "Cancel",
+                0,
+                len(mseed_files),
+                self
+            )
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(500)  # Only show if takes > 500ms
+
+            try:
+                from obspy import read
+                HAS_OBSPY = True
+            except ImportError:
+                HAS_OBSPY = False
+
+            # Populate table with file info
+            self.type1_file_table.setRowCount(len(mseed_files))
+            
+            for i, file in enumerate(mseed_files):
+                progress.setValue(i)
+                if progress.wasCanceled():
+                    break
+                
+                file_path = str(file)
+                self.type1_all_files.append(file_path)
+                
+                # Get channel info if ObsPy is available
+                channels_str = "N/A"
+                channels_info = []
+                mapping_status = "Unknown"
+                
+                if HAS_OBSPY:
+                    try:
+                        stream = read(file_path, headonly=True)
+                        channel_codes = [tr.stats.channel for tr in stream]
+                        channels_str = ", ".join(channel_codes)
+                        
+                        # Store channel info
+                        channels_info = [{
+                            'code': tr.stats.channel,
+                            'location': tr.stats.location,
+                            'sampling_rate': tr.stats.sampling_rate,
+                            'npts': tr.stats.npts,
+                            'station': tr.stats.station,
+                            'network': tr.stats.network
+                        } for tr in stream]
+                        self.type1_file_channels[file_path] = channels_info
+                        
+                        # Check if auto-detection would work
+                        if self._can_auto_detect_channels(channel_codes):
+                            mapping_status = "Auto-detect"
+                        else:
+                            mapping_status = "Needs mapping"
+                    except Exception as e:
+                        channels_str = f"Error: {str(e)[:20]}"
+                        mapping_status = "Error"
+                
+                # File name
+                name_item = QTableWidgetItem(file.name)
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                name_item.setData(Qt.UserRole, file_path)  # Store full path
+                self.type1_file_table.setItem(i, 0, name_item)
+                
+                # Channels
+                channels_item = QTableWidgetItem(channels_str)
+                channels_item.setFlags(channels_item.flags() & ~Qt.ItemIsEditable)
+                self.type1_file_table.setItem(i, 1, channels_item)
+                
+                # Mapping status
+                status_item = QTableWidgetItem(mapping_status)
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+                if "Auto" in mapping_status:
+                    status_item.setForeground(QColor(0, 128, 0))  # Green
+                elif "Needs" in mapping_status:
+                    status_item.setForeground(QColor(255, 152, 0))  # Orange
+                elif "Error" in mapping_status:
+                    status_item.setForeground(QColor(255, 0, 0))  # Red
+                self.type1_file_table.setItem(i, 2, status_item)
+                
+                # Selection checkbox
+                checkbox = QCheckBox()
+                checkbox.setChecked(True)  # Select all by default
+                checkbox.stateChanged.connect(self.update_type1_count)
+                checkbox_widget = QWidget()
+                checkbox_layout = QHBoxLayout(checkbox_widget)
+                checkbox_layout.addWidget(checkbox)
+                checkbox_layout.setAlignment(Qt.AlignCenter)
+                checkbox_layout.setContentsMargins(0, 0, 0, 0)
+                self.type1_file_table.setCellWidget(i, 3, checkbox_widget)
+                
+                # Also add to old list for compatibility
                 self.type1_file_list.addItem(file.name)
-                self.type1_all_files.append(str(file))
-
-            # Select all by default
+            
+            progress.setValue(len(mseed_files))
+            
+            # Select all in old list
             self.type1_file_list.selectAll()
-
-            # Connect selection change to update count
-            self.type1_file_list.itemSelectionChanged.connect(self.update_type1_selection)
-
+            
             count = len(mseed_files)
-            self.type1_count_label.setText(f"{count} files detected | {count} selected")
+            self.type1_count_label.setText(f"{count} files detected | {count} selected | 0 mapped")
 
             if count > 0:
                 self.load_mode = 'multi_type1'
-
-                # If channel mapping is enabled, show the channel mapper dialog
-                if self.use_channel_mapping_type1.isChecked() and mseed_files:
-                    self._show_channel_mapper_type1(mseed_files)
-                else:
-                    self.load_btn.setEnabled(True)
-                    self.update_preview_type1(mseed_files)
+                self.load_btn.setEnabled(True)
+                self.update_preview_type1([Path(f) for f in self.type1_all_files])
             else:
                 self.load_btn.setEnabled(False)
                 self.preview_text.setText("No MiniSEED files found in directory.")
         
-        def update_type1_selection(self):
-            """Update count label when selection changes."""
-            selected_indices = [self.type1_file_list.row(item) 
-                               for item in self.type1_file_list.selectedItems()]
-            self.selected_files = [self.type1_all_files[i] for i in selected_indices]
+        def _can_auto_detect_channels(self, channel_codes: List[str]) -> bool:
+            """Check if channels can be auto-detected based on naming conventions."""
+            # Look for standard E/N/Z endings
+            has_e = any(c.upper().endswith('E') or c.upper().endswith('1') for c in channel_codes)
+            has_n = any(c.upper().endswith('N') or c.upper().endswith('2') for c in channel_codes)
+            has_z = any(c.upper().endswith('Z') or c.upper().endswith('3') for c in channel_codes)
+            return has_e and has_n and has_z
+        
+        def type1_select_all(self):
+            """Select all files in Type 1 table."""
+            for i in range(self.type1_file_table.rowCount()):
+                checkbox_widget = self.type1_file_table.cellWidget(i, 3)
+                if checkbox_widget:
+                    checkbox = checkbox_widget.findChild(QCheckBox)
+                    if checkbox:
+                        checkbox.setChecked(True)
+            self.type1_file_list.selectAll()
+            self.update_type1_count()
+        
+        def type1_select_none(self):
+            """Deselect all files in Type 1 table."""
+            for i in range(self.type1_file_table.rowCount()):
+                checkbox_widget = self.type1_file_table.cellWidget(i, 3)
+                if checkbox_widget:
+                    checkbox = checkbox_widget.findChild(QCheckBox)
+                    if checkbox:
+                        checkbox.setChecked(False)
+            self.type1_file_list.clearSelection()
+            self.update_type1_count()
+        
+        def on_type1_table_selection_changed(self):
+            """Handle table row selection change."""
+            selected_rows = self.type1_file_table.selectionModel().selectedRows()
+            self.map_channels_btn.setEnabled(len(selected_rows) > 0)
+        
+        def update_type1_count(self):
+            """Update count label for Type 1 files."""
+            total = self.type1_file_table.rowCount()
+            selected = 0
+            mapped = len(self.channel_mapping_type1)
             
-            total = len(self.type1_all_files)
-            selected = len(selected_indices)
-            self.type1_count_label.setText(f"{total} files detected | {selected} selected")
+            for i in range(total):
+                checkbox_widget = self.type1_file_table.cellWidget(i, 3)
+                if checkbox_widget:
+                    checkbox = checkbox_widget.findChild(QCheckBox)
+                    if checkbox and checkbox.isChecked():
+                        selected += 1
             
-            # Update load button
+            self.type1_count_label.setText(f"{total} files detected | {selected} selected | {mapped} mapped")
             self.load_btn.setEnabled(selected > 0)
             
-            # Update preview
+            # Update selected files list
+            self.selected_files = self._get_selected_type1_files()
+            
+            # Update text preview
             if selected > 0:
-                selected_paths = [Path(self.type1_all_files[i]) for i in selected_indices]
+                selected_paths = [Path(f) for f in self.selected_files]
                 self.update_preview_type1(selected_paths)
+                
+                # Load visual preview from first selected file
+                if self.selected_files and HAS_MATPLOTLIB:
+                    self.load_preview_data_from_file(self.selected_files[0])
             else:
                 self.preview_text.setText("No files selected")
+                if HAS_MATPLOTLIB and hasattr(self, '_show_empty_preview'):
+                    self._show_empty_preview()
+        
+        def _get_selected_type1_files(self) -> List[str]:
+            """Get list of selected Type 1 file paths."""
+            selected = []
+            for i in range(self.type1_file_table.rowCount()):
+                checkbox_widget = self.type1_file_table.cellWidget(i, 3)
+                if checkbox_widget:
+                    checkbox = checkbox_widget.findChild(QCheckBox)
+                    if checkbox and checkbox.isChecked():
+                        name_item = self.type1_file_table.item(i, 0)
+                        if name_item:
+                            file_path = name_item.data(Qt.UserRole)
+                            if file_path:
+                                selected.append(file_path)
+            return selected
+        
+        def map_channels_for_selected(self):
+            """Show channel mapping dialog for selected files in table."""
+            from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
+            from PyQt5.QtWidgets import QDialog
+            
+            # Get selected rows from table
+            selected_rows = self.type1_file_table.selectionModel().selectedRows()
+            if not selected_rows:
+                QMessageBox.warning(
+                    self,
+                    "No Selection",
+                    "Please select one or more files in the table to map channels."
+                )
+                return
+
+            # Get file paths and channel info for selected files
+            selected_files = []
+            for row_index in selected_rows:
+                row = row_index.row()
+                name_item = self.type1_file_table.item(row, 0)
+                if name_item:
+                    file_path = name_item.data(Qt.UserRole)
+                    if file_path:
+                        selected_files.append(file_path)
+            
+            if not selected_files:
+                return
+            
+            # Group selected files by channel structure
+            channel_groups = {}  # {signature: {'channels_info': [...], 'files': [...]}}
+            
+            for file_path in selected_files:
+                if file_path in self.type1_file_channels:
+                    channels_info = self.type1_file_channels[file_path]
+                    # Use sorted channel codes as signature
+                    signature = tuple(sorted(ch['code'] for ch in channels_info))
+                    
+                    if signature not in channel_groups:
+                        channel_groups[signature] = {
+                            'channels_info': channels_info,
+                            'files': []
+                        }
+                    channel_groups[signature]['files'].append(file_path)
+            
+            if not channel_groups:
+                QMessageBox.warning(
+                    self,
+                    "No Channel Info",
+                    "No channel information available for selected files.\n"
+                    "Make sure ObsPy is installed and files are valid MiniSEED."
+                )
+                return
+            
+            # Show mapping dialog for each unique channel structure
+            all_mappings = {}
+            
+            for signature, group_data in channel_groups.items():
+                channels_info = group_data['channels_info']
+                group_files = group_data['files']
+                
+                # Info message
+                info_msg = f"{len(group_files)} file(s) with channels: {', '.join(signature)}"
+                sample_file = Path(group_files[0]).name
+                
+                dlg = ChannelMapperDialog(channels_info, sample_file, self)
+                dlg.setWindowTitle(f"Map Channels - {info_msg}")
+                
+                if dlg.exec_() == QDialog.Accepted:
+                    mapping = dlg.get_mapping()
+                    all_mappings[signature] = mapping
+                    
+                    # Store mapping for all files with this structure
+                    for file_path in group_files:
+                        self.channel_mapping_type1[file_path] = mapping
+                else:
+                    # User cancelled - don't abort, just skip this group
+                    continue
+            
+            # Update table status indicators
+            self._update_type1_mapping_status()
+            
+            # Update count
+            self.update_type1_count()
+            
+            # Show summary
+            if all_mappings:
+                mapping_text = f"Channel mapping configured for {len(self.channel_mapping_type1)} file(s)\n\n"
+                for signature, mapping in all_mappings.items():
+                    mapping_text += f"Channels {', '.join(signature)}:\n"
+                    for component, channel_code in sorted(mapping.items()):
+                        mapping_text += f"  {component} -> {channel_code}\n"
+                    mapping_text += "\n"
+
+                self.preview_text.setPlainText(mapping_text + "Ready to load.")
+        
+        def _update_type1_mapping_status(self):
+            """Update mapping status column in Type 1 table."""
+            for i in range(self.type1_file_table.rowCount()):
+                name_item = self.type1_file_table.item(i, 0)
+                if name_item:
+                    file_path = name_item.data(Qt.UserRole)
+                    status_item = self.type1_file_table.item(i, 2)
+                    
+                    if file_path in self.channel_mapping_type1:
+                        # Has custom mapping
+                        mapping = self.channel_mapping_type1[file_path]
+                        status_text = f"Mapped ({mapping.get('E', '?')}/{mapping.get('N', '?')}/{mapping.get('Z', '?')})"
+                        status_item.setText(status_text)
+                        status_item.setForeground(QColor(0, 128, 0))  # Green
+                    # Keep original status if not mapped
+        
+        def update_type1_selection(self):
+            """Update count label when selection changes (backward compatibility)."""
+            # This method is kept for backward compatibility with the old QListWidget
+            # The new table uses update_type1_count instead
+            self.update_type1_count()
         
         def detect_type2_files(self, dir_path: str):
             """Detect Type 2 MiniSEED files (separate E, N, Z)."""
@@ -1118,13 +1481,20 @@ if HAS_PYQT5:
             """Update preview for single file."""
             path = Path(file_path)
             size_mb = path.stat().st_size / (1024 * 1024)
+            file_type = 'MiniSEED' if path.suffix.lower() in ['.mseed', '.miniseed'] else 'Text/CSV'
             
-            preview = f"Mode: Single File\n"
+            preview = f"Single File Mode\n"
+            preview += f"--------------------\n"
             preview += f"File: {path.name}\n"
             preview += f"Size: {size_mb:.2f} MB\n"
-            preview += f"Type: {'MiniSEED' if path.suffix in ['.mseed', '.miniseed'] else 'ASCII'}\n"
+            preview += f"Type: {file_type}\n"
+            preview += f"\nReady to load"
             
             self.preview_text.setText(preview)
+            
+            # Load visual preview
+            if HAS_MATPLOTLIB:
+                self.load_preview_data_from_file(file_path)
         
         def update_preview_type1(self, files: List[Path]):
             """Update preview for Type 1 files."""
@@ -1133,23 +1503,26 @@ if HAS_PYQT5:
             # Estimate duration (rough: 1 MB ≈ 50 seconds at 200 Hz)
             estimated_hours = (total_size / 60) / 60
             
-            preview = f"Mode: Multi-File Type 1 (3-channel per file)\n"
+            preview = f"Multi-File (3-channel)\n"
+            preview += f"--------------------\n"
             preview += f"Files: {len(files)}\n"
             preview += f"Total Size: {total_size:.2f} MB\n"
-            preview += f"Estimated Duration: ~{estimated_hours:.1f} hours\n"
-            preview += f"\nFirst file: {files[0].name}\n"
+            preview += f"Est. Duration: ~{estimated_hours:.1f}h\n"
+            preview += f"\nFirst: {files[0].name}\n"
             if len(files) > 1:
-                preview += f"Last file: {files[-1].name}\n"
-            preview += f"\nFiles will be merged chronologically."
+                preview += f"Last: {files[-1].name}\n"
+            preview += f"\nFiles will be merged"
             
             # Warning for large datasets
             if len(files) > 10 or estimated_hours > 10:
-                preview += f"\n\nWARNING: Large dataset!"
-                preview += f"\nProcessing {len(files)} files may take several minutes."
-                preview += f"\nRecommendation: Start with 3-5 files for testing."
-                preview += f"\nExpected windows: ~{int(estimated_hours * 120)} (30s windows, 50% overlap)"
+                preview += f"\n\nLarge dataset!"
+                preview += f"\nEst. windows: ~{int(estimated_hours * 120)}"
             
             self.preview_text.setText(preview)
+            
+            # Load visual preview from merged files
+            if HAS_MATPLOTLIB:
+                self.load_preview_data_from_files(files)
         
         def update_preview_type2(self, groups: Dict[str, Dict[str, Path]]):
             """Update preview for Type 2 files."""
@@ -1162,18 +1535,26 @@ if HAS_PYQT5:
                 for g in complete_groups
             ) / (1024 * 1024)
             
-            preview = f"Mode: Multi-File Type 2 (separate E, N, Z)\n"
+            preview = f"Separate E/N/Z Files\n"
+            preview += f"--------------------\n"
             preview += f"Complete Groups: {len(complete_groups)}\n"
             preview += f"Total Files: {total_files}\n"
             preview += f"Total Size: {total_size:.2f} MB\n"
             
             if complete_groups:
                 first_group = list(groups.keys())[0]
-                preview += f"\nFirst group: {first_group}\n"
+                preview += f"\nFirst: {first_group}\n"
             
-            preview += f"\nEach group will be merged into 3-component stream."
+            preview += f"\nGroups will be merged"
             
             self.preview_text.setText(preview)
+            
+            # Load visual preview from first group if available
+            if HAS_MATPLOTLIB and complete_groups:
+                first_group_name = list(groups.keys())[0]
+                first_group = groups[first_group_name]
+                if 'E' in first_group:
+                    self.load_preview_data_from_file(str(first_group['E']))
         
         def on_single_time_range_toggled(self, state):
             """Handle single file time range checkbox toggle."""
@@ -1398,6 +1779,438 @@ if HAS_PYQT5:
 
             self.files_selected.emit(result)
             self.accept()
+
+        # =====================================================================
+        # VISUAL PREVIEW METHODS
+        # =====================================================================
+        
+        def update_visual_preview(self):
+            """Update the visual preview based on current data and view mode."""
+            if not HAS_MATPLOTLIB or not hasattr(self, 'preview_fig'):
+                return
+            
+            if self.preview_data is None:
+                self._show_empty_preview()
+                return
+            
+            try:
+                self.preview_fig.clear()
+                
+                # Determine which view to show
+                if hasattr(self, 'preview_radio_all') and self.preview_radio_all.isChecked():
+                    self._plot_all_components()
+                elif hasattr(self, 'preview_radio_e') and self.preview_radio_e.isChecked():
+                    self._plot_single_component('E')
+                elif hasattr(self, 'preview_radio_n') and self.preview_radio_n.isChecked():
+                    self._plot_single_component('N')
+                elif hasattr(self, 'preview_radio_z') and self.preview_radio_z.isChecked():
+                    self._plot_single_component('Z')
+                else:
+                    self._plot_all_components()
+                
+                self.preview_fig.tight_layout()
+                self.preview_canvas.draw()
+                
+            except Exception as e:
+                self._show_error_preview(str(e))
+        
+        def _show_empty_preview(self):
+            """Show empty preview with message."""
+            if not HAS_MATPLOTLIB or not hasattr(self, 'preview_fig'):
+                return
+            
+            self.preview_fig.clear()
+            ax = self.preview_fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'No data to preview\n\nSelect a file to see waveform',
+                   ha='center', va='center', fontsize=12, color='gray',
+                   transform=ax.transAxes)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_frame_on(False)
+            self.preview_canvas.draw()
+        
+        def _show_error_preview(self, error_msg: str):
+            """Show error message in preview."""
+            if not HAS_MATPLOTLIB or not hasattr(self, 'preview_fig'):
+                return
+            
+            self.preview_fig.clear()
+            ax = self.preview_fig.add_subplot(111)
+            ax.text(0.5, 0.5, f'Error loading preview:\n{error_msg}',
+                   ha='center', va='center', fontsize=10, color='red',
+                   transform=ax.transAxes)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_frame_on(False)
+            self.preview_canvas.draw()
+            
+            if hasattr(self, 'preview_status'):
+                self.preview_status.setText(f"Error: {error_msg[:50]}...")
+                self.preview_status.setStyleSheet("color: red; font-size: 9pt;")
+        
+        def _plot_all_components(self):
+            """Plot all three components (E, N, Z) in subplots."""
+            if self.preview_data is None:
+                return
+            
+            data = self.preview_data
+            colors = {'E': '#d62728', 'N': '#2ca02c', 'Z': '#1f77b4'}
+            labels = {'E': 'East (E)', 'N': 'North (N)', 'Z': 'Vertical (Z)'}
+            
+            # Get time range parameters
+            time_start = 0
+            time_end = None
+            use_time_range = False
+            
+            if self.load_mode == 'single' and hasattr(self, 'single_use_time_range') and self.single_use_time_range.isChecked():
+                use_time_range = True
+                start_dt = self.single_start_datetime.dateTime().toPyDateTime()
+                end_dt = self.single_end_datetime.dateTime().toPyDateTime()
+                duration_selected = (end_dt - start_dt).total_seconds()
+            elif self.load_mode == 'multi_type1' and hasattr(self, 'type1_use_time_range') and self.type1_use_time_range.isChecked():
+                use_time_range = True
+                start_dt = self.type1_start_datetime.dateTime().toPyDateTime()
+                end_dt = self.type1_end_datetime.dateTime().toPyDateTime()
+                duration_selected = (end_dt - start_dt).total_seconds()
+            
+            # Create subplots
+            axes = []
+            components = ['E', 'N', 'Z']
+            
+            # Get sampling rate and create time vector
+            fs = data.get('sampling_rate', 100)
+            
+            # Find normalization factor
+            norm_factor = 0
+            for comp in components:
+                if comp in data and data[comp] is not None:
+                    c_max = np.max(np.abs(data[comp]))
+                    if c_max > norm_factor:
+                        norm_factor = c_max
+            
+            if norm_factor == 0:
+                norm_factor = 1
+            
+            for i, comp in enumerate(components):
+                if i == 0:
+                    ax = self.preview_fig.add_subplot(3, 1, i + 1)
+                else:
+                    ax = self.preview_fig.add_subplot(3, 1, i + 1, sharex=axes[0])
+                axes.append(ax)
+                
+                if comp in data and data[comp] is not None:
+                    comp_data = data[comp]
+                    n_samples = len(comp_data)
+                    time_vec = np.arange(n_samples) / fs
+                    
+                    # Normalize data for display
+                    comp_data_norm = comp_data / norm_factor
+                    
+                    ax.plot(time_vec, comp_data_norm, color=colors[comp], linewidth=0.5, alpha=0.8)
+                    ax.set_ylabel(labels[comp], fontsize=8)
+                    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                    ax.axhline(0, color='k', linewidth=0.3, alpha=0.5)
+                    
+                    # Highlight selected time range if enabled
+                    if use_time_range and duration_selected > 0:
+                        # Calculate the relative position in the data
+                        total_duration = n_samples / fs
+                        # Shade the unselected regions
+                        ax.axvspan(0, time_start, alpha=0.2, color='gray', label='Not selected')
+                        if time_end is not None and time_end < total_duration:
+                            ax.axvspan(time_end, total_duration, alpha=0.2, color='gray')
+                    
+                    if i == 0:
+                        duration = n_samples / fs
+                        ax.set_title(f'Waveform Preview | Duration: {duration:.1f}s | Rate: {fs:.0f} Hz', 
+                                   fontsize=9, pad=5)
+                    
+                    if i == 2:
+                        ax.set_xlabel('Time (s)', fontsize=8)
+                    else:
+                        ax.tick_params(labelbottom=False)
+                else:
+                    ax.text(0.5, 0.5, f'{comp} data not available',
+                           ha='center', va='center', fontsize=9, color='gray',
+                           transform=ax.transAxes)
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+            
+            if hasattr(self, 'preview_status'):
+                n_samples = len(data.get('E', data.get('N', data.get('Z', []))))
+                duration = n_samples / fs if fs > 0 else 0
+                self.preview_status.setText(f"Preview: {n_samples:,} samples | {duration:.1f}s | {fs:.0f} Hz")
+                self.preview_status.setStyleSheet("color: green; font-size: 9pt;")
+        
+        def _plot_single_component(self, component: str):
+            """Plot a single component with more detail."""
+            if self.preview_data is None:
+                return
+            
+            data = self.preview_data
+            colors = {'E': '#d62728', 'N': '#2ca02c', 'Z': '#1f77b4'}
+            labels = {'E': 'East (E)', 'N': 'North (N)', 'Z': 'Vertical (Z)'}
+            
+            ax = self.preview_fig.add_subplot(111)
+            
+            if component in data and data[component] is not None:
+                comp_data = data[component]
+                fs = data.get('sampling_rate', 100)
+                n_samples = len(comp_data)
+                time_vec = np.arange(n_samples) / fs
+                
+                ax.plot(time_vec, comp_data, color=colors[component], linewidth=0.5, alpha=0.9)
+                ax.set_xlabel('Time (s)', fontsize=9)
+                ax.set_ylabel(f'Amplitude', fontsize=9)
+                ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                
+                # Add statistics
+                stats_text = f'Min: {np.min(comp_data):.2e}\n'
+                stats_text += f'Max: {np.max(comp_data):.2e}\n'
+                stats_text += f'Mean: {np.mean(comp_data):.2e}\n'
+                stats_text += f'Std: {np.std(comp_data):.2e}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                       verticalalignment='top', fontsize=7,
+                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                
+                duration = n_samples / fs
+                ax.set_title(f'{labels[component]} | {n_samples:,} samples | {duration:.1f}s | {fs:.0f} Hz',
+                           fontsize=9, pad=5)
+                
+                if hasattr(self, 'preview_status'):
+                    self.preview_status.setText(f"{labels[component]}: {n_samples:,} samples")
+                    self.preview_status.setStyleSheet("color: green; font-size: 9pt;")
+            else:
+                ax.text(0.5, 0.5, f'{component} data not available',
+                       ha='center', va='center', fontsize=12, color='gray',
+                       transform=ax.transAxes)
+                ax.set_xticks([])
+                ax.set_yticks([])
+        
+        def refresh_visual_preview(self):
+            """Force refresh the visual preview by reloading data."""
+            if self.load_mode == 'single' and self.selected_files:
+                self.load_preview_data_from_file(self.selected_files[0])
+            elif self.load_mode == 'multi_type1' and self.selected_files:
+                # Load preview from first selected file
+                self.load_preview_data_from_file(self.selected_files[0])
+            elif self.load_mode == 'multi_type2' and self.grouped_files:
+                # Load preview from first group
+                first_group = list(self.grouped_files.keys())[0] if self.grouped_files else None
+                if first_group and 'E' in self.grouped_files[first_group]:
+                    self.load_preview_data_from_file(str(self.grouped_files[first_group]['E']))
+            else:
+                self._show_empty_preview()
+        
+        def load_preview_data_from_file(self, file_path: str):
+            """
+            Load preview data from a file (quick scan, not full load).
+            
+            Args:
+                file_path: Path to the file to preview
+            """
+            if not HAS_MATPLOTLIB:
+                return
+            
+            try:
+                path = Path(file_path)
+                
+                if hasattr(self, 'preview_status'):
+                    self.preview_status.setText(f"Loading preview: {path.name}...")
+                    self.preview_status.setStyleSheet("color: orange; font-size: 9pt;")
+                
+                # Process events to show status update
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
+                
+                if path.suffix.lower() in ['.mseed', '.miniseed']:
+                    self._load_miniseed_preview(file_path)
+                elif path.suffix.lower() in ['.txt', '.csv', '.dat', '.asc']:
+                    self._load_text_preview(file_path)
+                else:
+                    self.preview_data = None
+                    self._show_empty_preview()
+                    if hasattr(self, 'preview_status'):
+                        self.preview_status.setText(f"Unsupported format: {path.suffix}")
+                        self.preview_status.setStyleSheet("color: orange; font-size: 9pt;")
+                
+            except Exception as e:
+                self.preview_data = None
+                self._show_error_preview(str(e))
+        
+        def load_preview_data_from_files(self, file_paths: List[Path]):
+            """
+            Load preview data from multiple MiniSEED files (merged).
+            
+            Args:
+                file_paths: List of paths to the files to preview
+            """
+            if not HAS_MATPLOTLIB or not file_paths:
+                return
+            
+            try:
+                if hasattr(self, 'preview_status'):
+                    self.preview_status.setText(f"Loading preview from {len(file_paths)} files...")
+                    self.preview_status.setStyleSheet("color: orange; font-size: 9pt;")
+                
+                # Process events to show status update
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
+                
+                if not HAS_OBSPY:
+                    self.preview_data = None
+                    self._show_error_preview("ObsPy not installed")
+                    return
+                
+                from obspy import read, Stream
+                
+                # Read and merge all streams
+                combined_stream = Stream()
+                for file_path in file_paths[:10]:  # Limit to first 10 for preview speed
+                    try:
+                        stream = read(str(file_path))
+                        combined_stream += stream
+                    except Exception:
+                        continue
+                
+                if len(combined_stream) == 0:
+                    self.preview_data = None
+                    self._show_empty_preview()
+                    return
+                
+                # Merge traces with same ID
+                combined_stream.merge(method=1, fill_value='interpolate')
+                
+                # Extract data for each component
+                preview_data = {
+                    'E': None, 'N': None, 'Z': None,
+                    'sampling_rate': combined_stream[0].stats.sampling_rate
+                }
+                
+                for trace in combined_stream:
+                    channel = trace.stats.channel.upper()
+                    
+                    # Map channel to component
+                    if channel.endswith('E') or channel.endswith('1'):
+                        preview_data['E'] = trace.data
+                    elif channel.endswith('N') or channel.endswith('2'):
+                        preview_data['N'] = trace.data
+                    elif channel.endswith('Z') or channel.endswith('3'):
+                        preview_data['Z'] = trace.data
+                
+                self.preview_data = preview_data
+                self.update_visual_preview()
+                
+                if hasattr(self, 'preview_status'):
+                    n_samples = len(preview_data.get('E', []) or preview_data.get('Z', []) or [])
+                    fs = preview_data.get('sampling_rate', 0)
+                    duration = n_samples / fs if fs > 0 else 0
+                    self.preview_status.setText(f"Preview: {len(file_paths)} files | {n_samples:,} samples | {duration:.1f}s")
+                    self.preview_status.setStyleSheet("color: green; font-size: 9pt;")
+                
+            except Exception as e:
+                self.preview_data = None
+                self._show_error_preview(str(e))
+        
+        def _load_miniseed_preview(self, file_path: str):
+            """Load preview data from MiniSEED file."""
+            try:
+                from obspy import read
+                
+                # Read the file
+                stream = read(file_path)
+                
+                if len(stream) == 0:
+                    self.preview_data = None
+                    self._show_empty_preview()
+                    return
+                
+                # Extract data for each component
+                preview_data = {
+                    'E': None, 'N': None, 'Z': None,
+                    'sampling_rate': stream[0].stats.sampling_rate
+                }
+                
+                for trace in stream:
+                    channel = trace.stats.channel.upper()
+                    
+                    # Map channel to component
+                    if channel.endswith('E') or channel.endswith('1'):
+                        preview_data['E'] = trace.data
+                    elif channel.endswith('N') or channel.endswith('2'):
+                        preview_data['N'] = trace.data
+                    elif channel.endswith('Z') or channel.endswith('3'):
+                        preview_data['Z'] = trace.data
+                
+                self.preview_data = preview_data
+                self.update_visual_preview()
+                
+            except ImportError:
+                self.preview_data = None
+                self._show_error_preview("ObsPy not installed")
+            except Exception as e:
+                self.preview_data = None
+                self._show_error_preview(str(e))
+        
+        def _load_text_preview(self, file_path: str):
+            """Load preview data from text/CSV file."""
+            try:
+                # Read file with different encodings
+                encodings = ['utf-8', 'latin-1', 'cp1252']
+                lines = None
+                
+                for encoding in encodings:
+                    try:
+                        with open(file_path, 'r', encoding=encoding) as f:
+                            lines = f.readlines()
+                        break
+                    except:
+                        continue
+                
+                if not lines:
+                    self.preview_data = None
+                    self._show_error_preview("Could not read file")
+                    return
+                
+                # Find data start and parse
+                data_rows = []
+                for line in lines:
+                    line_stripped = line.strip()
+                    if not line_stripped or line_stripped.startswith('#'):
+                        continue
+                    
+                    try:
+                        values = [float(x) for x in line_stripped.split()]
+                        if len(values) >= 4:  # Time, E, N, Z
+                            data_rows.append(values[:4])
+                    except:
+                        continue
+                
+                if not data_rows:
+                    self.preview_data = None
+                    self._show_error_preview("No numeric data found")
+                    return
+                
+                # Convert to numpy array
+                data_array = np.array(data_rows)
+                
+                # Calculate sampling rate from time column
+                time_data = data_array[:, 0]
+                dt = np.median(np.diff(time_data)) if len(time_data) > 1 else 0.01
+                fs = 1.0 / dt if dt > 0 else 100.0
+                
+                self.preview_data = {
+                    'E': data_array[:, 1],
+                    'N': data_array[:, 2],
+                    'Z': data_array[:, 3],
+                    'sampling_rate': fs
+                }
+                
+                self.update_visual_preview()
+                
+            except Exception as e:
+                self.preview_data = None
+                self._show_error_preview(str(e))
 
 
 else:

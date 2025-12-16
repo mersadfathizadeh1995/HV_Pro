@@ -275,10 +275,10 @@ if HAS_PYQT5:
             has_duplicates = len(used_types) != len(set(used_types))
 
             if has_duplicates:
-                self.status_label.setText("❌ <span style='color:red;'>Error: Cannot map same type to multiple columns</span>")
+                self.status_label.setText("<span style='color:red;'>Error: Cannot map same type to multiple columns</span>")
                 self.btn_ok.setEnabled(False)
             elif has_e and has_n and has_z:
-                self.status_label.setText("✅ <span style='color:green;'>Valid mapping - Ready to import</span>")
+                self.status_label.setText("<span style='color:green;'>Valid mapping - Ready to import</span>")
                 self.btn_ok.setEnabled(True)
             else:
                 missing = []
@@ -288,7 +288,7 @@ if HAS_PYQT5:
                     missing.append("N Component")
                 if not has_z:
                     missing.append("Z Component")
-                self.status_label.setText(f"❌ <span style='color:red;'>Missing required: {', '.join(missing)}</span>")
+                self.status_label.setText(f"<span style='color:red;'>Missing required: {', '.join(missing)}</span>")
                 self.btn_ok.setEnabled(False)
 
         def get_mapping(self):

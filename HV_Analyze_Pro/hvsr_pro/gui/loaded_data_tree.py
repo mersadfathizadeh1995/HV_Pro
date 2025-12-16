@@ -147,7 +147,7 @@ if HAS_PYQT5:
             total_duration = sum(meta.get('duration', 0) for meta in files_dict.values())
 
             parent_item = QTreeWidgetItem([
-                f"📁 {group_name}",
+                f"[{group_name}]",
                 f"{file_count} files | {total_duration:.1f}s total"
             ])
 
@@ -206,16 +206,16 @@ if HAS_PYQT5:
 
             # Status icons
             status_icons = {
-                'loaded': '✓',
-                'processing': '⚙',
-                'error': '❌',
-                'pending': '○'
+                'loaded': '[OK]',
+                'processing': '[...]',
+                'error': '[X]',
+                'pending': '[ ]'
             }
-            icon = status_icons.get(status, '○')
+            icon = status_icons.get(status, '[ ]')
 
             # Create child item
             child_item = QTreeWidgetItem([
-                f"  {icon} 📊 {filename}",
+                f"  {icon} {filename}",
                 f"{duration:.1f}s @ {sampling_rate:.0f}Hz"
             ])
 
@@ -255,7 +255,7 @@ if HAS_PYQT5:
             total_duration = sum(meta.get('duration', 0) for meta in files_dict.values())
 
             # Update parent item text
-            parent_item.setText(0, f"📁 {group_name}")
+            parent_item.setText(0, f"[{group_name}]")
             parent_item.setText(1, f"{new_file_count} files | {total_duration:.1f}s total")
 
             # Clear existing children
@@ -624,7 +624,7 @@ if HAS_PYQT5:
             parent_item = group['item']
 
             # Clear selection and select this group
-            self.clearSelection()
+            self.tree_widget.clearSelection()
             parent_item.setSelected(True)
 
             # Expand the group to show files
@@ -632,6 +632,35 @@ if HAS_PYQT5:
 
             # Emit group selected signal
             self.group_selected.emit(group_id, list(group['files'].keys()))
+        
+        def select_file(self, file_path: str):
+            """
+            Select a specific file in the tree by its path.
+            
+            Args:
+                file_path: Path to the file to select
+            """
+            # Find the file in groups
+            for group_id, group in self.groups.items():
+                if file_path in group['files']:
+                    parent_item = group['item']
+                    
+                    # Find child item with this path
+                    for i in range(parent_item.childCount()):
+                        child = parent_item.child(i)
+                        data = child.data(0, Qt.UserRole)
+                        if data and data.get('type') == 'file' and data.get('path') == file_path:
+                            # Clear previous selection and select this file
+                            self.tree_widget.clearSelection()
+                            child.setSelected(True)
+                            
+                            # Ensure parent is expanded
+                            parent_item.setExpanded(True)
+                            
+                            # Scroll to make it visible
+                            self.tree_widget.scrollToItem(child)
+                            return True
+            return False
 
 
 else:

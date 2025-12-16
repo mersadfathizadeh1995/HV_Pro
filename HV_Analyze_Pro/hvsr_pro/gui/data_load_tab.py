@@ -553,8 +553,13 @@ if HAS_PYQT5:
             # Add to cache
             self.data_cache[file_path] = {'data': data, 'time_range': time_range}
 
-            # Create new group if needed
-            if self.current_group_id is None:
+            # Create new group if needed (or if current group no longer exists)
+            need_new_group = (
+                self.current_group_id is None or 
+                self.current_group_id not in self.data_groups
+            )
+            
+            if need_new_group:
                 self.group_counter += 1
                 self.current_group_id = f"group_{self.group_counter}"
 
@@ -563,9 +568,18 @@ if HAS_PYQT5:
                     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                     group_name = f"Session {timestamp}"
 
-                # Create group
+                # Create group in data_groups dict
                 self.data_groups[self.current_group_id] = {
                     'name': group_name,
+                    'files': {}
+                }
+
+            # Safety check: ensure group exists before accessing
+            if self.current_group_id not in self.data_groups:
+                # This should never happen, but create group as fallback
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                self.data_groups[self.current_group_id] = {
+                    'name': group_name if group_name else f"Session {timestamp}",
                     'files': {}
                 }
 
@@ -586,6 +600,19 @@ if HAS_PYQT5:
 
             # Enable export button
             self.export_btn.setEnabled(True)
+            
+            # Automatically preview the newly loaded data
+            try:
+                self.preview_canvas.set_data(data, time_range)
+                self.update_status(f"Previewing: {Path(file_path).name} ({count} file(s) loaded)")
+            except Exception as e:
+                print(f"Preview error: {e}")
+            
+            # Select the file in the tree
+            try:
+                self.loaded_tree.select_file(file_path)
+            except Exception as e:
+                print(f"Tree selection error: {e}")
 
         def get_loaded_data(self, file_path: str):
             """

@@ -18,10 +18,10 @@ try:
         QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
         QGroupBox, QComboBox, QPushButton, QCheckBox,
         QLabel, QDoubleSpinBox, QSpinBox, QFrame, QScrollArea,
-        QRadioButton
+        QRadioButton, QColorDialog
     )
     from PyQt5.QtCore import pyqtSignal, Qt
-    from PyQt5.QtGui import QFont
+    from PyQt5.QtGui import QFont, QColor
     HAS_PYQT5 = True
 except ImportError:
     HAS_PYQT5 = False
@@ -68,6 +68,17 @@ class PlotProperties:
     background_color: str = "white"  # white, gray, light_gray
     mean_linewidth: float = 2.0
     window_alpha: float = 0.5
+    
+    # Line colors
+    mean_color: str = "#1976D2"  # Blue
+    median_color: str = "#D32F2F"  # Red
+    std_color: str = "#FF5722"  # Deep Orange
+    percentile_color: str = "#9C27B0"  # Purple
+    peak_marker_color: str = "#4CAF50"  # Green
+    
+    # Line widths
+    median_linewidth: float = 1.5
+    std_linewidth: float = 1.5
     
     def to_dict(self):
         """Convert to dictionary."""
@@ -137,6 +148,58 @@ class PlotProperties:
 
 if HAS_PYQT5:
     
+    class ColorPickerButton(QPushButton):
+        """Button that shows current color and opens color picker dialog."""
+        
+        color_changed = pyqtSignal(str)  # hex color string
+        
+        def __init__(self, initial_color: str = "#000000", parent=None):
+            super().__init__(parent)
+            self._color = initial_color
+            self.setFixedSize(60, 25)
+            self._update_style()
+            self.clicked.connect(self._pick_color)
+            
+        def _update_style(self):
+            """Update button appearance to show current color."""
+            # Determine if text should be light or dark based on background
+            qcolor = QColor(self._color)
+            luminance = (0.299 * qcolor.red() + 0.587 * qcolor.green() + 0.114 * qcolor.blue()) / 255
+            text_color = "white" if luminance < 0.5 else "black"
+            
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {self._color};
+                    color: {text_color};
+                    border: 2px solid #888;
+                    border-radius: 3px;
+                    font-size: 10px;
+                }}
+                QPushButton:hover {{
+                    border: 2px solid #333;
+                }}
+            """)
+            self.setText("")  # Clear text, color is visual
+            self.setToolTip(f"Click to change color\nCurrent: {self._color}")
+            
+        def _pick_color(self):
+            """Open color picker dialog."""
+            current = QColor(self._color)
+            color = QColorDialog.getColor(current, self, "Select Color")
+            if color.isValid():
+                self._color = color.name()
+                self._update_style()
+                self.color_changed.emit(self._color)
+                
+        def get_color(self) -> str:
+            """Get current color as hex string."""
+            return self._color
+            
+        def set_color(self, color: str):
+            """Set color from hex string."""
+            self._color = color
+            self._update_style()
+    
     class CollapsibleSection(QWidget):
         """Collapsible section widget for organizing properties."""
         
@@ -149,7 +212,7 @@ if HAS_PYQT5:
             layout.setSpacing(2)
             
             # Header button
-            self.toggle_btn = QPushButton(f"▼ {title}")
+            self.toggle_btn = QPushButton(f"[-] {title}")
             self.toggle_btn.setStyleSheet("""
                 QPushButton {
                     text-align: left;
@@ -177,9 +240,9 @@ if HAS_PYQT5:
             self.content_widget.setVisible(not self.is_collapsed)
             
             # Update button text
-            title = self.toggle_btn.text()[2:]  # Remove arrow
-            arrow = "▶" if self.is_collapsed else "▼"
-            self.toggle_btn.setText(f"{arrow} {title}")
+            title = self.toggle_btn.text()[4:]  # Remove indicator
+            indicator = "[+]" if self.is_collapsed else "[-]"
+            self.toggle_btn.setText(f"{indicator} {title}")
         
         def add_widget(self, widget):
             """Add widget to content area."""
@@ -295,10 +358,10 @@ if HAS_PYQT5:
             preset_layout.addWidget(QLabel("Style:"))
             
             self.preset_combo = QComboBox()
-            self.preset_combo.addItem("📊 Analysis (Current)", "analysis")
-            self.preset_combo.addItem("📄 Publication Quality", "publication")
-            self.preset_combo.addItem("📝 Minimal", "minimal")
-            self.preset_combo.addItem("⚙️ Custom", "custom")
+            self.preset_combo.addItem("Analysis (Current)", "analysis")
+            self.preset_combo.addItem("Publication Quality", "publication")
+            self.preset_combo.addItem("Minimal", "minimal")
+            self.preset_combo.addItem("Custom", "custom")
             self.preset_combo.currentIndexChanged.connect(self.on_preset_changed)
             preset_layout.addWidget(self.preset_combo)
             
@@ -544,9 +607,64 @@ if HAS_PYQT5:
             bg_layout.addWidget(self.bg_combo)
             section.add_layout(bg_layout)
             
+            # === LINE COLORS ===
+            colors_label = QLabel("Line Colors (click to change):")
+            colors_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            section.add_widget(colors_label)
+            
+            # Mean color
+            mean_color_layout = QHBoxLayout()
+            mean_color_layout.addWidget(QLabel("  Mean:"))
+            self.mean_color_btn = ColorPickerButton("#1976D2")  # Blue
+            self.mean_color_btn.color_changed.connect(self._on_color_changed)
+            mean_color_layout.addWidget(self.mean_color_btn)
+            mean_color_layout.addStretch()
+            section.add_layout(mean_color_layout)
+            
+            # Median color
+            median_color_layout = QHBoxLayout()
+            median_color_layout.addWidget(QLabel("  Median:"))
+            self.median_color_btn = ColorPickerButton("#D32F2F")  # Red
+            self.median_color_btn.color_changed.connect(self._on_color_changed)
+            median_color_layout.addWidget(self.median_color_btn)
+            median_color_layout.addStretch()
+            section.add_layout(median_color_layout)
+            
+            # Std bands color
+            std_color_layout = QHBoxLayout()
+            std_color_layout.addWidget(QLabel("  Std Bands:"))
+            self.std_color_btn = ColorPickerButton("#FF5722")  # Orange
+            self.std_color_btn.color_changed.connect(self._on_color_changed)
+            std_color_layout.addWidget(self.std_color_btn)
+            std_color_layout.addStretch()
+            section.add_layout(std_color_layout)
+            
+            # Percentile shading color
+            perc_color_layout = QHBoxLayout()
+            perc_color_layout.addWidget(QLabel("  Percentile:"))
+            self.percentile_color_btn = ColorPickerButton("#9C27B0")  # Purple
+            self.percentile_color_btn.color_changed.connect(self._on_color_changed)
+            perc_color_layout.addWidget(self.percentile_color_btn)
+            perc_color_layout.addStretch()
+            section.add_layout(perc_color_layout)
+            
+            # Peak marker color
+            peak_color_layout = QHBoxLayout()
+            peak_color_layout.addWidget(QLabel("  Peak Marker:"))
+            self.peak_color_btn = ColorPickerButton("#4CAF50")  # Green
+            self.peak_color_btn.color_changed.connect(self._on_color_changed)
+            peak_color_layout.addWidget(self.peak_color_btn)
+            peak_color_layout.addStretch()
+            section.add_layout(peak_color_layout)
+            
+            # === LINE WIDTHS ===
+            widths_label = QLabel("Line Widths:")
+            widths_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            section.add_widget(widths_label)
+            
             # Mean line width
             lw_layout = QHBoxLayout()
-            lw_layout.addWidget(QLabel("Mean Line Width:"))
+            lw_layout.addWidget(QLabel("  Mean:"))
             self.linewidth_spin = QDoubleSpinBox()
             self.linewidth_spin.setRange(0.5, 5.0)
             self.linewidth_spin.setValue(2.0)
@@ -554,9 +672,34 @@ if HAS_PYQT5:
             lw_layout.addWidget(self.linewidth_spin)
             section.add_layout(lw_layout)
             
+            # Median line width
+            median_lw_layout = QHBoxLayout()
+            median_lw_layout.addWidget(QLabel("  Median:"))
+            self.median_linewidth_spin = QDoubleSpinBox()
+            self.median_linewidth_spin.setRange(0.5, 5.0)
+            self.median_linewidth_spin.setValue(1.5)
+            self.median_linewidth_spin.setSingleStep(0.5)
+            median_lw_layout.addWidget(self.median_linewidth_spin)
+            section.add_layout(median_lw_layout)
+            
+            # Std line width
+            std_lw_layout = QHBoxLayout()
+            std_lw_layout.addWidget(QLabel("  Std Bands:"))
+            self.std_linewidth_spin = QDoubleSpinBox()
+            self.std_linewidth_spin.setRange(0.5, 5.0)
+            self.std_linewidth_spin.setValue(1.5)
+            self.std_linewidth_spin.setSingleStep(0.5)
+            std_lw_layout.addWidget(self.std_linewidth_spin)
+            section.add_layout(std_lw_layout)
+            
+            # === OPACITY ===
+            opacity_label = QLabel("Opacity:")
+            opacity_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            section.add_widget(opacity_label)
+            
             # Window alpha
             alpha_layout = QHBoxLayout()
-            alpha_layout.addWidget(QLabel("Window Opacity:"))
+            alpha_layout.addWidget(QLabel("  Windows:"))
             self.alpha_spin = QDoubleSpinBox()
             self.alpha_spin.setRange(0.1, 1.0)
             self.alpha_spin.setValue(0.5)
@@ -565,6 +708,12 @@ if HAS_PYQT5:
             section.add_layout(alpha_layout)
             
             return section
+        
+        def _on_color_changed(self, color: str):
+            """Handle color picker button change - apply immediately."""
+            # Read current UI state and emit signal for live update
+            self._read_ui_to_properties()
+            self.properties_changed.emit(self.properties)
         
         def on_preset_changed(self, index: int):
             """Handle preset selection change."""
@@ -674,7 +823,18 @@ if HAS_PYQT5:
             if bg_index >= 0:
                 self.bg_combo.setCurrentIndex(bg_index)
             
+            # Line colors (using color picker buttons)
+            self.mean_color_btn.set_color(self.properties.mean_color)
+            self.median_color_btn.set_color(self.properties.median_color)
+            self.std_color_btn.set_color(self.properties.std_color)
+            self.percentile_color_btn.set_color(self.properties.percentile_color)
+            self.peak_color_btn.set_color(self.properties.peak_marker_color)
+            
+            # Line widths
             self.linewidth_spin.setValue(self.properties.mean_linewidth)
+            self.median_linewidth_spin.setValue(self.properties.median_linewidth)
+            self.std_linewidth_spin.setValue(self.properties.std_linewidth)
+            
             self.alpha_spin.setValue(self.properties.window_alpha)
         
         def _read_ui_to_properties(self):
@@ -730,7 +890,18 @@ if HAS_PYQT5:
             bg_index = self.bg_combo.currentIndex()
             self.properties.background_color = self.bg_combo.itemData(bg_index)
             
+            # Line colors (from color picker buttons)
+            self.properties.mean_color = self.mean_color_btn.get_color()
+            self.properties.median_color = self.median_color_btn.get_color()
+            self.properties.std_color = self.std_color_btn.get_color()
+            self.properties.percentile_color = self.percentile_color_btn.get_color()
+            self.properties.peak_marker_color = self.peak_color_btn.get_color()
+            
+            # Line widths
             self.properties.mean_linewidth = self.linewidth_spin.value()
+            self.properties.median_linewidth = self.median_linewidth_spin.value()
+            self.properties.std_linewidth = self.std_linewidth_spin.value()
+            
             self.properties.window_alpha = self.alpha_spin.value()
         
         def apply_properties(self):

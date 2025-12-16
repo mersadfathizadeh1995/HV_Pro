@@ -394,11 +394,11 @@ class HVSRPlotter:
         ax.semilogx(result.frequencies, result.median_hvsr, 'g--',
                    linewidth=2.5, label='Median')
         
-        # Mark peaks
+        # Mark peaks (use LaTeX for proper subscript rendering)
         if result.primary_peak:
             ax.plot(result.primary_peak.frequency, result.primary_peak.amplitude,
                    'ro', markersize=10, markeredgecolor='black', markeredgewidth=1,
-                   label=f'Peak: f0={result.primary_peak.frequency:.2f} Hz')
+                   label=f'Peak: $f_0$={result.primary_peak.frequency:.2f} Hz')
         
         ax.set_xlabel('Frequency (Hz)', fontsize=12)
         ax.set_ylabel('H/V Spectral Ratio', fontsize=12)

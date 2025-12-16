@@ -394,8 +394,9 @@ class PlotWindowManager:
                 else:
                     xytext = (freq * 0.4, amp * 1.15)
                 
+                # Use LaTeX formatting for subscript to ensure proper rendering when saving
                 annot = self.ax_hvsr.annotate(
-                    f'f₀ = {freq:.2f} Hz\nA = {amp:.2f}',
+                    f'$f_0$ = {freq:.2f} Hz\nA = {amp:.2f}',
                     xy=(freq, amp),
                     xytext=xytext,
                     fontsize=10,

@@ -163,7 +163,8 @@ def plot_hvsr_curve(result: HVSRResult,
                     peak.frequency, peak.amplitude, ax, frequencies, result.mean_hvsr
                 )
                 
-                ax.annotate(f'f0 = {peak.frequency:.2f} Hz\nA = {peak.amplitude:.2f}',
+                # Use LaTeX formatting for subscript to ensure proper rendering when saving
+                ax.annotate(f'$f_0$ = {peak.frequency:.2f} Hz\nA = {peak.amplitude:.2f}',
                            xy=(peak.frequency, peak.amplitude),
                            xytext=(x_off, y_off), textcoords='offset points',
                            bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
@@ -353,7 +354,8 @@ def plot_peak_analysis(peak: Peak,
         result.frequencies, result.mean_hvsr
     )
     
-    ax.annotate(f'f0 = {peak.frequency:.3f} Hz\n'
+    # Use LaTeX formatting for subscript to ensure proper rendering when saving
+    ax.annotate(f'$f_0$ = {peak.frequency:.3f} Hz\n'
                f'A = {peak.amplitude:.2f}\n'
                f'Q = {peak.quality:.2f}',
                xy=(peak.frequency, peak.amplitude),

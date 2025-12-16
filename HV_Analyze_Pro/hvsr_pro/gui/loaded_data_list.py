@@ -60,18 +60,18 @@ if HAS_PYQT5:
 
             # Status icons
             status_icons = {
-                'loaded': '✓',
-                'processing': '⚙',
-                'error': '❌',
-                'pending': '○'
+                'loaded': '[OK]',
+                'processing': '[...]',
+                'error': '[X]',
+                'pending': '[ ]'
             }
-            icon = status_icons.get(status, '○')
+            icon = status_icons.get(status, '[ ]')
 
             # File type icon
             if path.suffix in ['.mseed', '.miniseed']:
-                file_icon = '📊'
+                file_icon = '[MS]'
             else:
-                file_icon = '📄'
+                file_icon = '[TXT]'
 
             # Build display text
             text = f"{icon} {file_icon} {filename}\n"

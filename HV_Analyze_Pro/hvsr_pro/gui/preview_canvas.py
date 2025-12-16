@@ -169,7 +169,7 @@ if HAS_PYQT5:
             time_filter_layout.addLayout(tz_layout)
 
             # Info about timezone
-            tz_info = QLabel("⚠ Enter times in the selected timezone. They will be converted to UTC for data processing.")
+            tz_info = QLabel("Note: Enter times in the selected timezone. They will be converted to UTC for data processing.")
             tz_info.setStyleSheet("color: #FF9800; font-size: 9px; font-style: italic;")
             tz_info.setWordWrap(True)
             time_filter_layout.addWidget(tz_info)
@@ -217,6 +217,9 @@ if HAS_PYQT5:
 
             time_filter_group.setLayout(time_filter_layout)
             layout.addWidget(time_filter_group)
+            
+            # Show initial empty state
+            self.clear_preview()
 
         def set_data(self, seismic_data, time_range=None):
             """
@@ -688,7 +691,10 @@ if HAS_PYQT5:
                         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
                         fontsize=8)
 
-            self.fig.tight_layout()
+            try:
+                self.fig.tight_layout()
+            except ValueError:
+                pass  # Ignore tight_layout warnings
             self.canvas.draw()
 
         def show_spectrogram(self):
@@ -839,24 +845,34 @@ if HAS_PYQT5:
                     else:
                         ax.set_xticklabels([])
 
-            self.fig.tight_layout(pad=1.0)
+            try:
+                self.fig.tight_layout(pad=1.0)
+            except ValueError:
+                pass  # Ignore tight_layout warnings
             self.canvas.draw()
 
             # Store reference to main axis for future use
             self.ax = axes[0] if axes else None
 
         def clear_preview(self):
-            """Clear preview canvas."""
-            if hasattr(self, 'ax') and self.ax:
-                self.ax.clear()
-                self.ax.text(0.5, 0.5, 'No data loaded\n\nLoad a file to preview',
-                           horizontalalignment='center',
-                           verticalalignment='center',
-                           transform=self.ax.transAxes,
-                           fontsize=14, color='gray')
-                self.ax.set_xticks([])
-                self.ax.set_yticks([])
-                self.canvas.draw()
+            """Clear preview canvas - show clean empty plot."""
+            self.fig.clear()
+            self.ax = self.fig.add_subplot(111)
+            
+            # Clean empty canvas with subtle grid
+            self.ax.set_facecolor('white')
+            self.ax.grid(True, alpha=0.2, linestyle='-', linewidth=0.5)
+            
+            self.ax.set_xlim(0, 1)
+            self.ax.set_ylim(0, 1)
+            self.ax.set_xlabel('Time (s)', fontsize=10, color='#999')
+            self.ax.set_ylabel('Amplitude', fontsize=10, color='#999')
+            
+            try:
+                self.fig.tight_layout()
+            except ValueError:
+                pass  # Ignore tight_layout warnings
+            self.canvas.draw()
 
         def show_context_menu(self, position):
             """Show context menu for preview canvas."""

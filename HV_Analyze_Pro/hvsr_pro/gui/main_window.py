@@ -42,6 +42,7 @@ if HAS_PYQT5:
     # from hvsr_pro.gui.view_mode_selector import ViewModeSelector  # Moved to Properties panel
     from hvsr_pro.gui.data_input_dialog import DataInputDialog
     from hvsr_pro.gui.data_load_tab import DataLoadTab
+    from hvsr_pro.gui.azimuthal_tab import AzimuthalTab
 
 
 class ProcessingThread(QThread):
@@ -434,6 +435,18 @@ class HVSRMainWindow(QMainWindow):
         view_menu.addMenu(dataload_submenu)
         view_menu.addSeparator()
 
+        # Tab visibility section
+        tabs_submenu = QMenu('Tabs', self)
+
+        self.azimuthal_tab_action = tabs_submenu.addAction('&Azimuthal Tab')
+        self.azimuthal_tab_action.setShortcut('Ctrl+3')
+        self.azimuthal_tab_action.setCheckable(True)
+        self.azimuthal_tab_action.setChecked(True)
+        self.azimuthal_tab_action.triggered.connect(self.toggle_azimuthal_tab)
+
+        view_menu.addMenu(tabs_submenu)
+        view_menu.addSeparator()
+
         # Loaded Data Column (global)
         self.loaded_data_action = view_menu.addAction('&Loaded Data Column')
         self.loaded_data_action.setShortcut('Ctrl+Shift+D')
@@ -538,6 +551,17 @@ class HVSRMainWindow(QMainWindow):
         enabled = (state == Qt.Checked)
         self.cores_spin.setEnabled(enabled)
 
+    def _on_qc_enable_toggled(self, checked: bool):
+        """Handle QC enable checkbox toggle."""
+        self.qc_combo.setEnabled(checked)
+        self.advanced_qc_btn.setEnabled(checked)
+
+    def _on_cox_enable_toggled(self, checked: bool):
+        """Handle Cox FDWRA enable checkbox toggle."""
+        self.cox_n_spin.setEnabled(checked)
+        self.cox_iterations_spin.setEnabled(checked)
+        self.cox_dist_combo.setEnabled(checked)
+
     def init_ui(self):
         """Initialize user interface."""
         # Central widget - just control panel (no embedded canvas by default)
@@ -561,7 +585,19 @@ class HVSRMainWindow(QMainWindow):
 
         # === Tab 2: Processing (renamed from Single File) ===
         processing_tab = QWidget()
-        processing_layout = QHBoxLayout(processing_tab)
+        processing_outer_layout = QVBoxLayout(processing_tab)
+        processing_outer_layout.setContentsMargins(5, 5, 5, 5)
+        processing_outer_layout.setSpacing(5)
+
+        # Collapsible data panel at top
+        from hvsr_pro.gui.collapsible_data_panel import CollapsibleDataPanel
+        self.processing_data_panel = CollapsibleDataPanel(title="Loaded Data")
+        # Starts collapsed by default
+        processing_outer_layout.addWidget(self.processing_data_panel)
+
+        # Main processing content
+        processing_layout = QHBoxLayout()
+        processing_layout.setContentsMargins(0, 0, 0, 0)
 
         # Left panel - processing controls with scroll area
         left_panel = self.create_control_panel()
@@ -575,9 +611,16 @@ class HVSRMainWindow(QMainWindow):
         scroll_area.setMinimumWidth(300)
 
         processing_layout.addWidget(scroll_area, stretch=1)
+        processing_outer_layout.addLayout(processing_layout, 1)  # stretch
 
         # Add processing tab
         self.mode_tabs.addTab(processing_tab, "Processing")
+
+        # === Tab 3: Azimuthal Processing ===
+        self.azimuthal_tab = AzimuthalTab(self)
+        self.mode_tabs.addTab(self.azimuthal_tab, "Azimuthal")
+        # Start hidden - can be shown via View menu
+        self.azimuthal_tab_visible = False
 
         # Connect tab change signal
         self.mode_tabs.currentChanged.connect(self.on_tab_changed)
@@ -643,7 +686,7 @@ class HVSRMainWindow(QMainWindow):
         Handle tab change - manage dock visibility.
 
         Args:
-            index: Tab index (0 = Data Load, 1 = Processing)
+            index: Tab index (0 = Data Load, 1 = Processing, 2 = Azimuthal)
         """
         if index == 0:  # Data Load tab
             # Hide processing docks
@@ -660,6 +703,18 @@ class HVSRMainWindow(QMainWindow):
             self.properties_dock.setVisible(True)
             self.export_dock.setVisible(True)
             self.status_bar.showMessage("Processing mode - Configure and run HVSR analysis")
+
+        elif index == 2:  # Azimuthal tab
+            # Hide most docks for azimuthal (it has its own UI)
+            self.layers_dock.setVisible(False)
+            self.peak_picker_dock.setVisible(False)
+            self.properties_dock.setVisible(False)
+            self.export_dock.setVisible(False)
+            self.status_bar.showMessage("Azimuthal mode - Analyze directional site response")
+            
+            # Pass windows to azimuthal tab if available
+            if self.windows and hasattr(self, 'azimuthal_tab'):
+                self.azimuthal_tab.set_windows(self.windows)
 
     def on_data_file_selected_for_preview(self, file_path: str):
         """
@@ -716,13 +771,15 @@ class HVSRMainWindow(QMainWindow):
         self.plot_mode_button.setToolTip("Open plot in separate window")
         layout.addWidget(self.plot_mode_button)
         
-        # Window management group
+        # Window management group (for quick accept/reject all)
         window_group = self.create_window_group()
         layout.addWidget(window_group)
         
-        # Actions group
-        actions_group = self.create_actions_group()
-        layout.addWidget(actions_group)
+        # Note: Actions (Export, Save, etc.) have been moved to the Export dock
+        # to reduce clutter in the main control panel.
+        # Uncomment below if you want to restore inline actions:
+        # actions_group = self.create_actions_group()
+        # layout.addWidget(actions_group)
         
         # Info display
         self.info_text = QTextEdit()
@@ -890,81 +947,94 @@ class HVSRMainWindow(QMainWindow):
         sampling_layout.addWidget(self.sampling_rate_spin)
         layout.addLayout(sampling_layout)
 
-        # QC mode
-        qc_layout = QHBoxLayout()
-        qc_layout.addWidget(QLabel("QC Mode:"))
+        # === WINDOW REJECTION SECTION ===
+        rejection_label = QLabel("<b>Window Rejection:</b>")
+        layout.addWidget(rejection_label)
+
+        # Quality Control (QC) group
+        qc_group = QGroupBox("Quality Control (Time-Domain)")
+        qc_group_layout = QVBoxLayout(qc_group)
+
+        # QC Enable checkbox
+        self.qc_enable_check = QCheckBox("Enable QC Rejection")
+        self.qc_enable_check.setChecked(True)
+        self.qc_enable_check.setToolTip("Apply time-domain quality control to reject noisy windows")
+        self.qc_enable_check.toggled.connect(self._on_qc_enable_toggled)
+        qc_group_layout.addWidget(self.qc_enable_check)
+
+        # QC mode dropdown
+        qc_mode_layout = QHBoxLayout()
+        qc_mode_layout.addWidget(QLabel("Mode:"))
         self.qc_combo = QComboBox()
         self.qc_combo.addItem("Conservative", "conservative")
-        self.qc_combo.addItem("Balanced (Recommended)", "balanced")
+        self.qc_combo.addItem("Balanced", "balanced")
         self.qc_combo.addItem("Aggressive", "aggressive")
-        self.qc_combo.addItem("SESAME + Cox FDWRA", "sesame")
         self.qc_combo.setCurrentIndex(1)  # Default to balanced
-        self.qc_combo.setToolTip("Window rejection strictness:\n"
-                                 "Conservative: Amplitude + quality check (0.2)\n"
-                                 "Balanced: Amplitude only (safest, recommended) ✅\n"
-                                 "Aggressive: + STA/LTA + freq + stats (strict)\n"
-                                 "SESAME: Lenient time-domain + Cox FDWRA")
-        qc_layout.addWidget(self.qc_combo)
-        layout.addLayout(qc_layout)
-        
-        # Cox FDWRA Section
-        cox_group = QGroupBox("Cox FDWRA (Peak Consistency)")
-        cox_layout = QVBoxLayout()
-        
-        self.cox_fdwra_check = QCheckBox("Apply Cox FDWRA")
+        self.qc_combo.setToolTip(
+            "Conservative: Amplitude + quality threshold (0.2)\n"
+            "Balanced: Amplitude check only (recommended)\n"
+            "Aggressive: + STA/LTA + frequency + statistical checks"
+        )
+        qc_mode_layout.addWidget(self.qc_combo)
+        qc_group_layout.addLayout(qc_mode_layout)
+
+        # Advanced QC Settings button
+        self.advanced_qc_btn = QPushButton("Advanced Settings...")
+        self.advanced_qc_btn.clicked.connect(self.open_advanced_qc_settings)
+        self.advanced_qc_btn.setToolTip("Customize individual QC algorithms and thresholds")
+        qc_group_layout.addWidget(self.advanced_qc_btn)
+
+        layout.addWidget(qc_group)
+
+        # Cox FDWRA group (Frequency-Domain)
+        cox_group = QGroupBox("Cox FDWRA (Frequency-Domain)")
+        cox_group_layout = QVBoxLayout(cox_group)
+
+        # Cox Enable checkbox
+        self.cox_fdwra_check = QCheckBox("Enable Cox FDWRA")
         self.cox_fdwra_check.setChecked(False)
-        self.cox_fdwra_check.setToolTip("Apply Cox et al. (2020) Frequency-Domain Window Rejection\n"
-                                        "after HVSR computation to ensure peak frequency consistency.\n"
-                                        "Industry-standard algorithm for publication-quality HVSR analysis.\n"
-                                        "Recommended for rigorous site characterization studies.")
-        cox_layout.addWidget(self.cox_fdwra_check)
-        
-        # Cox parameters (only enabled when Cox is checked)
+        self.cox_fdwra_check.setToolTip(
+            "Apply Cox et al. (2020) Frequency-Domain Window Rejection\n"
+            "after HVSR computation to ensure peak frequency consistency.\n"
+            "Industry-standard for publication-quality HVSR analysis."
+        )
+        self.cox_fdwra_check.toggled.connect(self._on_cox_enable_toggled)
+        cox_group_layout.addWidget(self.cox_fdwra_check)
+
+        # Cox parameters
         from PyQt5.QtWidgets import QGridLayout
         cox_params_layout = QGridLayout()
-        cox_params_layout.setColumnStretch(1, 1)  # Make value column stretch
-        
-        cox_params_layout.addWidget(QLabel("  n-value:"), 0, 0)
+        cox_params_layout.setColumnStretch(1, 1)
+
+        cox_params_layout.addWidget(QLabel("n-value:"), 0, 0)
         self.cox_n_spin = QDoubleSpinBox()
         self.cox_n_spin.setRange(1.0, 5.0)
         self.cox_n_spin.setValue(2.0)
         self.cox_n_spin.setDecimals(1)
         self.cox_n_spin.setEnabled(False)
-        self.cox_n_spin.setToolTip("Standard deviation multiplier for outlier detection (1-5)")
+        self.cox_n_spin.setToolTip("Standard deviation multiplier (1-5)")
         cox_params_layout.addWidget(self.cox_n_spin, 0, 1)
-        
-        cox_params_layout.addWidget(QLabel("  Max Iterations:"), 1, 0)
+
+        cox_params_layout.addWidget(QLabel("Max Iter:"), 1, 0)
         self.cox_iterations_spin = QSpinBox()
         self.cox_iterations_spin.setRange(1, 50)
         self.cox_iterations_spin.setValue(20)
         self.cox_iterations_spin.setEnabled(False)
         self.cox_iterations_spin.setToolTip("Maximum iterations for convergence")
         cox_params_layout.addWidget(self.cox_iterations_spin, 1, 1)
-        
-        cox_params_layout.addWidget(QLabel("  Distribution:"), 2, 0)
+
+        cox_params_layout.addWidget(QLabel("Distribution:"), 2, 0)
         self.cox_dist_combo = QComboBox()
         self.cox_dist_combo.addItems(["lognormal", "normal"])
         self.cox_dist_combo.setEnabled(False)
         self.cox_dist_combo.setToolTip("Statistical distribution for peak modeling")
         cox_params_layout.addWidget(self.cox_dist_combo, 2, 1)
-        
-        cox_layout.addLayout(cox_params_layout)
-        cox_group.setLayout(cox_layout)
+
+        cox_group_layout.addLayout(cox_params_layout)
         layout.addWidget(cox_group)
         
-        # Connect Cox checkbox to enable/disable parameters
-        self.cox_fdwra_check.toggled.connect(self.cox_n_spin.setEnabled)
-        self.cox_fdwra_check.toggled.connect(self.cox_iterations_spin.setEnabled)
-        self.cox_fdwra_check.toggled.connect(self.cox_dist_combo.setEnabled)
-
-        # Advanced QC Settings button
-        self.advanced_qc_btn = QPushButton("⚙️ Advanced QC Settings")
-        self.advanced_qc_btn.clicked.connect(self.open_advanced_qc_settings)
-        self.advanced_qc_btn.setToolTip("Customize individual QC algorithms and thresholds")
-        layout.addWidget(self.advanced_qc_btn)
-        
         # Parallel processing checkbox
-        self.parallel_check = QCheckBox("⚡ Enable parallel processing (faster)")
+        self.parallel_check = QCheckBox("Enable parallel processing (faster)")
         self.parallel_check.setChecked(True)  # Enabled by default
         cpu_count = self._get_cpu_count()
         self.parallel_check.setToolTip("Use multiple CPU cores for faster HVSR computation.\n"
@@ -989,10 +1059,27 @@ class HVSRMainWindow(QMainWindow):
 
         layout.addLayout(cores_layout)
 
-        # Process button
+        # Process button - prominent and bold
         self.process_btn = QPushButton("Process HVSR")
         self.process_btn.clicked.connect(self.process_hvsr)
         self.process_btn.setEnabled(False)
+        self.process_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 12px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                color: #757575;
+            }
+        """)
         layout.addWidget(self.process_btn)
         
         group.setLayout(layout)
@@ -1109,6 +1196,26 @@ class HVSRMainWindow(QMainWindow):
         """
         if hasattr(self, 'data_load_tab'):
             self.data_load_tab.set_loaded_list_visible(checked)
+
+    def toggle_azimuthal_tab(self, checked):
+        """
+        Toggle azimuthal tab visibility.
+
+        Args:
+            checked: True to show, False to hide
+        """
+        if hasattr(self, 'azimuthal_tab'):
+            # Find the tab index
+            for i in range(self.mode_tabs.count()):
+                if self.mode_tabs.widget(i) == self.azimuthal_tab:
+                    if checked:
+                        self.mode_tabs.setTabVisible(i, True)
+                    else:
+                        self.mode_tabs.setTabVisible(i, False)
+                        # If currently on azimuthal tab, switch to processing
+                        if self.mode_tabs.currentIndex() == i:
+                            self.mode_tabs.setCurrentIndex(1)
+                    break
     
     def on_view_mode_changed(self, mode: str):
         """Handle view mode change."""
@@ -1238,11 +1345,15 @@ class HVSRMainWindow(QMainWindow):
 
                 # Add to data load tab
                 self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
+                
+                # Update preview canvas time filter if time range was specified
+                if time_range and time_range.get('enabled'):
+                    self._apply_time_range_to_preview(time_range, data)
 
                 # Store for processing
                 self.current_file = file_path
                 self.process_btn.setEnabled(True)
-                self.add_info(f"✓ Loaded: {Path(file_path).name}")
+                self.add_info(f"Loaded: {Path(file_path).name}")
 
             elif mode == 'multi_type1':
                 # Multiple files with E,N,Z in each
@@ -1276,11 +1387,15 @@ class HVSRMainWindow(QMainWindow):
                         'status': 'loaded'
                     }
                     self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
+                
+                # Update preview canvas time filter if time range was specified
+                if time_range and time_range.get('enabled'):
+                    self._apply_time_range_to_preview(time_range, data)
 
                 # Store for processing
                 self.current_file = files
                 self.process_btn.setEnabled(True)
-                self.add_info(f"✓ Loaded {len(files)} files (merged chronologically)")
+                self.add_info(f"Loaded {len(files)} files (merged chronologically)")
 
             elif mode == 'multi_type2':
                 # Separate E, N, Z files
@@ -1312,17 +1427,71 @@ class HVSRMainWindow(QMainWindow):
                             'status': 'loaded'
                         }
                         self.data_load_tab.add_loaded_file(display_name, data, metadata, tr_seconds)
+                
+                # Update preview canvas time filter if time range was specified
+                if time_range and time_range.get('enabled'):
+                    self._apply_time_range_to_preview(time_range, data)
 
                 # Store for processing
                 self.current_file = groups
                 self.process_btn.setEnabled(True)
-                self.add_info(f"✓ Loaded {complete} groups (3-component streams)")
+                self.add_info(f"Loaded {complete} groups (3-component streams)")
+
+            # Update collapsible data panels in Processing and Azimuthal tabs
+            if hasattr(self, 'processing_data_panel'):
+                self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
+            if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'data_panel'):
+                self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
 
         except Exception as e:
             import traceback
             error_msg = f"Failed to load data: {str(e)}\n{traceback.format_exc()}"
             QMessageBox.critical(self, "Load Error", error_msg)
             self.add_info(f"ERROR: {str(e)}")
+    
+    def _apply_time_range_to_preview(self, time_range: dict, data):
+        """
+        Apply time range settings from DataInputDialog to the preview canvas.
+        
+        Args:
+            time_range: Dict with 'enabled', 'start', 'end', 'timezone_offset', 'timezone_name'
+            data: SeismicData object with timing info
+        """
+        try:
+            preview_canvas = self.data_load_tab.preview_canvas
+            
+            # Enable time filter checkbox
+            preview_canvas.time_filter_checkbox.setChecked(True)
+            
+            # Set timezone in combo box
+            tz_name = time_range.get('timezone_name', 'UTC+0 (GMT)')
+            tz_index = preview_canvas.timezone_combo.findText(tz_name, Qt.MatchContains)
+            if tz_index >= 0:
+                preview_canvas.timezone_combo.setCurrentIndex(tz_index)
+            
+            # Set datetime pickers
+            from PyQt5.QtCore import QDateTime
+            
+            start_dt = time_range['start']
+            end_dt = time_range['end']
+            
+            # Block signals to prevent auto-updates during setting
+            preview_canvas.datetime_start.blockSignals(True)
+            preview_canvas.datetime_end.blockSignals(True)
+            
+            preview_canvas.datetime_start.setDateTime(QDateTime(start_dt))
+            preview_canvas.datetime_end.setDateTime(QDateTime(end_dt))
+            
+            preview_canvas.datetime_start.blockSignals(False)
+            preview_canvas.datetime_end.blockSignals(False)
+            
+            # Apply the time filter
+            preview_canvas.apply_time_filter()
+            
+            self.add_info(f"Time range applied to preview: {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')} ({tz_name})")
+            
+        except Exception as e:
+            print(f"Warning: Could not apply time range to preview: {e}")
     
     def process_hvsr(self):
         """Start HVSR processing in background thread."""
@@ -1366,7 +1535,7 @@ class HVSRMainWindow(QMainWindow):
         if apply_cox_fdwra or qc_mode == 'sesame':
             self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
         if use_parallel:
-            self.add_info(f"⚡ Parallel processing: Enabled (using {n_cores} of {self._get_cpu_count()} cores)")
+            self.add_info(f"Parallel processing: Enabled (using {n_cores} of {self._get_cpu_count()} cores)")
 
         # Start processing thread with load mode and time range
         self.thread = ProcessingThread(
@@ -1407,10 +1576,17 @@ class HVSRMainWindow(QMainWindow):
         # Update UI
         self.progress_bar.setVisible(False)
         self.process_btn.setEnabled(True)
-        self.export_plot_btn.setEnabled(True)  # Enable plot export button
-        self.report_btn.setEnabled(True)  # Enable report plots button
-        self.export_btn.setEnabled(True)
-        self.save_btn.setEnabled(True)
+        
+        # Enable action buttons if they exist (may be in Export dock instead)
+        if hasattr(self, 'export_plot_btn'):
+            self.export_plot_btn.setEnabled(True)
+        if hasattr(self, 'report_btn'):
+            self.report_btn.setEnabled(True)
+        if hasattr(self, 'export_btn'):
+            self.export_btn.setEnabled(True)
+        if hasattr(self, 'save_btn'):
+            self.save_btn.setEnabled(True)
+        
         self.reject_all_btn.setEnabled(True)
         self.accept_all_btn.setEnabled(True)
         self.recompute_btn.setEnabled(True)
@@ -1429,6 +1605,17 @@ class HVSRMainWindow(QMainWindow):
 
         # Update export dock with results and seismic data
         self.export_dock.set_references(result, windows, self.plot_manager, data)
+
+        # Update collapsible data panel in Processing tab with data from Data Load tab
+        if hasattr(self, 'processing_data_panel') and hasattr(self, 'data_load_tab'):
+            self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
+
+        # Update azimuthal tab with windows and data for potential azimuthal processing
+        if hasattr(self, 'azimuthal_tab'):
+            self.azimuthal_tab.set_windows(windows, data)
+            # Also update its data panel
+            if hasattr(self.azimuthal_tab, 'data_panel') and hasattr(self, 'data_load_tab'):
+                self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
 
         # === NEW: Plot in separate window ===
         self.plot_results_separate_window(result, windows, data)
@@ -1883,7 +2070,7 @@ class HVSRMainWindow(QMainWindow):
                     base_filename="hvsr"
                 )
                 
-                self.add_info(f"✓ Exported to: {output_dir}")
+                self.add_info(f"Exported to: {output_dir}")
                 for file_type, filepath in created_files.items():
                     filename = Path(filepath).name
                     self.add_info(f"   - {filename} ({file_type})")
@@ -2001,7 +2188,7 @@ class HVSRMainWindow(QMainWindow):
         if activate:
             # Enable manual picking on plot
             self.plot_manager.enable_manual_picking(self.on_manual_peak_selected)
-            self.add_info("✓ Manual peak picking ACTIVE - Click on HVSR curve to add peak")
+            self.add_info("Manual peak picking ACTIVE - Click on HVSR curve to add peak")
             self.status_bar.showMessage("MANUAL MODE: Click on HVSR curve to add peak")
         else:
             # Disable manual picking
@@ -2019,7 +2206,7 @@ class HVSRMainWindow(QMainWindow):
         """
         # Add peak to dock with 'Manual' source
         self.peak_picker_dock.add_peak(frequency, amplitude, source='Manual')
-        self.add_info(f"✓ Manual peak added: f={frequency:.2f} Hz, A={amplitude:.2f}")
+        self.add_info(f"Manual peak added: f={frequency:.2f} Hz, A={amplitude:.2f}")
     
     def on_properties_changed(self, properties):
         """
@@ -2032,7 +2219,7 @@ class HVSRMainWindow(QMainWindow):
             self.add_info("No data to apply properties to")
             return
         
-        self.add_info(f"✓ Properties applied: {properties.style_preset} style")
+        self.add_info(f"Properties applied: {properties.style_preset} style")
         
         # Store data in plot manager
         self.plot_manager.set_plot_data(self.hvsr_result, self.windows, self.data)
@@ -2102,16 +2289,18 @@ class HVSRMainWindow(QMainWindow):
         
         # Plot percentile shading (if enabled)
         if properties.show_percentile_shading and result.percentile_16 is not None:
+            perc_color = getattr(properties, 'percentile_color', '#9C27B0')
             ax_hvsr.fill_between(result.frequencies,
                                 result.percentile_16,
                                 result.percentile_84,
-                                color='blue', alpha=0.2, zorder=50,
+                                color=perc_color, alpha=0.2, zorder=50,
                                 label='16th-84th percentile')
         
         # Plot mean curve (if enabled)
         if properties.show_mean:
+            mean_color = getattr(properties, 'mean_color', '#1976D2')
             mean_line, = ax_hvsr.plot(result.frequencies, result.mean_hvsr,
-                                     'b-', linewidth=properties.mean_linewidth,
+                                     color=mean_color, linewidth=properties.mean_linewidth,
                                      label='Mean H/V', zorder=100)
             self.stat_lines = {'mean': mean_line}
         else:
@@ -2119,21 +2308,28 @@ class HVSRMainWindow(QMainWindow):
         
         # Plot std bands (if enabled)
         if properties.show_std_bands and result.std_hvsr is not None:
+            std_color = getattr(properties, 'std_color', '#FF5722')
+            std_lw = getattr(properties, 'std_linewidth', 1.5)
             std_plus, = ax_hvsr.plot(result.frequencies, 
                                     result.mean_hvsr + result.std_hvsr,
-                                    'k--', linewidth=1.5, label='+1σ', zorder=99)
+                                    color=std_color, linestyle='--', linewidth=std_lw, 
+                                    label='+1σ', zorder=99)
             
             std_minus, = ax_hvsr.plot(result.frequencies,
                                      result.mean_hvsr - result.std_hvsr,
-                                     'k--', linewidth=1.5, label='-1σ', zorder=99)
+                                     color=std_color, linestyle='--', linewidth=std_lw, 
+                                     label='-1σ', zorder=99)
             
             self.stat_lines['std_plus'] = std_plus
             self.stat_lines['std_minus'] = std_minus
         
         # Plot median (if enabled)
         if properties.show_median and result.median_hvsr is not None:
+            median_color = getattr(properties, 'median_color', '#D32F2F')
+            median_lw = getattr(properties, 'median_linewidth', 1.5)
             median_line, = ax_hvsr.plot(result.frequencies, result.median_hvsr,
-                                        'r-', linewidth=1.5, label='Median', zorder=98)
+                                        color=median_color, linewidth=median_lw, 
+                                        label='Median', zorder=98)
             self.stat_lines['median'] = median_line
         
         # Set Y-axis limits based on properties
@@ -2251,7 +2447,7 @@ class HVSRMainWindow(QMainWindow):
             
             # Log success
             file_size = Path(file_path).stat().st_size / 1024  # KB
-            self.add_info(f"✓ Plot exported to: {Path(file_path).name}")
+            self.add_info(f"Plot exported to: {Path(file_path).name}")
             self.add_info(f"  Resolution: {dpi} DPI, Size: {file_size:.1f} KB")
             
             QMessageBox.information(

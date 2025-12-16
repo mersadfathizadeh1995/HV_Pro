@@ -8,7 +8,7 @@ Comprehensive export functionality for plots, data, and reports.
 from PyQt5.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QPushButton,
     QGroupBox, QCheckBox, QLabel, QFileDialog, QMessageBox,
-    QScrollArea, QHBoxLayout, QComboBox
+    QScrollArea, QHBoxLayout, QComboBox, QSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -138,6 +138,30 @@ class ExportDock(QDockWidget):
         """Create data export group."""
         group = QGroupBox("Export Results Data")
         layout = QVBoxLayout(group)
+
+        # Point count for interpolation
+        points_layout = QHBoxLayout()
+        points_layout.addWidget(QLabel("Output Points:"))
+        self.export_points_spin = QSpinBox()
+        self.export_points_spin.setRange(10, 1000)
+        self.export_points_spin.setValue(100)
+        self.export_points_spin.setSingleStep(10)
+        self.export_points_spin.setToolTip(
+            "Number of frequency points in exported curve.\n"
+            "Use 0 or same as original to keep original points.\n"
+            "Interpolation is used when changing point count."
+        )
+        points_layout.addWidget(self.export_points_spin)
+
+        self.use_original_points_cb = QCheckBox("Use Original")
+        self.use_original_points_cb.setChecked(True)
+        self.use_original_points_cb.setToolTip("Use original frequency points (no interpolation)")
+        self.use_original_points_cb.toggled.connect(
+            lambda checked: self.export_points_spin.setEnabled(not checked)
+        )
+        points_layout.addWidget(self.use_original_points_cb)
+
+        layout.addLayout(points_layout)
 
         # Export buttons
         btn_layout = QHBoxLayout()
@@ -285,7 +309,12 @@ class ExportDock(QDockWidget):
             QMessageBox.warning(self, "No Data", "No HVSR results available to export.")
             return
 
-        self.export_data_requested.emit(format_type, {})
+        # Get point count settings
+        options = {}
+        if not self.use_original_points_cb.isChecked():
+            options['n_points'] = self.export_points_spin.value()
+
+        self.export_data_requested.emit(format_type, options)
 
     def export_statistics(self):
         """Export statistics based on selected options."""
@@ -301,6 +330,10 @@ class ExportDock(QDockWidget):
             'percentile': self.export_percentile_cb.isChecked(),
             'individual': self.export_individual_cb.isChecked()
         }
+
+        # Add point count if custom
+        if not self.use_original_points_cb.isChecked():
+            options['n_points'] = self.export_points_spin.value()
 
         # Get filename
         filename, _ = QFileDialog.getSaveFileName(
@@ -320,6 +353,42 @@ class ExportDock(QDockWidget):
     def _write_statistics_csv(self, filename: str, options: dict):
         """Write statistics to CSV file."""
         import numpy as np
+        from scipy import interpolate
+
+        # Get original frequencies and data
+        orig_frequencies = self.result.frequencies if hasattr(self.result, 'frequencies') else self.result.frequency
+
+        # Check if interpolation is needed
+        n_points = options.get('n_points')
+        if n_points and n_points != len(orig_frequencies):
+            # Create new frequency array (log-spaced for HVSR)
+            new_frequencies = np.logspace(
+                np.log10(orig_frequencies[0]),
+                np.log10(orig_frequencies[-1]),
+                n_points
+            )
+
+            # Interpolation function
+            def interp_curve(curve):
+                if curve is None or len(curve) == 0:
+                    return np.full(n_points, np.nan)
+                f = interpolate.interp1d(orig_frequencies, curve, kind='linear', 
+                                        bounds_error=False, fill_value='extrapolate')
+                return f(new_frequencies)
+
+            frequencies = new_frequencies
+            mean_curve = interp_curve(self.result.mean_hvsr if hasattr(self.result, 'mean_hvsr') else self.result.mean_curve)
+            median_curve = interp_curve(getattr(self.result, 'median_hvsr', None) or getattr(self.result, 'median_curve', None))
+            std_curve = interp_curve(self.result.std_hvsr if hasattr(self.result, 'std_hvsr') else self.result.std_curve)
+            perc_16 = interp_curve(getattr(self.result, 'percentile_16', None))
+            perc_84 = interp_curve(getattr(self.result, 'percentile_84', None))
+        else:
+            frequencies = orig_frequencies
+            mean_curve = self.result.mean_hvsr if hasattr(self.result, 'mean_hvsr') else self.result.mean_curve
+            median_curve = getattr(self.result, 'median_hvsr', None) or getattr(self.result, 'median_curve', None)
+            std_curve = self.result.std_hvsr if hasattr(self.result, 'std_hvsr') else self.result.std_curve
+            perc_16 = getattr(self.result, 'percentile_16', None)
+            perc_84 = getattr(self.result, 'percentile_84', None)
 
         with open(filename, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -341,21 +410,24 @@ class ExportDock(QDockWidget):
             writer.writerow(header)
 
             # Data rows
-            frequencies = self.result.frequency
             for i, freq in enumerate(frequencies):
                 row = [freq]
 
                 if options['mean']:
-                    row.append(self.result.mean_curve[i])
-                if options['median'] and hasattr(self.result, 'median_curve'):
-                    row.append(self.result.median_curve[i])
+                    row.append(mean_curve[i] if mean_curve is not None else '')
+                if options['median']:
+                    row.append(median_curve[i] if median_curve is not None else '')
                 if options['std']:
-                    row.append(self.result.mean_curve[i] + self.result.std_curve[i])
-                    row.append(self.result.mean_curve[i] - self.result.std_curve[i])
-                if options['percentile'] and hasattr(self.result, 'percentile_16'):
-                    row.append(self.result.percentile_16[i])
-                    row.append(self.result.percentile_84[i])
-                if options['individual'] and self.windows:
+                    if mean_curve is not None and std_curve is not None:
+                        row.append(mean_curve[i] + std_curve[i])
+                        row.append(mean_curve[i] - std_curve[i])
+                    else:
+                        row.extend(['', ''])
+                if options['percentile']:
+                    row.append(perc_16[i] if perc_16 is not None else '')
+                    row.append(perc_84[i] if perc_84 is not None else '')
+                if options['individual'] and self.windows and not n_points:
+                    # Individual windows only available without interpolation
                     for win_idx in range(self.windows.n_windows):
                         if hasattr(self.result, 'window_curves') and self.result.window_curves is not None:
                             row.append(self.result.window_curves[win_idx][i])
