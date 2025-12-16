@@ -61,7 +61,7 @@ if HAS_PYQT5:
             self.time_start = 0.0
             self.time_end = None  # None means end of data
             self.data_start_datetime = None  # Store actual datetime from data
-            self.selected_timezone = 'UTC'  # Default timezone for input interpretation
+            self.selected_timezone = 'UTC+0 (GMT)'  # Default timezone for input interpretation
 
             # Detached window reference
             self.detached_window = None
@@ -150,41 +150,18 @@ if HAS_PYQT5:
             self.time_filter_checkbox.stateChanged.connect(self.on_time_filter_toggled)
             time_filter_layout.addWidget(self.time_filter_checkbox)
 
-            # Timezone selector
+            # Timezone selector (matching data_input_dialog.py format)
             tz_layout = QHBoxLayout()
-            tz_layout.addWidget(QLabel("Input Timezone:"))
+            tz_layout.addWidget(QLabel("Timezone:"))
             self.timezone_combo = QComboBox()
             self.timezone_combo.addItems([
-                'UTC (GMT+0)',
-                'GMT+1 (CET)',
-                'GMT+2 (EET)',
-                'GMT+3',
-                'GMT+3:30 (IRST - Iran)',
-                'GMT+4',
-                'GMT+4:30',
-                'GMT+5',
-                'GMT+5:30 (IST - India)',
-                'GMT+6',
-                'GMT+7',
-                'GMT+8 (CST - China)',
-                'GMT+9 (JST - Japan)',
-                'GMT+10 (AEST)',
-                'GMT+11',
-                'GMT+12',
-                'GMT-1',
-                'GMT-2',
-                'GMT-3',
-                'GMT-4 (AST)',
-                'GMT-5 (EST)',
-                'GMT-6 (CST)',
-                'GMT-7 (MST)',
-                'GMT-8 (PST)',
-                'GMT-9',
-                'GMT-10',
-                'GMT-11',
-                'GMT-12'
+                "UTC-12", "UTC-11", "UTC-10", "UTC-9", "UTC-8",
+                "UTC-7 (MST)", "UTC-6 (CST)", "UTC-5 (CDT/EST)", "UTC-4 (EDT)",
+                "UTC-3", "UTC-2", "UTC-1", "UTC+0 (GMT)",
+                "UTC+1", "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+6",
+                "UTC+7", "UTC+8", "UTC+9", "UTC+10", "UTC+11", "UTC+12"
             ])
-            self.timezone_combo.setCurrentText('UTC (GMT+0)')
+            self.timezone_combo.setCurrentText("UTC+0 (GMT)")
             self.timezone_combo.currentTextChanged.connect(self.on_timezone_changed)
             self.timezone_combo.setToolTip("Select the timezone for the date/time inputs below.\nTimes will be converted to UTC for processing.")
             tz_layout.addWidget(self.timezone_combo)
@@ -202,9 +179,9 @@ if HAS_PYQT5:
 
             # Start datetime
             start_layout = QHBoxLayout()
-            start_layout.addWidget(QLabel("Start:"))
+            start_layout.addWidget(QLabel("Start Time:"))
             self.datetime_start = QDateTimeEdit()
-            self.datetime_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz")
+            self.datetime_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
             self.datetime_start.setCalendarPopup(True)
             self.datetime_start.setEnabled(False)
             self.datetime_start.dateTimeChanged.connect(self.on_time_range_changed)
@@ -213,9 +190,9 @@ if HAS_PYQT5:
 
             # End datetime
             end_layout = QHBoxLayout()
-            end_layout.addWidget(QLabel("End:"))
+            end_layout.addWidget(QLabel("End Time:"))
             self.datetime_end = QDateTimeEdit()
-            self.datetime_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz")
+            self.datetime_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
             self.datetime_end.setCalendarPopup(True)
             self.datetime_end.setEnabled(False)
             self.datetime_end.dateTimeChanged.connect(self.on_time_range_changed)
@@ -278,15 +255,25 @@ if HAS_PYQT5:
                 self.time_end = seismic_data.duration
 
                 # Convert to QDateTime for the pickers
-                # Use local time spec to avoid automatic timezone conversion
+                # IMPORTANT: Use UTC time spec to prevent automatic local timezone conversion
+                # All times are handled as UTC internally, timezone conversion is manual via combo box
                 start_qdatetime = QDateTime(self.data_start_datetime)
-                start_qdatetime.setTimeSpec(Qt.LocalTime)
+                start_qdatetime.setTimeSpec(Qt.UTC)  # Changed from LocalTime to UTC
 
                 end_qdatetime = start_qdatetime.addMSecs(int(seismic_data.duration * 1000))
 
-                # Set datetime range
+                # Set datetime range - block signals to prevent auto-conversion
+                self.datetime_start.blockSignals(True)
+                self.datetime_end.blockSignals(True)
+
+                self.datetime_start.setTimeSpec(Qt.UTC)  # Ensure picker interprets as UTC
                 self.datetime_start.setDateTime(start_qdatetime)
+
+                self.datetime_end.setTimeSpec(Qt.UTC)  # Ensure picker interprets as UTC
                 self.datetime_end.setDateTime(end_qdatetime)
+
+                self.datetime_start.blockSignals(False)
+                self.datetime_end.blockSignals(False)
 
                 # Set time range from provided range if available
                 if time_range:
@@ -361,8 +348,8 @@ if HAS_PYQT5:
                 return None
 
             try:
-                # Import SeismicData class
-                from hvsr_pro.data.seismic import SeismicData
+                # Import SeismicData and ComponentData classes
+                from hvsr_pro.core.data_structures import SeismicData, ComponentData
 
                 # Collect components from all files
                 e_arrays = []
@@ -371,21 +358,21 @@ if HAS_PYQT5:
 
                 # Track metadata
                 first_data = data_list[0]
-                sampling_rate = first_data.E.sampling_rate if hasattr(first_data.E, 'sampling_rate') else None
+                sampling_rate = first_data.sampling_rate if hasattr(first_data, 'sampling_rate') else None
                 start_time = first_data.start_time if hasattr(first_data, 'start_time') else None
 
                 # Concatenate each component
                 for data in data_list:
                     # Validate sampling rate consistency
-                    if sampling_rate and hasattr(data.E, 'sampling_rate'):
-                        if abs(data.E.sampling_rate - sampling_rate) > 0.01:
+                    if sampling_rate and hasattr(data, 'sampling_rate'):
+                        if abs(data.sampling_rate - sampling_rate) > 0.01:
                             # Sampling rates don't match - warn but continue
-                            print(f"Warning: Inconsistent sampling rates detected ({sampling_rate} vs {data.E.sampling_rate})")
+                            print(f"Warning: Inconsistent sampling rates detected ({sampling_rate} vs {data.sampling_rate})")
 
-                    # Get component data
-                    e_data = data.E.data if hasattr(data.E, 'data') else data.E
-                    n_data = data.N.data if hasattr(data.N, 'data') else data.N
-                    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+                    # Get component data (access as east/north/vertical)
+                    e_data = data.east.data if hasattr(data.east, 'data') else data.east
+                    n_data = data.north.data if hasattr(data.north, 'data') else data.north
+                    z_data = data.vertical.data if hasattr(data.vertical, 'data') else data.vertical
 
                     e_arrays.append(e_data)
                     n_arrays.append(n_data)
@@ -399,20 +386,41 @@ if HAS_PYQT5:
                 # Create combined SeismicData object
                 # Try to create with proper structure
                 try:
-                    combined = SeismicData(
-                        e=combined_e,
-                        n=combined_n,
-                        z=combined_z,
+                    # Create ComponentData objects first
+                    east_comp = ComponentData(
+                        name='E',
+                        data=combined_e,
                         sampling_rate=sampling_rate,
                         start_time=start_time
+                    )
+                    north_comp = ComponentData(
+                        name='N',
+                        data=combined_n,
+                        sampling_rate=sampling_rate,
+                        start_time=start_time
+                    )
+                    vertical_comp = ComponentData(
+                        name='Z',
+                        data=combined_z,
+                        sampling_rate=sampling_rate,
+                        start_time=start_time
+                    )
+
+                    # Create SeismicData with ComponentData objects
+                    combined = SeismicData(
+                        east=east_comp,
+                        north=north_comp,
+                        vertical=vertical_comp,
+                        station_name='COMBINED',
+                        metadata={'combined': True, 'n_files': len(data_list)}
                     )
                 except Exception as e:
                     # Fallback: create simple object with basic attributes
                     class CombinedSeismicData:
                         def __init__(self, e, n, z, fs, start_time):
-                            self.E = type('Component', (), {'data': e, 'sampling_rate': fs})()
-                            self.N = type('Component', (), {'data': n, 'sampling_rate': fs})()
-                            self.Z = type('Component', (), {'data': z, 'sampling_rate': fs})()
+                            self.east = type('Component', (), {'data': e, 'sampling_rate': fs})()
+                            self.north = type('Component', (), {'data': n, 'sampling_rate': fs})()
+                            self.vertical = type('Component', (), {'data': z, 'sampling_rate': fs})()
                             self.sampling_rate = fs
                             self.start_time = start_time
                             self.duration = len(e) / fs if fs else len(e)
@@ -470,25 +478,23 @@ if HAS_PYQT5:
             Parse timezone offset from combo box text.
 
             Args:
-                tz_text: Text like 'UTC (GMT+0)', 'GMT+3:30 (IRST - Iran)', etc.
+                tz_text: Text like 'UTC+0 (GMT)', 'UTC-5 (CDT/EST)', 'UTC+3', etc.
 
             Returns:
-                offset in hours as float (e.g., 3.5 for GMT+3:30)
+                offset in hours as float (e.g., -5.0 for UTC-5)
             """
             import re
 
-            # Extract GMT offset from text
-            # Patterns: GMT+3, GMT-5, GMT+3:30, etc.
-            if 'UTC' in tz_text or 'GMT+0' in tz_text or 'GMT-0' in tz_text:
+            # Handle UTC+0 or GMT special case
+            if 'UTC+0' in tz_text or '(GMT)' in tz_text:
                 return 0.0
 
-            # Match GMT+/-N or GMT+/-N:MM
-            match = re.search(r'GMT([+-])(\d+)(?::(\d+))?', tz_text)
+            # Match UTC+/-N pattern (e.g., "UTC-5 (CDT/EST)", "UTC+3", "UTC-12")
+            match = re.search(r'UTC([+-])(\d+)', tz_text)
             if match:
                 sign = 1 if match.group(1) == '+' else -1
                 hours = int(match.group(2))
-                minutes = int(match.group(3)) if match.group(3) else 0
-                return sign * (hours + minutes / 60.0)
+                return sign * hours
 
             return 0.0  # Default to UTC if parsing fails
 
@@ -506,18 +512,28 @@ if HAS_PYQT5:
             if self.time_filter_enabled and self.data_start_datetime:
                 from datetime import timedelta
 
-                # Get user input times (these are in the selected timezone)
-                start_dt = self.datetime_start.dateTime().toPyDateTime()
-                end_dt = self.datetime_end.dateTime().toPyDateTime()
+                # Get user input times from datetime pickers
+                # Since we set timeSpec to UTC, these are already in UTC
+                start_dt_from_picker = self.datetime_start.dateTime().toPyDateTime()
+                end_dt_from_picker = self.datetime_end.dateTime().toPyDateTime()
 
                 # Get timezone offset in hours
                 tz_offset_hours = self._parse_timezone_offset(self.selected_timezone)
 
-                # Convert from selected timezone to UTC
-                # If user enters time in GMT+3:30, we subtract 3.5 hours to get UTC
-                tz_offset_delta = timedelta(hours=tz_offset_hours)
-                start_dt_utc = start_dt - tz_offset_delta
-                end_dt_utc = end_dt - tz_offset_delta
+                # If user selected a non-UTC timezone, they want to ENTER times in that timezone
+                # So we need to convert FROM that timezone TO UTC
+                if tz_offset_hours != 0:
+                    # User entered time in selected timezone (e.g., CDT = UTC-5)
+                    # To convert to UTC, we subtract the offset
+                    # For UTC-5: UTC = Local - (-5) = Local + 5
+                    # For UTC+3: UTC = Local - (+3) = Local - 3
+                    tz_offset_delta = timedelta(hours=tz_offset_hours)
+                    start_dt_utc = start_dt_from_picker - tz_offset_delta
+                    end_dt_utc = end_dt_from_picker - tz_offset_delta
+                else:
+                    # Already in UTC
+                    start_dt_utc = start_dt_from_picker
+                    end_dt_utc = end_dt_from_picker
 
                 # Assume data_start_datetime is in UTC (or naive)
                 # If data_start_datetime is timezone-aware, handle accordingly
@@ -542,6 +558,17 @@ if HAS_PYQT5:
                 self.time_start = (start_dt_utc - data_start).total_seconds()
                 self.time_end = (end_dt_utc - data_start).total_seconds()
 
+                # Debug output to verify conversion
+                print(f"DEBUG: User entered (in {self.selected_timezone}):")
+                print(f"  Start: {start_dt_from_picker}")
+                print(f"  End: {end_dt_from_picker}")
+                print(f"DEBUG: Converted to UTC:")
+                print(f"  Start: {start_dt_utc}")
+                print(f"  End: {end_dt_utc}")
+                print(f"DEBUG: Seconds from data start:")
+                print(f"  time_start: {self.time_start}s ({self.time_start/3600:.2f}h)")
+                print(f"  time_end: {self.time_end}s ({self.time_end/3600:.2f}h)")
+
                 # Ensure valid range
                 if self.seismic_data:
                     self.time_start = max(0.0, self.time_start)
@@ -558,6 +585,20 @@ if HAS_PYQT5:
                 self.show_spectrogram()
             elif self.radio_time.isChecked():
                 self.show_timeseries()
+
+        def get_time_range(self):
+            """
+            Get current time range settings.
+
+            Returns:
+                dict with 'start' and 'end' in seconds, or None if filter not enabled
+            """
+            if self.time_filter_enabled and self.seismic_data:
+                return {
+                    'start': self.time_start,
+                    'end': self.time_end
+                }
+            return None
 
         def _get_time_slice(self, time_vector, data):
             """

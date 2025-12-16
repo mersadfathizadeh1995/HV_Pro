@@ -354,38 +354,70 @@ class HVSRDataHandler:
         sampling_rate = merged_stream[0].stats.sampling_rate
         station = merged_stream[0].stats.station
         start_time = merged_stream[0].stats.starttime.datetime
-        
-        # Extract components - handle various channel naming conventions
-        # Check specific patterns first (HNE, HNN, HNZ) to avoid confusion
+
+        # Extract channel mapping if provided
+        channel_mapping = kwargs.get('channel_mapping', None)
+
+        # Handle per-file channel mapping dict
+        if channel_mapping and isinstance(channel_mapping, dict):
+            # Check if it's a per-file mapping (keys are file paths)
+            if file_list[0] in channel_mapping:
+                # Use the mapping from the first file (assume all files are compatible)
+                channel_mapping = channel_mapping[file_list[0]]
+                logger.info(f"Using channel mapping from first file: {channel_mapping}")
+
+        # Extract components - use channel mapping if provided
         data_dict = {}
-        for tr in merged_stream:
-            channel = tr.stats.channel.upper()
-            
-            # Check specific 3-letter codes first
-            if 'HNE' in channel:
-                data_dict['east'] = tr.data
-            elif 'HNN' in channel:
-                data_dict['north'] = tr.data
-            elif 'HNZ' in channel:
-                data_dict['vertical'] = tr.data
-            # Generic patterns (single letter at end)
-            elif channel.endswith('E') or channel.endswith('1'):
-                if 'east' not in data_dict:  # Don't overwrite HNE
+        if channel_mapping:
+            # Use explicit channel mapping
+            for tr in merged_stream:
+                channel = tr.stats.channel.upper()
+
+                # Check if this channel matches any mapped component
+                if 'E' in channel_mapping and channel == channel_mapping['E'].upper():
                     data_dict['east'] = tr.data
-            elif channel.endswith('N') or channel.endswith('2'):
-                if 'north' not in data_dict:  # Don't overwrite HNN
+                elif 'N' in channel_mapping and channel == channel_mapping['N'].upper():
                     data_dict['north'] = tr.data
-            elif channel.endswith('Z') or channel.endswith('3'):
-                if 'vertical' not in data_dict:  # Don't overwrite HNZ
+                elif 'Z' in channel_mapping and channel == channel_mapping['Z'].upper():
                     data_dict['vertical'] = tr.data
-        
+        else:
+            # Auto-detect based on standard naming conventions
+            for tr in merged_stream:
+                channel = tr.stats.channel.upper()
+
+                # Check specific 3-letter codes first
+                if 'HNE' in channel:
+                    data_dict['east'] = tr.data
+                elif 'HNN' in channel:
+                    data_dict['north'] = tr.data
+                elif 'HNZ' in channel:
+                    data_dict['vertical'] = tr.data
+                # Generic patterns (single letter at end)
+                elif channel.endswith('E') or channel.endswith('1'):
+                    if 'east' not in data_dict:  # Don't overwrite HNE
+                        data_dict['east'] = tr.data
+                elif channel.endswith('N') or channel.endswith('2'):
+                    if 'north' not in data_dict:  # Don't overwrite HNN
+                        data_dict['north'] = tr.data
+                elif channel.endswith('Z') or channel.endswith('3'):
+                    if 'vertical' not in data_dict:  # Don't overwrite HNZ
+                        data_dict['vertical'] = tr.data
+
         if len(data_dict) != 3:
             available = list(data_dict.keys())
             channels_str = ', '.join([tr.stats.channel for tr in merged_stream])
-            raise ValueError(
-                f"Expected 3 components (E, N, Z), found {len(data_dict)}: {available}\n"
-                f"Available channels in file: {channels_str}"
-            )
+            if channel_mapping:
+                raise ValueError(
+                    f"Expected 3 components (E, N, Z), found {len(data_dict)}: {available}\n"
+                    f"Channel mapping: {channel_mapping}\n"
+                    f"Available channels in file: {channels_str}"
+                )
+            else:
+                raise ValueError(
+                    f"Expected 3 components (E, N, Z), found {len(data_dict)}: {available}\n"
+                    f"Available channels in file: {channels_str}\n"
+                    f"Consider using channel mapping for non-standard channel names."
+                )
         
         # Ensure all components have the same length (trim to shortest)
         lengths = [len(data_dict['east']), len(data_dict['north']), len(data_dict['vertical'])]

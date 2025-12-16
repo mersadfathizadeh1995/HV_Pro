@@ -132,8 +132,42 @@ if HAS_PYQT5:
             select_layout.addWidget(browse_btn)
             
             file_layout.addLayout(select_layout)
+
+            # Column mapping checkbox (for CSV/text files) - Make it prominent
+            self.use_column_mapping = QCheckBox("✓ Enable Column Mapping (for CSV/text files)")
+            self.use_column_mapping.setChecked(False)
+            self.use_column_mapping.setStyleSheet("""
+                QCheckBox {
+                    font-weight: bold;
+                    color: #2196F3;
+                    padding: 5px;
+                    background-color: #E3F2FD;
+                    border-radius: 3px;
+                }
+                QCheckBox:hover {
+                    background-color: #BBDEFB;
+                }
+            """)
+            self.use_column_mapping.setToolTip(
+                "Enable this for CSV/text files where columns need to be manually mapped.\n"
+                "When enabled, you'll be able to specify which column represents E, N, Z, Time, etc.\n\n"
+                "Check this BEFORE browsing for CSV/text files."
+            )
+            file_layout.addWidget(self.use_column_mapping)
+
+            # Info label for column mapping
+            mapping_info = QLabel(
+                "<i>Note: For custom CSV/text files, check the box above BEFORE browsing to map columns manually.</i>"
+            )
+            mapping_info.setWordWrap(True)
+            mapping_info.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+            file_layout.addWidget(mapping_info)
+
             layout.addWidget(file_group)
-            
+
+            # Storage for column mapping
+            self.column_mapping = None
+
             # Time Range Selection (Same as Type 1)
             time_group = QGroupBox("Time Range (Optional)")
             time_layout = QVBoxLayout(time_group)
@@ -223,8 +257,42 @@ if HAS_PYQT5:
             select_layout.addWidget(browse_btn)
             
             dir_layout.addLayout(select_layout)
+
+            # Channel mapping checkbox (for MiniSEED files with multiple channels)
+            self.use_channel_mapping_type1 = QCheckBox("✓ Enable Channel Mapping (map channels to E/N/Z)")
+            self.use_channel_mapping_type1.setChecked(False)
+            self.use_channel_mapping_type1.setStyleSheet("""
+                QCheckBox {
+                    font-weight: bold;
+                    color: #FF9800;
+                    padding: 5px;
+                    background-color: #FFF3E0;
+                    border-radius: 3px;
+                }
+                QCheckBox:hover {
+                    background-color: #FFE0B2;
+                }
+            """)
+            self.use_channel_mapping_type1.setToolTip(
+                "Enable this for MiniSEED files where channel codes (HHE, HHN, HHZ, etc.) need to be mapped.\n"
+                "When enabled, you'll be able to specify which channels represent E, N, Z components.\n\n"
+                "Useful for non-standard channel naming conventions."
+            )
+            dir_layout.addWidget(self.use_channel_mapping_type1)
+
+            # Info label for channel mapping
+            mapping_info_type1 = QLabel(
+                "<i>Note: For MiniSEED files with non-standard channel names, check the box above to manually map channels.</i>"
+            )
+            mapping_info_type1.setWordWrap(True)
+            mapping_info_type1.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+            dir_layout.addWidget(mapping_info_type1)
+
             layout.addWidget(dir_group)
-            
+
+            # Storage for channel mapping
+            self.channel_mapping_type1 = None
+
             # File list
             files_group = QGroupBox("Detected Files")
             files_layout = QVBoxLayout(files_group)
@@ -471,16 +539,369 @@ if HAS_PYQT5:
                 self,
                 "Select Seismic Data File",
                 "",
-                "Data Files (*.txt *.mseed *.miniseed);;All Files (*)"
+                "Data Files (*.txt *.csv *.mseed *.miniseed);;Text/CSV (*.txt *.csv);;MiniSEED (*.mseed *.miniseed);;All Files (*)"
             )
-            
-            if file_path:
-                self.single_file_path.setText(file_path)
-                self.selected_files = [file_path]
-                self.load_mode = 'single'
+
+            if not file_path:
+                return
+
+            self.single_file_path.setText(file_path)
+            self.selected_files = [file_path]
+            self.load_mode = 'single'
+
+            # If column mapping is enabled and file is CSV/text, show mapper
+            from pathlib import Path
+            file_ext = Path(file_path).suffix.lower()
+
+            if self.use_column_mapping.isChecked() and file_ext in ['.txt', '.csv', '.dat', '.asc']:
+                self._show_column_mapper(file_path)
+            else:
+                # For non-CSV or when mapping disabled, just enable load button
                 self.load_btn.setEnabled(True)
-                self.update_preview_single(file_path)
-        
+                self.preview_text.setPlainText(f"File selected: {Path(file_path).name}\n\nReady to load.")
+
+        def _show_column_mapper(self, file_path: str):
+            """Show column mapping dialog for CSV/text file."""
+            try:
+                import numpy as np
+                from pathlib import Path
+                from hvsr_pro.gui.column_mapper_dialog import SeismicColumnMapperDialog
+
+                # Read file and detect encoding
+                columns_data = []
+                column_headers = None
+
+                # Try different encodings
+                encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+
+                for encoding in encodings_to_try:
+                    try:
+                        # Read the file to detect structure
+                        with open(file_path, 'r', encoding=encoding) as f:
+                            lines = f.readlines()
+
+                        # Find where numeric data starts
+                        data_start_row = None
+                        header_row = None
+
+                        for i, line in enumerate(lines[:20]):  # Check first 20 lines
+                            # Try to parse as numbers
+                            parts = line.strip().split()
+                            if not parts:
+                                continue
+
+                            # Check if this line is ALL numeric (all parts can be converted to float)
+                            numeric_count = 0
+                            for part in parts:
+                                try:
+                                    float(part)
+                                    numeric_count += 1
+                                except:
+                                    pass
+
+                            # If ALL parts are numeric, this is likely data
+                            # Require at least 2 columns and 100% numeric
+                            if len(parts) >= 2 and numeric_count == len(parts):
+                                data_start_row = i
+                                # Check if previous line might be headers
+                                if i > 0:
+                                    prev_line = lines[i-1].strip().split()
+                                    # Check if previous line has non-numeric text (likely headers)
+                                    has_text = False
+                                    for part in prev_line:
+                                        try:
+                                            float(part)
+                                        except:
+                                            has_text = True
+                                            break
+                                    if has_text and len(prev_line) == len(parts):
+                                        header_row = i - 1
+                                        column_headers = prev_line
+                                break
+
+                        if data_start_row is None:
+                            continue  # Try next encoding
+
+                        # Parse numeric data from the lines we already read
+                        try:
+                            # Extract numeric rows starting from data_start_row
+                            numeric_rows = []
+                            for line in lines[data_start_row:]:
+                                parts = line.strip().split()
+                                if not parts:
+                                    continue
+
+                                # Try to convert all parts to float
+                                try:
+                                    row = [float(p) for p in parts]
+                                    numeric_rows.append(row)
+                                except ValueError:
+                                    # Stop at first non-numeric row
+                                    break
+
+                            if not numeric_rows:
+                                continue  # Try next encoding
+
+                            # Convert to numpy array
+                            data = np.array(numeric_rows)
+
+                            if data.ndim == 1:
+                                # Single row - reshape
+                                data = data.reshape(1, -1)
+
+                            # Split into columns
+                            columns_data = [data[:, i] for i in range(data.shape[1])]
+
+                            if len(columns_data) > 0:
+                                # Success! Exit encoding loop
+                                break
+                        except Exception as e:
+                            print(f"Failed to parse with encoding {encoding}: {e}")
+                            continue
+
+                    except Exception as e:
+                        print(f"Encoding {encoding} outer exception: {e}")
+                        continue
+
+                # If manual parsing approach failed, try pandas
+                if not columns_data:
+                    try:
+                        import pandas as pd
+
+                        for encoding in encodings_to_try:
+                            try:
+                                # Read with pandas, trying different delimiters
+                                df = pd.read_csv(
+                                    file_path,
+                                    delim_whitespace=True,
+                                    header=None,
+                                    comment='#',
+                                    encoding=encoding,
+                                    skip_blank_lines=True
+                                )
+
+                                # Find first row with all numeric data
+                                for start_row in range(min(20, len(df))):
+                                    try:
+                                        test_df = df.iloc[start_row:].apply(pd.to_numeric, errors='coerce')
+                                        # Check if at least 80% of values are numeric
+                                        if test_df.notna().sum().sum() > (test_df.size * 0.8):
+                                            # Check if previous row could be headers
+                                            if start_row > 0:
+                                                header_candidates = df.iloc[start_row - 1].tolist()
+                                                # Check if they're text (not all numeric)
+                                                non_numeric = sum(1 for x in header_candidates if pd.isna(pd.to_numeric(x, errors='coerce')))
+                                                if non_numeric > 0:
+                                                    column_headers = [str(x) for x in header_candidates]
+
+                                            df = test_df.dropna(how='all')
+                                            columns_data = [df.iloc[:, i].values for i in range(len(df.columns))]
+                                            break
+                                    except:
+                                        continue
+
+                                if columns_data:
+                                    break
+                            except:
+                                continue
+
+                    except ImportError:
+                        pass  # Pandas not available
+
+                if not columns_data:
+                    raise ValueError(
+                        "Could not read file. The file may have:\n"
+                        "- Non-numeric headers that couldn't be skipped\n"
+                        "- Unsupported delimiter or encoding\n"
+                        "- Invalid data format\n\n"
+                        "Tried encodings: " + ", ".join(encodings_to_try)
+                    )
+
+                # Show mapper dialog with detected headers if available
+                dlg = SeismicColumnMapperDialog(columns_data, file_path, self, column_headers=column_headers)
+                if dlg.exec_() == QDialog.Accepted:
+                    self.column_mapping = dlg.get_mapping()
+                    self.load_btn.setEnabled(True)
+
+                    # Show mapping summary in preview
+                    mapping_text = "✓ Column Mapping Applied Successfully!\n\n"
+                    mapping_text += f"File: {Path(file_path).name}\n"
+                    mapping_text += f"Total Columns: {len(columns_data)}\n\n"
+                    mapping_text += "Mapped Columns:\n"
+                    for type_str, col_idx in sorted(self.column_mapping.items(), key=lambda x: x[1]):
+                        mapping_text += f"  Column {col_idx + 1} → {type_str}\n"
+                    mapping_text += "\nReady to load. Click 'Load Data' to proceed."
+                    self.preview_text.setPlainText(mapping_text)
+                else:
+                    # User cancelled - clear file selection
+                    self.single_file_path.clear()
+                    self.selected_files = []
+                    self.column_mapping = None
+                    self.load_btn.setEnabled(False)
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to read file for column mapping:\n{str(e)}\n\n"
+                    f"Make sure the file is a valid text/CSV file with numeric data."
+                )
+                self.single_file_path.clear()
+                self.selected_files = []
+                self.column_mapping = None
+                self.load_btn.setEnabled(False)
+
+        def _show_channel_mapper_type1(self, mseed_files: List[Path]):
+            """Show channel mapping dialog for MiniSEED files - handles multiple unique channel structures."""
+            try:
+                from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
+
+                try:
+                    from obspy import read
+                except ImportError:
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        "ObsPy is required for MiniSEED channel mapping.\n"
+                        "Please install ObsPy: pip install obspy"
+                    )
+                    self.use_channel_mapping_type1.setChecked(False)
+                    self.load_btn.setEnabled(True)
+                    self.update_preview_type1(mseed_files)
+                    return
+
+                # Step 1: Scan all files and group by unique channel structures
+                from PyQt5.QtWidgets import QProgressDialog
+                from PyQt5.QtCore import Qt
+
+                progress = QProgressDialog(
+                    "Scanning files for channel structures...",
+                    "Cancel",
+                    0,
+                    len(mseed_files),
+                    self
+                )
+                progress.setWindowModality(Qt.WindowModal)
+                progress.setMinimumDuration(0)
+
+                # Dictionary to group files by channel signature
+                # signature = frozenset of channel codes
+                channel_groups = {}  # {signature: {'channels_info': [...], 'files': [...]}}
+
+                for i, file_path in enumerate(mseed_files):
+                    progress.setValue(i)
+                    if progress.wasCanceled():
+                        self.use_channel_mapping_type1.setChecked(False)
+                        self.load_btn.setEnabled(True)
+                        self.update_preview_type1(mseed_files)
+                        return
+
+                    try:
+                        stream = read(str(file_path))
+
+                        # Extract channel codes
+                        channel_codes = tuple(sorted(trace.stats.channel for trace in stream))
+                        signature = channel_codes  # Use sorted tuple as signature
+
+                        if signature not in channel_groups:
+                            # Extract full channel info for this structure
+                            channels_info = []
+                            for trace in stream:
+                                channel_info = {
+                                    'code': trace.stats.channel,
+                                    'location': trace.stats.location,
+                                    'sampling_rate': trace.stats.sampling_rate,
+                                    'npts': trace.stats.npts,
+                                    'station': trace.stats.station,
+                                    'network': trace.stats.network
+                                }
+                                channels_info.append(channel_info)
+
+                            channel_groups[signature] = {
+                                'channels_info': channels_info,
+                                'files': []
+                            }
+
+                        channel_groups[signature]['files'].append(file_path)
+
+                    except Exception as e:
+                        print(f"Failed to read {file_path.name}: {e}")
+                        continue
+
+                progress.setValue(len(mseed_files))
+
+                if not channel_groups:
+                    QMessageBox.warning(
+                        self,
+                        "No Valid Files",
+                        "No valid MiniSEED files could be read."
+                    )
+                    self.use_channel_mapping_type1.setChecked(False)
+                    self.load_btn.setEnabled(True)
+                    self.update_preview_type1(mseed_files)
+                    return
+
+                # Step 2: Show mapping dialog for each unique channel structure
+                # Store mappings: {signature: mapping_dict}
+                all_mappings = {}
+
+                for signature, group_data in channel_groups.items():
+                    channels_info = group_data['channels_info']
+                    group_files = group_data['files']
+
+                    # Show dialog with info about how many files have this structure
+                    info_msg = f"{len(group_files)} file(s) with channels: {', '.join(signature)}"
+                    sample_file = group_files[0]
+
+                    dlg = ChannelMapperDialog(channels_info, str(sample_file), self)
+                    dlg.setWindowTitle(f"Map Channels - {info_msg}")
+
+                    if dlg.exec_() == QDialog.Accepted:
+                        mapping = dlg.get_mapping()
+                        all_mappings[signature] = mapping
+                    else:
+                        # User cancelled - abort entire process
+                        self.use_channel_mapping_type1.setChecked(False)
+                        self.channel_mapping_type1 = None
+                        self.load_btn.setEnabled(True)
+                        self.update_preview_type1(mseed_files)
+                        return
+
+                # Step 3: Store the mappings (we'll need to pass file-specific mappings to the loader)
+                # For now, store as a dict: {file_path: mapping}
+                self.channel_mapping_type1 = {}
+                for signature, mapping in all_mappings.items():
+                    for file_path in channel_groups[signature]['files']:
+                        self.channel_mapping_type1[str(file_path)] = mapping
+
+                self.load_btn.setEnabled(True)
+
+                # Show mapping summary in preview
+                mapping_text = "✓ Channel Mapping Applied Successfully!\n\n"
+                mapping_text += f"Total Files: {len(mseed_files)}\n"
+                mapping_text += f"Unique Channel Structures: {len(channel_groups)}\n\n"
+
+                for signature, group_data in channel_groups.items():
+                    mapping = all_mappings[signature]
+                    mapping_text += f"Group: {', '.join(signature)} ({len(group_data['files'])} files)\n"
+                    for component, channel_code in sorted(mapping.items()):
+                        mapping_text += f"  {component} → {channel_code}\n"
+                    mapping_text += "\n"
+
+                mapping_text += "Ready to load. Click 'Load Data' to proceed."
+                self.preview_text.setPlainText(mapping_text)
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to show channel mapper:\n{str(e)}"
+                )
+                self.use_channel_mapping_type1.setChecked(False)
+                self.channel_mapping_type1 = None
+                self.load_btn.setEnabled(True)
+                self.update_preview_type1(mseed_files)
+
         def browse_type1_directory(self):
             """Browse for Type 1 directory (3-channel files)."""
             dir_path = QFileDialog.getExistingDirectory(
@@ -507,27 +928,32 @@ if HAS_PYQT5:
             """Detect Type 1 MiniSEED files (3-channel per file)."""
             path = Path(dir_path)
             mseed_files = sorted(list(path.glob("*.mseed")) + list(path.glob("*.miniseed")))
-            
+
             self.type1_file_list.clear()
             self.type1_all_files = []  # Store all detected files
-            
+
             for file in mseed_files:
                 self.type1_file_list.addItem(file.name)
                 self.type1_all_files.append(str(file))
-            
+
             # Select all by default
             self.type1_file_list.selectAll()
-            
+
             # Connect selection change to update count
             self.type1_file_list.itemSelectionChanged.connect(self.update_type1_selection)
-            
+
             count = len(mseed_files)
             self.type1_count_label.setText(f"{count} files detected | {count} selected")
-            
+
             if count > 0:
                 self.load_mode = 'multi_type1'
-                self.load_btn.setEnabled(True)
-                self.update_preview_type1(mseed_files)
+
+                # If channel mapping is enabled, show the channel mapper dialog
+                if self.use_channel_mapping_type1.isChecked() and mseed_files:
+                    self._show_channel_mapper_type1(mseed_files)
+                else:
+                    self.load_btn.setEnabled(True)
+                    self.update_preview_type1(mseed_files)
             else:
                 self.load_btn.setEnabled(False)
                 self.preview_text.setText("No MiniSEED files found in directory.")
@@ -965,9 +1391,11 @@ if HAS_PYQT5:
                 'options': {
                     'merge_continuous': self.merge_continuous.isChecked(),
                     'verify_sampling_rate': self.verify_sampling_rate.isChecked(),
+                    'column_mapping': self.column_mapping if hasattr(self, 'column_mapping') else None,
+                    'channel_mapping': self.channel_mapping_type1 if hasattr(self, 'channel_mapping_type1') else None,
                 }
             }
-            
+
             self.files_selected.emit(result)
             self.accept()
 

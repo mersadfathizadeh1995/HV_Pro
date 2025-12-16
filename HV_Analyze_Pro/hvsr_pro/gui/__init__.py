@@ -16,6 +16,8 @@ try:
     from hvsr_pro.gui.loaded_data_list import LoadedDataList
     from hvsr_pro.gui.loaded_data_tree import LoadedDataTree
     from hvsr_pro.gui.data_load_tab import DataLoadTab
+    from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
+    from hvsr_pro.gui.column_mapper_dialog import SeismicColumnMapperDialog
     HAS_GUI = True
 except ImportError:
     HAS_GUI = False
@@ -33,5 +35,7 @@ __all__ = [
     'LoadedDataList',
     'LoadedDataTree',
     'DataLoadTab',
+    'ChannelMapperDialog',
+    'SeismicColumnMapperDialog',
     'HAS_GUI'
 ]

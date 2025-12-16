@@ -72,13 +72,13 @@ def export_to_mat(data, output_dir: str, filename: str, options: Dict):
     if options.get('apply_time_window') and options.get('time_range'):
         data = apply_time_window(data, options['time_range'])
 
-    # Extract component data
-    e_data = data.E.data if hasattr(data.E, 'data') else data.E
-    n_data = data.N.data if hasattr(data.N, 'data') else data.N
-    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+    # Extract component data (using east/north/vertical attributes)
+    e_data = data.east.data if hasattr(data.east, 'data') else data.east
+    n_data = data.north.data if hasattr(data.north, 'data') else data.north
+    z_data = data.vertical.data if hasattr(data.vertical, 'data') else data.vertical
 
     # Get sampling rate
-    fs = data.E.sampling_rate if hasattr(data.E, 'sampling_rate') else data.sampling_rate
+    fs = data.east.sampling_rate if hasattr(data.east, 'sampling_rate') else data.sampling_rate
 
     # Generate time vector
     nsamples = len(e_data)
@@ -155,13 +155,13 @@ def export_to_mseed(data, output_dir: str, filename: str, options: Dict):
     if options.get('apply_time_window') and options.get('time_range'):
         data = apply_time_window(data, options['time_range'])
 
-    # Extract component data
-    e_data = data.E.data if hasattr(data.E, 'data') else data.E
-    n_data = data.N.data if hasattr(data.N, 'data') else data.N
-    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+    # Extract component data (using east/north/vertical attributes)
+    e_data = data.east.data if hasattr(data.east, 'data') else data.east
+    n_data = data.north.data if hasattr(data.north, 'data') else data.north
+    z_data = data.vertical.data if hasattr(data.vertical, 'data') else data.vertical
 
     # Get sampling rate
-    fs = data.E.sampling_rate if hasattr(data.E, 'sampling_rate') else data.sampling_rate
+    fs = data.east.sampling_rate if hasattr(data.east, 'sampling_rate') else data.sampling_rate
 
     # Get start time
     if hasattr(data, 'start_time') and data.start_time:
@@ -218,13 +218,13 @@ def export_to_csv(data, output_dir: str, filename: str, options: Dict):
     if options.get('apply_time_window') and options.get('time_range'):
         data = apply_time_window(data, options['time_range'])
 
-    # Extract component data
-    e_data = data.E.data if hasattr(data.E, 'data') else data.E
-    n_data = data.N.data if hasattr(data.N, 'data') else data.N
-    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+    # Extract component data (using east/north/vertical attributes)
+    e_data = data.east.data if hasattr(data.east, 'data') else data.east
+    n_data = data.north.data if hasattr(data.north, 'data') else data.north
+    z_data = data.vertical.data if hasattr(data.vertical, 'data') else data.vertical
 
     # Get sampling rate
-    fs = data.E.sampling_rate if hasattr(data.E, 'sampling_rate') else data.sampling_rate
+    fs = data.east.sampling_rate if hasattr(data.east, 'sampling_rate') else data.sampling_rate
 
     # Generate time vector
     nsamples = len(e_data)
@@ -271,16 +271,16 @@ def apply_time_window(data, time_range: Dict):
     end_sec = time_range.get('end', None)
 
     # Get sampling rate
-    fs = data.E.sampling_rate if hasattr(data.E, 'sampling_rate') else data.sampling_rate
+    fs = data.east.sampling_rate if hasattr(data.east, 'sampling_rate') else data.sampling_rate
 
     # Calculate sample indices
     start_idx = int(start_sec * fs)
     end_idx = int(end_sec * fs) if end_sec is not None else None
 
-    # Extract component data
-    e_data = data.E.data if hasattr(data.E, 'data') else data.E
-    n_data = data.N.data if hasattr(data.N, 'data') else data.N
-    z_data = data.Z.data if hasattr(data.Z, 'data') else data.Z
+    # Extract component data (using east/north/vertical attributes)
+    e_data = data.east.data if hasattr(data.east, 'data') else data.east
+    n_data = data.north.data if hasattr(data.north, 'data') else data.north
+    z_data = data.vertical.data if hasattr(data.vertical, 'data') else data.vertical
 
     # Slice data
     e_sliced = e_data[start_idx:end_idx]
@@ -290,7 +290,7 @@ def apply_time_window(data, time_range: Dict):
     # Create new data object with sliced data
     # Try to use proper SeismicData class
     try:
-        from hvsr_pro.data.seismic import SeismicData
+        from hvsr_pro.core.data_structures import SeismicData, ComponentData
 
         # Calculate new start time
         if hasattr(data, 'start_time') and data.start_time:
@@ -299,20 +299,40 @@ def apply_time_window(data, time_range: Dict):
         else:
             new_start_time = None
 
-        sliced_data = SeismicData(
-            e=e_sliced,
-            n=n_sliced,
-            z=z_sliced,
+        # Create ComponentData objects
+        east_comp = ComponentData(
+            name='E',
+            data=e_sliced,
             sampling_rate=fs,
             start_time=new_start_time
+        )
+        north_comp = ComponentData(
+            name='N',
+            data=n_sliced,
+            sampling_rate=fs,
+            start_time=new_start_time
+        )
+        vertical_comp = ComponentData(
+            name='Z',
+            data=z_sliced,
+            sampling_rate=fs,
+            start_time=new_start_time
+        )
+
+        sliced_data = SeismicData(
+            east=east_comp,
+            north=north_comp,
+            vertical=vertical_comp,
+            station_name=getattr(data, 'station_name', 'UNKNOWN'),
+            metadata=getattr(data, 'metadata', {})
         )
     except Exception:
         # Fallback: create simple object
         class SlicedData:
             def __init__(self, e, n, z, fs, start_time):
-                self.E = type('Component', (), {'data': e, 'sampling_rate': fs})()
-                self.N = type('Component', (), {'data': n, 'sampling_rate': fs})()
-                self.Z = type('Component', (), {'data': z, 'sampling_rate': fs})()
+                self.east = type('Component', (), {'data': e, 'sampling_rate': fs})()
+                self.north = type('Component', (), {'data': n, 'sampling_rate': fs})()
+                self.vertical = type('Component', (), {'data': z, 'sampling_rate': fs})()
                 self.sampling_rate = fs
                 self.start_time = start_time
                 self.duration = len(e) / fs if fs else len(e)

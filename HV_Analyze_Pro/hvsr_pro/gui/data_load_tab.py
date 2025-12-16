@@ -212,8 +212,226 @@ if HAS_PYQT5:
                 files_data[file_path] = cached_data['data']
 
             # Open export dialog
+            from PyQt5.QtWidgets import QDialog
             dialog = DataExportDialog(files_data, time_range, self)
-            dialog.exec_()
+            result = dialog.exec_()
+
+            # Check if user wants to reload the exported data
+            if result == QDialog.Accepted and dialog.should_reload_exported:
+                self.reload_exported_data(dialog.exported_files_info)
+
+        def reload_exported_data(self, export_info: dict):
+            """
+            Reload exported (time-reduced) data back into preview and add to data tree.
+
+            Args:
+                export_info: Dict with 'output_dir', 'format', 'file_count'
+            """
+            from PyQt5.QtWidgets import QMessageBox, QProgressDialog
+            from PyQt5.QtCore import Qt
+            from pathlib import Path
+            from datetime import datetime
+
+            try:
+                output_dir = Path(export_info['output_dir'])
+                file_format = export_info['format']
+
+                # Find exported files
+                if file_format == 'mat':
+                    exported_files = list(output_dir.glob('*.mat'))
+                elif file_format == 'mseed':
+                    exported_files = list(output_dir.glob('*.mseed'))
+                elif file_format == 'csv':
+                    exported_files = list(output_dir.glob('*.csv'))
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Unsupported Format",
+                        f"Cannot reload .{file_format} files automatically."
+                    )
+                    return
+
+                if not exported_files:
+                    QMessageBox.warning(
+                        self,
+                        "No Files Found",
+                        f"No exported {file_format} files found in:\n{output_dir}"
+                    )
+                    return
+
+                # Create progress dialog
+                progress = QProgressDialog(
+                    "Loading exported files...",
+                    "Cancel",
+                    0,
+                    len(exported_files),
+                    self
+                )
+                progress.setWindowModality(Qt.WindowModal)
+                progress.setWindowTitle("Reloading Exported Data")
+                progress.show()
+
+                # Start a new group for the reloaded data
+                reload_group_name = f"Exported (Reduced) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                self.start_new_group(reload_group_name)
+
+                # Load each file
+                loaded_count = 0
+                failed_files = []
+
+                for i, exported_file in enumerate(exported_files):
+                    if progress.wasCanceled():
+                        break
+
+                    progress.setValue(i)
+                    progress.setLabelText(f"Loading {exported_file.name}...")
+
+                    try:
+                        # Load the file using appropriate loader
+                        if file_format == 'mat':
+                            seismic_data = self._load_mat_file(str(exported_file))
+                        elif file_format == 'mseed':
+                            seismic_data = self._load_miniseed_file(str(exported_file))
+                        elif file_format == 'csv':
+                            seismic_data = self._load_csv_file(str(exported_file))
+                        else:
+                            continue
+
+                        if seismic_data:
+                            # Add to data cache
+                            file_path_str = str(exported_file)
+                            self.data_cache[file_path_str] = {
+                                'data': seismic_data,
+                                'time_range': None  # Already reduced
+                            }
+
+                            # Get metadata
+                            metadata = {
+                                'duration': seismic_data.duration if hasattr(seismic_data, 'duration') else 0,
+                                'sampling_rate': seismic_data.sampling_rate if hasattr(seismic_data, 'sampling_rate') else 0,
+                                'size_mb': exported_file.stat().st_size / (1024 * 1024),
+                                'status': 'loaded'
+                            }
+
+                            # Add to current group in data tree
+                            if self.current_group_id and self.current_group_id in self.data_groups:
+                                self.data_groups[self.current_group_id]['files'][file_path_str] = metadata
+
+                            # Update the tree display
+                            self.loaded_tree.update_file_in_current_group(file_path_str, metadata)
+
+                            loaded_count += 1
+                        else:
+                            failed_files.append(exported_file.name)
+
+                    except Exception as e:
+                        print(f"Failed to load {exported_file.name}: {str(e)}")
+                        failed_files.append(exported_file.name)
+
+                progress.setValue(len(exported_files))
+                progress.close()
+
+                # Update status
+                self.update_status(f"Reloaded {loaded_count} of {len(exported_files)} exported file(s)")
+
+                # Enable export button if files were loaded
+                if loaded_count > 0:
+                    self.export_btn.setEnabled(True)
+
+                    # Select the group in tree to preview
+                    self.loaded_tree.select_current_group()
+
+                # Show result message
+                result_msg = f"Successfully loaded {loaded_count} of {len(exported_files)} exported file(s)"
+                if failed_files:
+                    result_msg += f"\n\nFailed to load {len(failed_files)} file(s):\n" + "\n".join(failed_files[:5])
+                    if len(failed_files) > 5:
+                        result_msg += f"\n... and {len(failed_files) - 5} more"
+
+                QMessageBox.information(
+                    self,
+                    "Data Reloaded",
+                    result_msg
+                )
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Reload Failed",
+                    f"Failed to reload exported data:\n\n{str(e)}"
+                )
+
+        def _load_mat_file(self, file_path: str):
+            """Load .mat file and return SeismicData object."""
+            try:
+                from scipy.io import loadmat
+                from hvsr_pro.core.data_structures import SeismicData, ComponentData
+
+                mat_data = loadmat(file_path)
+
+                # Extract components
+                e_data = mat_data['E'].flatten()
+                n_data = mat_data['N'].flatten()
+                z_data = mat_data['Z'].flatten()
+                fs = float(mat_data['Fs'][0][0])
+
+                # Get start time if available
+                from datetime import datetime
+                if 'starttime_iso' in mat_data:
+                    start_time = datetime.fromisoformat(str(mat_data['starttime_iso'][0]))
+                else:
+                    start_time = datetime.now()
+
+                # Create ComponentData objects
+                east = ComponentData(name='E', data=e_data, sampling_rate=fs, start_time=start_time)
+                north = ComponentData(name='N', data=n_data, sampling_rate=fs, start_time=start_time)
+                vertical = ComponentData(name='Z', data=z_data, sampling_rate=fs, start_time=start_time)
+
+                return SeismicData(east=east, north=north, vertical=vertical, source_file=file_path)
+
+            except Exception as e:
+                print(f"Error loading .mat file: {str(e)}")
+                return None
+
+        def _load_miniseed_file(self, file_path: str):
+            """Load MiniSEED file and return SeismicData object."""
+            try:
+                from hvsr_pro.loaders.miniseed_loader import MiniseedLoader
+                loader = MiniseedLoader()
+                return loader.load(file_path)
+            except Exception as e:
+                print(f"Error loading .mseed file: {str(e)}")
+                return None
+
+        def _load_csv_file(self, file_path: str):
+            """Load CSV file and return SeismicData object."""
+            try:
+                import numpy as np
+                from hvsr_pro.core.data_structures import SeismicData, ComponentData
+                from datetime import datetime
+
+                # Read CSV
+                data = np.loadtxt(file_path, delimiter=',', skiprows=5)  # Skip metadata rows
+
+                # Assume columns: time, E, N, Z
+                time_vec = data[:, 0]
+                e_data = data[:, 1]
+                n_data = data[:, 2]
+                z_data = data[:, 3]
+
+                # Calculate sampling rate
+                fs = 1.0 / np.mean(np.diff(time_vec)) if len(time_vec) > 1 else 100.0
+
+                # Create ComponentData objects
+                east = ComponentData(name='E', data=e_data, sampling_rate=fs, start_time=datetime.now())
+                north = ComponentData(name='N', data=n_data, sampling_rate=fs, start_time=datetime.now())
+                vertical = ComponentData(name='Z', data=z_data, sampling_rate=fs, start_time=datetime.now())
+
+                return SeismicData(east=east, north=north, vertical=vertical, source_file=file_path)
+
+            except Exception as e:
+                print(f"Error loading .csv file: {str(e)}")
+                return None
 
         def on_file_selected_from_tree(self, file_path: str):
             """

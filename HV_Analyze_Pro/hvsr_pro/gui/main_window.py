@@ -1247,7 +1247,14 @@ class HVSRMainWindow(QMainWindow):
             elif mode == 'multi_type1':
                 # Multiple files with E,N,Z in each
                 self.add_info(f"Loading {len(files)} MiniSEED files...")
-                data = handler.load_multi_miniseed_type1(files)
+
+                # Extract channel mapping from options if provided
+                channel_mapping = options.get('channel_mapping', None)
+                if channel_mapping:
+                    self.add_info(f"Using channel mapping: {channel_mapping}")
+                    data = handler.load_multi_miniseed_type1(files, channel_mapping=channel_mapping)
+                else:
+                    data = handler.load_multi_miniseed_type1(files)
 
                 # Convert time_range to seconds if provided
                 tr_seconds = None
@@ -1416,12 +1423,12 @@ class HVSRMainWindow(QMainWindow):
         
         # Update layers dock with windows reference BEFORE plotting
         self.layers_dock.set_references(self.plot_manager, windows)
-        
+
         # Update peak picker dock with HVSR data
         self.peak_picker_dock.set_hvsr_data(result, result.frequencies, result.mean_hvsr)
 
-        # Update export dock with results
-        self.export_dock.set_references(result, windows, self.plot_manager)
+        # Update export dock with results and seismic data
+        self.export_dock.set_references(result, windows, self.plot_manager, data)
 
         # === NEW: Plot in separate window ===
         self.plot_results_separate_window(result, windows, data)

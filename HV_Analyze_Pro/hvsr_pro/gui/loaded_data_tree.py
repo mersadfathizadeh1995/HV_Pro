@@ -561,6 +561,78 @@ if HAS_PYQT5:
             clipboard = QApplication.clipboard()
             clipboard.setText(file_path)
 
+        def update_file_in_current_group(self, file_path: str, metadata: dict):
+            """
+            Add or update a file in the current group.
+
+            Args:
+                file_path: Path to the file
+                metadata: File metadata dict
+            """
+            # Get current group
+            current_items = self.selectedItems()
+            if not current_items:
+                # No selection - use the last added group (most recent)
+                if not self.groups:
+                    return
+                group_id = list(self.groups.keys())[-1]
+            else:
+                item = current_items[0]
+                data = item.data(0, Qt.UserRole)
+                if data['type'] == 'group':
+                    group_id = data['group_id']
+                elif data['type'] == 'file':
+                    # Get parent group
+                    parent = item.parent()
+                    if parent:
+                        group_data = parent.data(0, Qt.UserRole)
+                        group_id = group_data['group_id']
+                    else:
+                        return
+                else:
+                    return
+
+            if group_id not in self.groups:
+                return
+
+            group = self.groups[group_id]
+            parent_item = group['item']
+
+            # Add file to group's file dict
+            group['files'][file_path] = metadata
+
+            # Add to tree
+            self.add_file_to_group(parent_item, file_path, metadata)
+
+            # Update parent item summary
+            file_count = len(group['files'])
+            total_duration = sum(meta.get('duration', 0) for meta in group['files'].values())
+            parent_item.setText(1, f"{file_count} files | {total_duration:.1f}s total")
+
+            # Update count
+            self.total_file_count += 1
+            self.update_count_label()
+
+        def select_current_group(self):
+            """Select the most recently added group in the tree."""
+            if not self.groups:
+                return
+
+            # Get the last added group
+            group_id = list(self.groups.keys())[-1]
+            group = self.groups[group_id]
+            parent_item = group['item']
+
+            # Clear selection and select this group
+            self.clearSelection()
+            parent_item.setSelected(True)
+
+            # Expand the group to show files
+            parent_item.setExpanded(True)
+
+            # Emit group selected signal
+            self.group_selected.emit(group_id, list(group['files'].keys()))
+
 
 else:
     # Dummy class when PyQt5 not available

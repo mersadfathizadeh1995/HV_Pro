@@ -52,6 +52,7 @@ class ExportDock(QDockWidget):
         self.result = None
         self.windows = None
         self.canvas_manager = None
+        self.data = None
 
         # Create UI
         self._create_ui()
@@ -369,7 +370,16 @@ class ExportDock(QDockWidget):
             QMessageBox.warning(self, "No Data", "No HVSR results available for report generation.")
             return
 
-        self.generate_report_requested.emit()
+        # Open comprehensive export dialog
+        from hvsr_pro.gui.export_dialog import ExportDialog
+
+        dialog = ExportDialog(
+            parent=self,
+            result=self.result,
+            windows=self.windows,
+            data=self.data
+        )
+        dialog.exec_()
 
     def save_session(self):
         """Save current session."""
@@ -395,18 +405,20 @@ class ExportDock(QDockWidget):
         if filename:
             self.load_session_requested.emit(filename)
 
-    def set_references(self, result, windows, canvas_manager):
+    def set_references(self, result, windows, canvas_manager, data=None):
         """
-        Set references to result, windows, and canvas manager.
+        Set references to result, windows, canvas manager, and data.
 
         Args:
             result: HVSRResult instance
             windows: WindowCollection instance
             canvas_manager: PlotWindowManager instance
+            data: SeismicData instance (optional)
         """
         self.result = result
         self.windows = windows
         self.canvas_manager = canvas_manager
+        self.data = data
 
         # Enable/disable buttons based on availability
         has_result = result is not None

@@ -97,13 +97,16 @@ class MiniSeedLoader(BaseDataLoader):
         """Load data from single MiniSEED file containing all components."""
         # Read stream
         stream = read(filepath)
-        
+
+        # Extract channel mapping if provided
+        channel_mapping = kwargs.get('channel_mapping', None)
+
         # Extract components
-        components = self._extract_components_from_stream(stream)
-        
+        components = self._extract_components_from_stream(stream, channel_mapping=channel_mapping)
+
         # Get metadata
         metadata = self._extract_metadata(stream, filepath)
-        
+
         # Create SeismicData
         return self._create_seismic_data(components, metadata, filepath)
     
@@ -139,38 +142,60 @@ class MiniSeedLoader(BaseDataLoader):
         # Create SeismicData
         return self._create_seismic_data(components, merged_metadata, source_file)
     
-    def _extract_components_from_stream(self, stream: Stream) -> Dict[str, Trace]:
+    def _extract_components_from_stream(self, stream: Stream, channel_mapping: Optional[Dict[str, str]] = None) -> Dict[str, Trace]:
         """
         Extract E, N, Z components from ObsPy Stream.
-        
+
         Args:
             stream: ObsPy Stream object
-            
+            channel_mapping: Optional dict mapping component to channel code
+                           e.g., {'E': 'HHE', 'N': 'HHN', 'Z': 'HHZ'}
+
         Returns:
             Dictionary mapping component name to Trace
         """
         components = {}
-        
-        for trace in stream:
-            channel = trace.stats.channel.upper()
-            
-            # Identify component from channel code
-            if channel.endswith('E') or 'E' in channel or 'EAST' in channel.upper():
-                components['E'] = trace
-            elif channel.endswith('N') or 'N' in channel or 'NORTH' in channel.upper():
-                components['N'] = trace
-            elif channel.endswith('Z') or 'Z' in channel or 'VERT' in channel.upper():
-                components['Z'] = trace
-        
+
+        if channel_mapping:
+            # Use explicit channel mapping
+            for trace in stream:
+                channel = trace.stats.channel.upper()
+
+                # Check if this channel matches any mapped component
+                for component, mapped_channel in channel_mapping.items():
+                    if channel == mapped_channel.upper():
+                        components[component] = trace
+                        break
+        else:
+            # Auto-detect based on standard naming conventions
+            for trace in stream:
+                channel = trace.stats.channel.upper()
+
+                # Identify component from channel code
+                if channel.endswith('E') or 'E' in channel or 'EAST' in channel.upper():
+                    components['E'] = trace
+                elif channel.endswith('N') or 'N' in channel or 'NORTH' in channel.upper():
+                    components['N'] = trace
+                elif channel.endswith('Z') or 'Z' in channel or 'VERT' in channel.upper():
+                    components['Z'] = trace
+
         # Validate we have all three
         required = {'E', 'N', 'Z'}
         missing = required - set(components.keys())
         if missing:
-            raise ValueError(
-                f"Missing required components: {missing}. "
-                f"Available: {list(components.keys())}"
-            )
-        
+            if channel_mapping:
+                raise ValueError(
+                    f"Missing required components: {missing}. "
+                    f"Channel mapping: {channel_mapping}. "
+                    f"Available channels: {[t.stats.channel for t in stream]}"
+                )
+            else:
+                raise ValueError(
+                    f"Missing required components: {missing}. "
+                    f"Available channels: {[t.stats.channel for t in stream]}. "
+                    f"Consider using channel mapping for non-standard channel names."
+                )
+
         return components
     
     def _extract_metadata(self, stream: Stream, filepath: str) -> Dict[str, Any]:
