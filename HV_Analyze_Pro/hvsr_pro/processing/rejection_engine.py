@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 import json
 from pathlib import Path
 from datetime import datetime
+import numpy as np
 
 from hvsr_pro.processing.window_structures import Window, WindowCollection, WindowState
 from hvsr_pro.processing.rejection_algorithms import (
@@ -21,7 +22,9 @@ from hvsr_pro.processing.rejection_algorithms import (
 from hvsr_pro.processing.rejection_advanced import (
     STALTARejection,
     FrequencyDomainRejection,
-    AmplitudeRejection
+    AmplitudeRejection,
+    HVSRAmplitudeRejection,
+    FlatPeakRejection
 )
 from hvsr_pro.processing.rejection_cox_fdwra import CoxFDWRAejection
 
@@ -374,8 +377,37 @@ class RejectionEngine:
             self.add_algorithm(AmplitudeRejection())
             self.add_algorithm(IsolationForestRejection(contamination=0.1))
         
+        elif mode == 'publication':
+            # Publication-quality 4-condition rejection workflow
+            # 
+            # This mode implements a comprehensive rejection workflow:
+            # - Pre-HVSR: Amplitude rejection (dead channels, clipping)
+            # - Post-HVSR: HVSR amplitude < 1, peak frequency consistency, flat peak detection
+            #
+            # Conditions:
+            # 1. HVSR peak amplitude > 1.0 (HVSRAmplitudeRejection)
+            # 2. Peak frequency consistency (CoxFDWRAejection)
+            # 3. Flat peak detection (FlatPeakRejection)
+            # 4. Manual rejection (handled by GUI)
+            
+            # Pre-HVSR algorithm
+            self.add_algorithm(AmplitudeRejection())
+            
+            # Store post-HVSR algorithms for later application
+            self.post_hvsr_algorithms = [
+                HVSRAmplitudeRejection(min_amplitude=1.0),  # Condition 1
+                FlatPeakRejection(flatness_threshold=0.15),  # Condition 3
+            ]
+            # NOTE: Condition 2 (Cox FDWRA) will be applied via evaluate_fdwra()
+            # Condition 4 (Manual) is handled by the GUI
+            
+            logger.info("Publication mode: Pre-HVSR + Post-HVSR rejection pipeline")
+            logger.info("  - Pre-HVSR: Amplitude rejection")
+            logger.info("  - Post-HVSR: HVSR amplitude check, flat peak detection")
+            logger.info("  - Post-HVSR: Cox FDWRA will be applied separately for peak consistency")
+        
         else:
-            raise ValueError(f"Unknown mode: {mode}. Valid modes: conservative, balanced, aggressive, sesame, ml")
+            raise ValueError(f"Unknown mode: {mode}. Valid modes: conservative, balanced, aggressive, sesame, publication, ml")
         
         logger.info(f"Created {mode} rejection pipeline with {len(self.algorithms)} algorithms")
     
@@ -468,6 +500,99 @@ class RejectionEngine:
             'iterations': len(cox_algo.iteration_history),
             'iteration_history': cox_algo.iteration_history,
             'results': results
+        }
+    
+    def evaluate_post_hvsr(self,
+                           collection: WindowCollection,
+                           hvsr_result,
+                           auto_apply: bool = True) -> Dict[str, Any]:
+        """
+        Apply post-HVSR rejection algorithms (HVSR amplitude, flat peak).
+        
+        This must be called AFTER HVSR processing. It applies the post-HVSR
+        algorithms stored during matlab_style pipeline creation.
+        
+        Args:
+            collection: WindowCollection to evaluate
+            hvsr_result: HVSRResult from processor
+            auto_apply: Apply rejections immediately (default: True)
+            
+        Returns:
+            Dictionary with evaluation results
+        """
+        if not hasattr(self, 'post_hvsr_algorithms') or not self.post_hvsr_algorithms:
+            logger.debug("No post-HVSR algorithms configured")
+            return {
+                'n_algorithms': 0,
+                'n_rejected': 0,
+                'n_windows': collection.n_windows
+            }
+        
+        logger.info(f"Applying {len(self.post_hvsr_algorithms)} post-HVSR rejection algorithms...")
+        
+        # Attach HVSR data to windows for algorithms to access
+        if hasattr(hvsr_result, 'window_spectra') and hvsr_result.window_spectra:
+            for i, window in enumerate(collection.windows):
+                if i < len(hvsr_result.window_spectra):
+                    spectrum = hvsr_result.window_spectra[i]
+                    window.hvsr_curve = spectrum.hvsr
+                    window.hvsr_frequencies = hvsr_result.frequencies
+        
+        # Calculate collection-level peak statistics for FlatPeakRejection
+        if hasattr(hvsr_result, 'window_spectra') and hvsr_result.window_spectra:
+            peak_frequencies = []
+            for spectrum in hvsr_result.window_spectra:
+                if hasattr(spectrum, 'hvsr') and spectrum.hvsr is not None:
+                    peak_idx = np.argmax(spectrum.hvsr)
+                    peak_freq = hvsr_result.frequencies[peak_idx]
+                    peak_frequencies.append(peak_freq)
+            
+            if peak_frequencies:
+                mean_fn = np.mean(peak_frequencies)
+                std_fn = np.std(peak_frequencies)
+                
+                # Attach to windows for FlatPeakRejection
+                for window in collection.windows:
+                    window.collection_mean_fn = mean_fn
+                    window.collection_std_fn = std_fn
+        
+        # Apply each post-HVSR algorithm
+        total_rejected = 0
+        algorithm_results = []
+        
+        for algo in self.post_hvsr_algorithms:
+            results = algo.evaluate_collection(collection)
+            n_rejected_by_algo = sum(1 for r in results if r.should_reject)
+            
+            algorithm_results.append({
+                'algorithm': algo.name,
+                'n_rejected': n_rejected_by_algo,
+                'results': results
+            })
+            
+            if auto_apply:
+                for window, result in zip(collection.windows, results):
+                    if result.should_reject and window.is_active():
+                        window.reject(f"{algo.name}: {result.reason}")
+                        total_rejected += 1
+            
+            logger.info(f"  {algo.name}: {n_rejected_by_algo} flagged")
+        
+        # Store in history
+        history_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'algorithm': 'Post-HVSR Rejection',
+            'n_algorithms': len(self.post_hvsr_algorithms),
+            'n_windows': collection.n_windows,
+            'n_rejected': total_rejected
+        }
+        self.history.append(history_entry)
+        
+        return {
+            'n_algorithms': len(self.post_hvsr_algorithms),
+            'n_rejected': total_rejected,
+            'n_windows': collection.n_windows,
+            'algorithm_results': algorithm_results
         }
     
     def __repr__(self) -> str:

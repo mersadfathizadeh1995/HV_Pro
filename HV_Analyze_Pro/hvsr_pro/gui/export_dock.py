@@ -83,6 +83,10 @@ class ExportDock(QDockWidget):
         stats_group = self._create_stats_export_group()
         main_layout.addWidget(stats_group)
 
+        # === COMPARISON FIGURES ===
+        comparison_group = self._create_comparison_figures_group()
+        main_layout.addWidget(comparison_group)
+
         # === REPORT GENERATION ===
         report_group = self._create_report_group()
         main_layout.addWidget(report_group)
@@ -218,6 +222,61 @@ class ExportDock(QDockWidget):
         self.export_stats_btn.clicked.connect(self.export_statistics)
         layout.addWidget(self.export_stats_btn)
 
+        return group
+
+    def _create_comparison_figures_group(self) -> QGroupBox:
+        """Create comparison figures export group."""
+        group = QGroupBox("Export Comparison Figures")
+        layout = QVBoxLayout(group)
+        
+        # Info label
+        info = QLabel("Publication-quality comparison figures:")
+        info.setStyleSheet("QLabel { color: #333; font-weight: bold; }")
+        layout.addWidget(info)
+        
+        # Raw vs Adjusted comparison figure
+        self.export_comparison_btn = QPushButton("Raw vs Adjusted HVSR")
+        self.export_comparison_btn.setToolTip(
+            "Export dual-panel comparison figure:\n"
+            "- Top: Raw HVSR results (all windows)\n"
+            "- Bottom: Adjusted HVSR (after rejection)\n"
+            "- Statistics boxes, frequency uncertainty bands"
+        )
+        self.export_comparison_btn.clicked.connect(self.export_comparison_figure)
+        layout.addWidget(self.export_comparison_btn)
+        
+        # 3C Waveform plot
+        self.export_waveform_btn = QPushButton("3C Waveform with Rejection")
+        self.export_waveform_btn.setToolTip(
+            "Export 3-component seismic recording plot:\n"
+            "- North-South, East-West, Vertical components\n"
+            "- Color-coded accepted/rejected windows"
+        )
+        self.export_waveform_btn.clicked.connect(self.export_waveform_figure)
+        layout.addWidget(self.export_waveform_btn)
+        
+        # Pre/Post rejection combined figure
+        self.export_prepost_btn = QPushButton("Pre/Post Rejection (5-panel)")
+        self.export_prepost_btn.setToolTip(
+            "Export comprehensive pre/post rejection figure:\n"
+            "- Left: 3C waveforms with rejection markers\n"
+            "- Right top: HVSR before rejection\n"
+            "- Right bottom: HVSR after rejection\n"
+            "Reference: hvsrpy plot_pre_and_post_rejection"
+        )
+        self.export_prepost_btn.clicked.connect(self.export_prepost_figure)
+        layout.addWidget(self.export_prepost_btn)
+        
+        # Format selector
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("Format:"))
+        self.figure_format_combo = QComboBox()
+        self.figure_format_combo.addItem("PNG (300 DPI)", "png")
+        self.figure_format_combo.addItem("PDF (Vector)", "pdf")
+        self.figure_format_combo.addItem("SVG (Vector)", "svg")
+        format_layout.addWidget(self.figure_format_combo)
+        layout.addLayout(format_layout)
+        
         return group
 
     def _create_report_group(self) -> QGroupBox:
@@ -494,6 +553,7 @@ class ExportDock(QDockWidget):
 
         # Enable/disable buttons based on availability
         has_result = result is not None
+        has_data = data is not None
         self.export_png_btn.setEnabled(has_result)
         self.export_pdf_btn.setEnabled(has_result)
         self.export_svg_btn.setEnabled(has_result)
@@ -502,3 +562,136 @@ class ExportDock(QDockWidget):
         self.export_stats_btn.setEnabled(has_result)
         self.generate_report_btn.setEnabled(has_result)
         self.save_session_btn.setEnabled(has_result)
+        
+        # Enable comparison figure exports
+        self.export_comparison_btn.setEnabled(has_result)
+        self.export_waveform_btn.setEnabled(has_result and has_data)
+        self.export_prepost_btn.setEnabled(has_result and has_data)
+    
+    def export_comparison_figure(self):
+        """Export Raw vs Adjusted HVSR comparison figure."""
+        if not self.result:
+            QMessageBox.warning(self, "No Data", "No HVSR results available.")
+            return
+        
+        # Get format
+        fmt = self.figure_format_combo.currentData()
+        
+        # Get save path
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Raw vs Adjusted Comparison",
+            f"hvsr_comparison.{fmt}",
+            f"{fmt.upper()} Files (*.{fmt});;All Files (*)"
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            from hvsr_pro.visualization.comparison_plot import plot_raw_vs_adjusted_from_result
+            
+            # Generate figure
+            fig = plot_raw_vs_adjusted_from_result(
+                hvsr_result=self.result,
+                windows=self.windows,
+                station_name="",  # Could be extracted from metadata
+                save_path=filename
+            )
+            
+            QMessageBox.information(
+                self, "Export Successful", 
+                f"Comparison figure saved to:\n{filename}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", 
+                f"Failed to export comparison figure:\n{str(e)}"
+            )
+    
+    def export_waveform_figure(self):
+        """Export 3C waveform plot with rejection markers."""
+        if not self.result or not self.data:
+            QMessageBox.warning(self, "No Data", "No HVSR results or seismic data available.")
+            return
+        
+        # Get format
+        fmt = self.figure_format_combo.currentData()
+        
+        # Get save path
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export 3C Waveform Plot",
+            f"hvsr_waveforms.{fmt}",
+            f"{fmt.upper()} Files (*.{fmt});;All Files (*)"
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            from hvsr_pro.visualization.waveform_plot import plot_seismic_recordings_3c
+            
+            # Generate figure
+            fig = plot_seismic_recordings_3c(
+                data=self.data,
+                windows=self.windows,
+                normalize=True,
+                save_path=filename,
+                title="3-Component Seismic Recording with QC"
+            )
+            
+            QMessageBox.information(
+                self, "Export Successful", 
+                f"Waveform figure saved to:\n{filename}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", 
+                f"Failed to export waveform figure:\n{str(e)}"
+            )
+    
+    def export_prepost_figure(self):
+        """Export comprehensive pre/post rejection figure."""
+        if not self.result or not self.data:
+            QMessageBox.warning(self, "No Data", "No HVSR results or seismic data available.")
+            return
+        
+        # Get format
+        fmt = self.figure_format_combo.currentData()
+        
+        # Get save path
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Pre/Post Rejection Figure",
+            f"hvsr_prepost_rejection.{fmt}",
+            f"{fmt.upper()} Files (*.{fmt});;All Files (*)"
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            from hvsr_pro.visualization.waveform_plot import plot_pre_and_post_rejection
+            
+            # Generate figure
+            fig = plot_pre_and_post_rejection(
+                data=self.data,
+                hvsr_result=self.result,
+                windows=self.windows,
+                station_name="",  # Could be extracted from metadata
+                save_path=filename
+            )
+            
+            QMessageBox.information(
+                self, "Export Successful", 
+                f"Pre/Post rejection figure saved to:\n{filename}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", 
+                f"Failed to export pre/post rejection figure:\n{str(e)}"
+            )

@@ -210,6 +210,10 @@ class ProcessingThread(QThread):
             # Step 5: Apply Cox FDWRA (if enabled or SESAME mode)
             if self.apply_cox_fdwra or self.qc_mode == 'sesame':
                 self.progress.emit(85, "Applying Cox FDWRA (peak consistency)...")
+                
+                # Store raw spectra BEFORE Cox FDWRA rejection (for comparison plot)
+                raw_window_spectra = list(result.window_spectra)  # Copy before modification
+                
                 fdwra_result = engine.evaluate_fdwra(
                     windows,
                     result,
@@ -257,6 +261,12 @@ class ProcessingThread(QThread):
                     else:
                         self.progress.emit(92, "Recomputing HVSR after Cox FDWRA...")
                         result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+                        
+                        # Store raw spectra in result metadata for comparison plot
+                        result.metadata['raw_window_spectra'] = raw_window_spectra
+                else:
+                    # No rejection, raw and final are the same
+                    result.metadata['raw_window_spectra'] = raw_window_spectra
             
             self.progress.emit(100, "Complete!")
             self.finished.emit(result, windows, data)
@@ -553,8 +563,52 @@ class HVSRMainWindow(QMainWindow):
 
     def _on_qc_enable_toggled(self, checked: bool):
         """Handle QC enable checkbox toggle."""
+        self.preset_radio.setEnabled(checked)
+        self.custom_radio.setEnabled(checked)
+        self.preset_widget.setEnabled(checked)
+        self.custom_widget.setEnabled(checked)
         self.qc_combo.setEnabled(checked)
         self.advanced_qc_btn.setEnabled(checked)
+    
+    def _on_qc_mode_changed(self, checked: bool):
+        """Handle Preset/Custom radio button toggle."""
+        if self.preset_radio.isChecked():
+            self.preset_widget.show()
+            self.custom_widget.hide()
+        else:
+            self.preset_widget.hide()
+            self.custom_widget.show()
+    
+    def _update_preset_description(self):
+        """Update the preset description based on selected preset."""
+        descriptions = {
+            "conservative": "Only rejects obvious problems (dead channels, clipping). Best for noisy data.",
+            "balanced": "Amplitude checks only. Recommended for most datasets.",
+            "aggressive": "Strict QC with STA/LTA, frequency, and statistical checks. For clean data.",
+            "sesame": "SESAME-compliant processing with Cox FDWRA for publication-quality results.",
+            "publication": "4-condition rejection: HVSR amplitude, peak consistency, flat peaks."
+        }
+        current_mode = self.qc_combo.currentData()
+        self.preset_desc_label.setText(descriptions.get(current_mode, ""))
+    
+    def _get_custom_qc_settings_from_ui(self):
+        """Get custom QC settings from the UI checkboxes."""
+        return {
+            'enabled': self.qc_enable_check.isChecked(),
+            'mode': 'custom',
+            'algorithms': {
+                'amplitude': {'enabled': self.custom_amplitude_check.isChecked(), 'params': {}},
+                'quality_threshold': {'enabled': self.custom_quality_check.isChecked(), 'params': {'threshold': 0.5}},
+                'sta_lta': {'enabled': self.custom_stalta_check.isChecked(), 'params': {
+                    'sta_length': 1.0, 'lta_length': 30.0, 'min_ratio': 0.15, 'max_ratio': 2.5
+                }},
+                'frequency_domain': {'enabled': self.custom_freq_check.isChecked(), 'params': {'spike_threshold': 3.0}},
+                'statistical_outlier': {'enabled': self.custom_stats_check.isChecked(), 'params': {'method': 'iqr', 'threshold': 2.0}},
+                'hvsr_amplitude': {'enabled': self.custom_hvsr_amp_check.isChecked(), 'params': {'min_amplitude': 1.0}},
+                'flat_peak': {'enabled': self.custom_flat_peak_check.isChecked(), 'params': {'flatness_threshold': 0.15}},
+                'cox_fdwra': {'enabled': self.custom_cox_fdwra_check.isChecked(), 'params': {'n': 2.0, 'max_iterations': 20}}
+            }
+        }
 
     def _on_cox_enable_toggled(self, checked: bool):
         """Handle Cox FDWRA enable checkbox toggle."""
@@ -951,38 +1005,128 @@ class HVSRMainWindow(QMainWindow):
         rejection_label = QLabel("<b>Window Rejection:</b>")
         layout.addWidget(rejection_label)
 
-        # Quality Control (QC) group
-        qc_group = QGroupBox("Quality Control (Time-Domain)")
+        # Quality Control (QC) group with Preset/Custom modes
+        qc_group = QGroupBox("Quality Control Settings")
         qc_group_layout = QVBoxLayout(qc_group)
 
-        # QC Enable checkbox
+        # Top row: Enable checkbox
         self.qc_enable_check = QCheckBox("Enable QC Rejection")
         self.qc_enable_check.setChecked(True)
-        self.qc_enable_check.setToolTip("Apply time-domain quality control to reject noisy windows")
+        self.qc_enable_check.setToolTip("Apply quality control to reject noisy windows")
         self.qc_enable_check.toggled.connect(self._on_qc_enable_toggled)
         qc_group_layout.addWidget(self.qc_enable_check)
 
-        # QC mode dropdown
-        qc_mode_layout = QHBoxLayout()
-        qc_mode_layout.addWidget(QLabel("Mode:"))
+        # Mode selector: Preset vs Custom
+        from PyQt5.QtWidgets import QRadioButton, QButtonGroup, QFrame
+        mode_frame = QFrame()
+        mode_layout = QHBoxLayout(mode_frame)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.qc_mode_group = QButtonGroup()
+        self.preset_radio = QRadioButton("Preset")
+        self.preset_radio.setChecked(True)
+        self.custom_radio = QRadioButton("Custom")
+        self.qc_mode_group.addButton(self.preset_radio, 0)
+        self.qc_mode_group.addButton(self.custom_radio, 1)
+        
+        mode_layout.addWidget(QLabel("Mode:"))
+        mode_layout.addWidget(self.preset_radio)
+        mode_layout.addWidget(self.custom_radio)
+        mode_layout.addStretch()
+        qc_group_layout.addWidget(mode_frame)
+        
+        self.preset_radio.toggled.connect(self._on_qc_mode_changed)
+        self.custom_radio.toggled.connect(self._on_qc_mode_changed)
+
+        # === PRESET MODE WIDGETS ===
+        self.preset_widget = QWidget()
+        preset_layout = QVBoxLayout(self.preset_widget)
+        preset_layout.setContentsMargins(0, 5, 0, 0)
+        
+        preset_combo_layout = QHBoxLayout()
+        preset_combo_layout.addWidget(QLabel("Preset:"))
         self.qc_combo = QComboBox()
-        self.qc_combo.addItem("Conservative", "conservative")
-        self.qc_combo.addItem("Balanced", "balanced")
-        self.qc_combo.addItem("Aggressive", "aggressive")
+        self.qc_combo.addItem("Conservative - Only obvious problems", "conservative")
+        self.qc_combo.addItem("Balanced - Moderate QC (recommended)", "balanced")
+        self.qc_combo.addItem("Aggressive - Strict quality control", "aggressive")
+        self.qc_combo.addItem("SESAME - SESAME-compliant", "sesame")
+        self.qc_combo.addItem("Publication - 4-condition rejection", "publication")
         self.qc_combo.setCurrentIndex(1)  # Default to balanced
         self.qc_combo.setToolTip(
-            "Conservative: Amplitude + quality threshold (0.2)\n"
-            "Balanced: Amplitude check only (recommended)\n"
-            "Aggressive: + STA/LTA + frequency + statistical checks"
+            "Conservative: Amplitude + quality threshold (lenient)\n"
+            "Balanced: Amplitude check only (recommended for most data)\n"
+            "Aggressive: + STA/LTA + frequency + statistical checks\n"
+            "SESAME: Pre-HVSR QC + Cox FDWRA for peak consistency\n"
+            "Publication: HVSR amplitude, peak consistency, flat peak detection"
         )
-        qc_mode_layout.addWidget(self.qc_combo)
-        qc_group_layout.addLayout(qc_mode_layout)
+        preset_combo_layout.addWidget(self.qc_combo)
+        preset_layout.addLayout(preset_combo_layout)
+        
+        # Preset description label
+        self.preset_desc_label = QLabel()
+        self.preset_desc_label.setWordWrap(True)
+        self.preset_desc_label.setStyleSheet("color: #666; font-style: italic; padding: 3px;")
+        self._update_preset_description()
+        self.qc_combo.currentIndexChanged.connect(self._update_preset_description)
+        preset_layout.addWidget(self.preset_desc_label)
+        
+        qc_group_layout.addWidget(self.preset_widget)
 
-        # Advanced QC Settings button
+        # === CUSTOM MODE WIDGETS ===
+        self.custom_widget = QWidget()
+        custom_layout = QVBoxLayout(self.custom_widget)
+        custom_layout.setContentsMargins(0, 5, 0, 0)
+        
+        # Pre-HVSR algorithms section
+        pre_hvsr_label = QLabel("<i>Time-Domain (Pre-HVSR):</i>")
+        custom_layout.addWidget(pre_hvsr_label)
+        
+        # Checkboxes for each algorithm
+        self.custom_amplitude_check = QCheckBox("Amplitude Rejection")
+        self.custom_amplitude_check.setChecked(True)
+        self.custom_amplitude_check.setToolTip("Reject clipping, dead channels, extreme amplitudes")
+        custom_layout.addWidget(self.custom_amplitude_check)
+        
+        self.custom_quality_check = QCheckBox("Quality Threshold")
+        self.custom_quality_check.setToolTip("Reject windows below SNR/stationarity threshold")
+        custom_layout.addWidget(self.custom_quality_check)
+        
+        self.custom_stalta_check = QCheckBox("STA/LTA Rejection")
+        self.custom_stalta_check.setToolTip("Reject transients using short/long-term average ratio")
+        custom_layout.addWidget(self.custom_stalta_check)
+        
+        self.custom_freq_check = QCheckBox("Frequency Domain")
+        self.custom_freq_check.setToolTip("Reject windows with spectral spikes")
+        custom_layout.addWidget(self.custom_freq_check)
+        
+        self.custom_stats_check = QCheckBox("Statistical Outliers")
+        self.custom_stats_check.setToolTip("Reject windows that are statistical outliers")
+        custom_layout.addWidget(self.custom_stats_check)
+        
+        # Post-HVSR algorithms section
+        post_hvsr_label = QLabel("<i>Frequency-Domain (Post-HVSR):</i>")
+        custom_layout.addWidget(post_hvsr_label)
+        
+        self.custom_hvsr_amp_check = QCheckBox("HVSR Peak Amplitude < 1")
+        self.custom_hvsr_amp_check.setToolTip("Reject windows where HVSR peak amplitude < 1.0")
+        custom_layout.addWidget(self.custom_hvsr_amp_check)
+        
+        self.custom_flat_peak_check = QCheckBox("Flat Peak Detection")
+        self.custom_flat_peak_check.setToolTip("Reject windows with flat/wide peaks or multiple peaks")
+        custom_layout.addWidget(self.custom_flat_peak_check)
+        
+        self.custom_cox_fdwra_check = QCheckBox("Cox FDWRA (Peak Consistency)")
+        self.custom_cox_fdwra_check.setToolTip("Cox et al. (2020) Frequency-Domain Window Rejection\nEnsures peak frequency consistency across windows")
+        custom_layout.addWidget(self.custom_cox_fdwra_check)
+        
+        # Advanced settings button for custom mode
         self.advanced_qc_btn = QPushButton("Advanced Settings...")
         self.advanced_qc_btn.clicked.connect(self.open_advanced_qc_settings)
-        self.advanced_qc_btn.setToolTip("Customize individual QC algorithms and thresholds")
-        qc_group_layout.addWidget(self.advanced_qc_btn)
+        self.advanced_qc_btn.setToolTip("Fine-tune individual algorithm thresholds")
+        custom_layout.addWidget(self.advanced_qc_btn)
+        
+        qc_group_layout.addWidget(self.custom_widget)
+        self.custom_widget.hide()  # Hidden by default (preset mode active)
 
         layout.addWidget(qc_group)
 
@@ -1511,7 +1655,14 @@ class HVSRMainWindow(QMainWindow):
         freq_min = self.freq_min_spin.value()
         freq_max = self.freq_max_spin.value()
         n_frequencies = self.n_freq_spin.value()
-        qc_mode = self.qc_combo.currentData()  # Get QC mode
+        # Get QC mode (preset or custom)
+        if self.preset_radio.isChecked():
+            qc_mode = self.qc_combo.currentData()  # Preset mode
+            custom_qc_from_ui = None
+        else:
+            qc_mode = 'custom'  # Custom mode
+            custom_qc_from_ui = self._get_custom_qc_settings_from_ui()
+        
         apply_cox_fdwra = self.cox_fdwra_check.isChecked()  # Get Cox FDWRA setting
         use_parallel = self.parallel_check.isChecked()  # Get parallel processing setting
         n_cores = self.cores_spin.value() if use_parallel else 1  # Get number of cores to use
@@ -1531,18 +1682,24 @@ class HVSRMainWindow(QMainWindow):
         self.add_info(f"Frequency range: {freq_min:.2f} - {freq_max:.1f} Hz ({n_frequencies} points)")
         if manual_sampling_rate:
             self.add_info(f"Sampling rate: {manual_sampling_rate:.4f} Hz (manual override)")
-        self.add_info(f"QC Mode: {self.qc_combo.currentText()}")
-        if apply_cox_fdwra or qc_mode == 'sesame':
+        if self.preset_radio.isChecked():
+            self.add_info(f"QC Mode: {self.qc_combo.currentText()}")
+        else:
+            self.add_info(f"QC Mode: Custom (manual settings)")
+        if apply_cox_fdwra or qc_mode in ('sesame', 'publication'):
             self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
         if use_parallel:
             self.add_info(f"Parallel processing: Enabled (using {n_cores} of {self._get_cpu_count()} cores)")
 
+        # Determine which custom settings to use
+        final_custom_settings = custom_qc_from_ui if custom_qc_from_ui else self.custom_qc_settings
+        
         # Start processing thread with load mode and time range
         self.thread = ProcessingThread(
             self.current_file, window_length, overlap, smoothing,
             self.load_mode, self.current_time_range,
             freq_min, freq_max, n_frequencies, qc_mode, apply_cox_fdwra, use_parallel,
-            n_cores, manual_sampling_rate, self.custom_qc_settings
+            n_cores, manual_sampling_rate, final_custom_settings
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)
