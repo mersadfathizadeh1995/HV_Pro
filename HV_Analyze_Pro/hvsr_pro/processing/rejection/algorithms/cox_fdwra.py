@@ -1,6 +1,6 @@
 """
 Cox et al. (2020) Frequency-Domain Window Rejection Algorithm (FDWRA)
-=======================================================================
+======================================================================
 
 Implements the iterative peak frequency consistency algorithm from:
 Cox, B.R., Cheng, T., Vantassel, J.P., & Manuel, L. (2020). 
@@ -13,14 +13,12 @@ This is the industry-standard algorithm used in the HVSR community.
 
 import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
-from scipy import signal as scipy_signal
-from scipy import stats as scipy_stats
 
-from hvsr_pro.processing.rejection_algorithms import BaseRejectionAlgorithm, RejectionResult
-from hvsr_pro.processing.window_structures import WindowCollection
+from hvsr_pro.processing.rejection.base import BaseRejectionAlgorithm, RejectionResult
+from hvsr_pro.processing.windows import WindowCollection
 
 
-class CoxFDWRAejection(BaseRejectionAlgorithm):
+class CoxFDWRARejection(BaseRejectionAlgorithm):
     """
     Cox et al. (2020) Frequency-Domain Window Rejection Algorithm.
     
@@ -32,9 +30,9 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
     1. Find peak frequency (fn) for each window's HVSR curve
     2. Calculate mean peak frequency across windows
     3. Calculate mean curve's peak frequency (mc)
-    4. Remove windows where |fn - mean_fn| > n*σ
+    4. Remove windows where |fn - mean_fn| > n*std
     5. Recalculate statistics
-    6. Check convergence (Δ difference < 1%, Δ std < 1%)
+    6. Check convergence (delta difference < 1%, delta std < 1%)
     7. Repeat until converged (max iterations)
     
     Reference:
@@ -45,6 +43,7 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
     def __init__(self,
                  n: float = 2.0,
                  max_iterations: int = 50,
+                 min_iterations: int = 1,
                  distribution_fn: str = "lognormal",
                  distribution_mc: str = "lognormal",
                  search_range_hz: Optional[Tuple[float, float]] = None,
@@ -57,17 +56,21 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
         Args:
             n: Number of standard deviations for rejection bounds (default: 2.0)
             max_iterations: Maximum iterations before stopping (default: 50)
+            min_iterations: Minimum iterations to run before checking convergence (default: 1)
+                           Set to higher value to force more rejections even if
+                           convergence criteria are met early.
             distribution_fn: Distribution for fn statistics ("lognormal" or "normal")
             distribution_mc: Distribution for mean curve ("lognormal" or "normal")
             search_range_hz: Frequency range to search for peaks (f_min, f_max)
                            None = use full range
-            convergence_threshold_diff: Convergence threshold for difference (default: 0.01 = 1%)
-            convergence_threshold_std: Convergence threshold for std (default: 0.01 = 1%)
+            convergence_threshold_diff: Convergence threshold for difference (default: 0.01)
+            convergence_threshold_std: Convergence threshold for std (default: 0.01)
             name: Algorithm name
         """
         super().__init__(name, threshold=n)
         self.n = n
         self.max_iterations = max_iterations
+        self.min_iterations = min(min_iterations, max_iterations)  # Can't exceed max
         self.distribution_fn = distribution_fn
         self.distribution_mc = distribution_mc
         self.search_range_hz = search_range_hz
@@ -93,7 +96,6 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
         """
         # Get HVSR result from collection metadata
         if not hasattr(collection, '_hvsr_result') or collection._hvsr_result is None:
-            # Cannot run without HVSR computation
             return [RejectionResult(
                 should_reject=False,
                 reason="FDWRA requires HVSR computation first",
@@ -105,8 +107,7 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
         frequencies = hvsr_result.frequencies
         
         # Extract individual window HVSR curves
-        # window_spectra only contains ACTIVE windows, we need to map back to all windows
-        window_hvsr_curves = [None] * len(collection.windows)  # Initialize with None
+        window_hvsr_curves = [None] * len(collection.windows)
         
         # Map window_spectra back to original window indices
         active_window_idx = 0
@@ -131,7 +132,6 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
             valid_indices = np.where(valid_mask)[0]
             
             if len(valid_indices) < 3:
-                # Need at least 3 windows for meaningful statistics
                 break
             
             valid_curves = [window_hvsr_curves[i] for i in valid_indices]
@@ -166,10 +166,11 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
             
             # Check if any windows were rejected this iteration
             if np.array_equal(new_valid_mask, valid_mask):
-                # No change, we've converged
-                converged = True
-                self.converged_iteration = iteration
-                break
+                # Only stop if we've reached minimum iterations
+                if iteration >= self.min_iterations:
+                    converged = True
+                    self.converged_iteration = iteration
+                    break
             
             valid_mask = new_valid_mask
             
@@ -194,10 +195,11 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
             
             # Check convergence criteria
             if diff_before == 0 or std_fn_before == 0 or std_fn_after == 0:
-                # Edge case: zero values
-                converged = True
-                self.converged_iteration = iteration
-                break
+                # Only stop if we've reached minimum iterations
+                if iteration >= self.min_iterations:
+                    converged = True
+                    self.converged_iteration = iteration
+                    break
             
             d_diff = abs(diff_after - diff_before) / diff_before
             s_diff = abs(std_fn_after - std_fn_before)
@@ -213,14 +215,16 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
                 'd_diff': d_diff,
                 's_diff': s_diff,
                 'lower_bound': lower_bound,
-                'upper_bound': upper_bound
+                'upper_bound': upper_bound,
+                'min_iterations_reached': iteration >= self.min_iterations
             })
             
-            # Check convergence
-            if d_diff < self.convergence_threshold_diff and s_diff < self.convergence_threshold_std:
-                converged = True
-                self.converged_iteration = iteration
-                break
+            # Check convergence (only after minimum iterations)
+            if iteration >= self.min_iterations:
+                if d_diff < self.convergence_threshold_diff and s_diff < self.convergence_threshold_std:
+                    converged = True
+                    self.converged_iteration = iteration
+                    break
         
         # Create results for each window
         results = []
@@ -230,10 +234,9 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
             was_initially_valid = window.is_active()
             is_final_valid = valid_mask[i]
             
-            # Only FDWRA can reject, not re-accept
             if was_initially_valid and not is_final_valid:
                 should_reject = True
-                reason = f"Peak frequency outside {self.n}σ bounds"
+                reason = f"Peak frequency outside {self.n}s bounds"
                 score = 1.0
             elif not was_initially_valid:
                 should_reject = False
@@ -251,6 +254,8 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
                 metadata={
                     'converged': converged,
                     'iterations': len(self.iteration_history),
+                    'max_iterations': self.max_iterations,
+                    'min_iterations': self.min_iterations,
                     'initial_valid': int(initial_valid_count),
                     'final_valid': int(final_valid_count),
                     'was_initially_valid': was_initially_valid,
@@ -268,18 +273,7 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
                             frequencies: np.ndarray, 
                             hvsr: np.ndarray, 
                             search_range: Optional[Tuple[float, float]] = None) -> float:
-        """
-        Find peak frequency in HVSR curve.
-        
-        Args:
-            frequencies: Frequency array
-            hvsr: HVSR amplitude array
-            search_range: (f_min, f_max) or None for full range
-            
-        Returns:
-            Peak frequency in Hz
-        """
-        # Apply search range if specified
+        """Find peak frequency in HVSR curve."""
         if search_range is not None:
             f_min, f_max = search_range
             mask = (frequencies >= f_min) & (frequencies <= f_max)
@@ -290,40 +284,36 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
             hvsr_search = hvsr
         
         if len(hvsr_search) == 0:
-            return frequencies[0]  # Fallback
+            return frequencies[0]
         
-        # Find peak
         peak_idx = np.argmax(hvsr_search)
         return float(freqs_search[peak_idx])
     
     def _calculate_mean(self, values: np.ndarray, distribution: str) -> float:
         """Calculate mean according to distribution assumption."""
         if distribution == "lognormal":
-            # For lognormal: mean = exp(mean(log(values)))
-            log_values = np.log(values + 1e-10)  # Avoid log(0)
+            log_values = np.log(values + 1e-10)
             return float(np.exp(np.mean(log_values)))
-        else:  # normal
+        else:
             return float(np.mean(values))
     
     def _calculate_std(self, values: np.ndarray, distribution: str) -> float:
         """Calculate standard deviation according to distribution assumption."""
         if distribution == "lognormal":
-            # For lognormal: std in log-space
             log_values = np.log(values + 1e-10)
             return float(np.std(log_values, ddof=1))
-        else:  # normal
+        else:
             return float(np.std(values, ddof=1))
     
     def _calculate_nth_std(self, values: np.ndarray, n: float, distribution: str) -> float:
-        """Calculate mean ± n*std according to distribution."""
+        """Calculate mean +/- n*std according to distribution."""
         mean = self._calculate_mean(values, distribution)
         std = self._calculate_std(values, distribution)
         
         if distribution == "lognormal":
-            # In log-space: log(mean) ± n*std, then exp back
             log_mean = np.log(mean + 1e-10)
             result = np.exp(log_mean + n * std)
-        else:  # normal
+        else:
             result = mean + n * std
         
         return float(result)
@@ -345,3 +335,8 @@ class CoxFDWRAejection(BaseRejectionAlgorithm):
                 'algorithm': 'Cox et al. (2020) FDWRA'
             }
         )
+
+
+# Backward compatibility alias
+CoxFDWRAejection = CoxFDWRARejection
+

@@ -1,8 +1,8 @@
 """
-Window data structures for HVSR Pro
-====================================
+Window Data Structures
+=======================
 
-Defines window objects and state management.
+Defines window objects and state management for HVSR analysis.
 """
 
 import numpy as np

@@ -1,8 +1,8 @@
 """
-Machine Learning-Based Rejection for HVSR Pro
-==============================================
+Machine Learning-Based Rejection Algorithms
+============================================
 
-Isolation Forest and other ML-based anomaly detection methods.
+Isolation Forest and ensemble methods for anomaly detection.
 """
 
 import numpy as np
@@ -15,8 +15,8 @@ try:
 except ImportError:
     HAS_SKLEARN = False
 
-from hvsr_pro.processing.rejection_algorithms import BaseRejectionAlgorithm, RejectionResult
-from hvsr_pro.processing.window_structures import Window, WindowCollection
+from hvsr_pro.processing.rejection.base import BaseRejectionAlgorithm, RejectionResult
+from hvsr_pro.processing.windows import Window, WindowCollection
 
 
 class IsolationForestRejection(BaseRejectionAlgorithm):
@@ -62,7 +62,6 @@ class IsolationForestRejection(BaseRejectionAlgorithm):
     
     def evaluate_collection(self, collection: WindowCollection) -> List[RejectionResult]:
         """Train model and evaluate entire collection."""
-        # Extract features from all windows
         features = self._extract_features(collection)
         
         if features.shape[0] == 0:
@@ -79,10 +78,10 @@ class IsolationForestRejection(BaseRejectionAlgorithm):
         # Predict anomalies (-1 = outlier, 1 = inlier)
         predictions = self.model.predict(features_scaled)
         
-        # Get anomaly scores (more negative = more anomalous)
+        # Get anomaly scores
         scores = self.model.score_samples(features_scaled)
         
-        # Normalize scores to 0-1 range (higher = more anomalous)
+        # Normalize scores to 0-1 range
         min_score = np.min(scores)
         max_score = np.max(scores)
         if max_score > min_score:
@@ -121,7 +120,6 @@ class IsolationForestRejection(BaseRejectionAlgorithm):
                 metadata={}
             )
         
-        # Extract features for this window
         features = self._extract_window_features(window)
         
         if features is None or len(features) == 0:
@@ -132,10 +130,7 @@ class IsolationForestRejection(BaseRejectionAlgorithm):
                 metadata={}
             )
         
-        # Scale features
         features_scaled = self.scaler.transform(features.reshape(1, -1))
-        
-        # Predict
         prediction = self.model.predict(features_scaled)[0]
         score = self.model.score_samples(features_scaled)[0]
         
@@ -177,20 +172,18 @@ class IsolationForestRejection(BaseRejectionAlgorithm):
         
         # Add additional features from raw data
         try:
-            # RMS for each component
             for comp_name in ['east', 'north', 'vertical']:
                 comp = window.data.get_component(comp_name)
                 rms = np.sqrt(np.mean(comp.data ** 2))
                 features.append(rms)
             
-            # Peak-to-RMS ratio
             for comp_name in ['east', 'north', 'vertical']:
                 comp = window.data.get_component(comp_name)
                 rms = np.sqrt(np.mean(comp.data ** 2))
                 peak = np.max(np.abs(comp.data))
                 features.append(peak / (rms + 1e-10))
         except Exception:
-            pass  # Use metrics-only if data extraction fails
+            pass
         
         return np.array(features)
 
@@ -245,7 +238,7 @@ class EnsembleRejection(BaseRejectionAlgorithm):
                 metadata={}
             )
         
-        # Aggregate results based on voting method
+        # Aggregate results
         if self.voting_method == 'majority':
             votes = sum(1 for r in results if r.should_reject)
             should_reject = votes > len(results) / 2
@@ -266,7 +259,6 @@ class EnsembleRejection(BaseRejectionAlgorithm):
         else:
             raise ValueError(f"Unknown voting method: {self.voting_method}")
         
-        # Collect reasons from algorithms that voted to reject
         reject_reasons = [r.reason for r in results if r.should_reject]
         
         return RejectionResult(
@@ -282,7 +274,6 @@ class EnsembleRejection(BaseRejectionAlgorithm):
     
     def evaluate_collection(self, collection: WindowCollection) -> List[RejectionResult]:
         """Evaluate collection using ensemble."""
-        # Get results from each algorithm
         all_results = []
         for algo in self.algorithms:
             if algo.enabled:
@@ -298,7 +289,6 @@ class EnsembleRejection(BaseRejectionAlgorithm):
         for window_idx in range(len(collection.windows)):
             window_results = [algo_results[window_idx] for algo_results in all_results]
             
-            # Aggregate using voting method
             if self.voting_method == 'majority':
                 votes = sum(1 for r in window_results if r.should_reject)
                 should_reject = votes > len(window_results) / 2
@@ -321,3 +311,4 @@ class EnsembleRejection(BaseRejectionAlgorithm):
             ))
         
         return ensemble_results
+

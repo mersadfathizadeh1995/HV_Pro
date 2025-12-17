@@ -1,6 +1,6 @@
 """
-HVSR Data Structures for HVSR Pro
-==================================
+HVSR Data Structures
+=====================
 
 Data structures for HVSR spectral processing results.
 """
@@ -260,3 +260,4 @@ class HVSRResult:
         peak_str = f", {len(self.peaks)} peaks" if self.peaks else ""
         return (f"HVSRResult({self.valid_windows}/{self.total_windows} windows, "
                 f"{len(self.frequencies)} freqs{peak_str})")
+

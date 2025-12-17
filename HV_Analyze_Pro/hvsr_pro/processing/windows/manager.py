@@ -1,6 +1,6 @@
 """
-Window Manager for HVSR Pro
-============================
+Window Manager
+===============
 
 Advanced window management with overlap, tapering, and state tracking.
 """
@@ -11,8 +11,8 @@ from scipy import signal
 import logging
 
 from hvsr_pro.core.data_structures import SeismicData
-from hvsr_pro.processing.window_structures import Window, WindowState, WindowCollection
-from hvsr_pro.processing.quality_metrics import WindowQualityCalculator
+from hvsr_pro.processing.windows.structures import Window, WindowState, WindowCollection
+from hvsr_pro.processing.windows.quality import WindowQualityCalculator
 
 logger = logging.getLogger(__name__)
 

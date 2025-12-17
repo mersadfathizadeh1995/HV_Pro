@@ -30,7 +30,7 @@ from hvsr_pro.core import HVSRDataHandler
 from hvsr_pro.processing import (
     WindowManager, RejectionEngine, HVSRProcessor
 )
-from hvsr_pro.processing.hvsr_structures import HVSRResult
+from hvsr_pro.processing.hvsr import HVSRResult
 from hvsr_pro.visualization import HVSRPlotter
 
 if HAS_PYQT5:
@@ -39,274 +39,14 @@ if HAS_PYQT5:
     from hvsr_pro.gui.layers_dock import WindowLayersDock
     from hvsr_pro.gui.peak_picker_dock import PeakPickerDock
     from hvsr_pro.gui.export_dock import ExportDock
+    from hvsr_pro.gui.azimuthal_properties_dock import AzimuthalPropertiesDock
     # from hvsr_pro.gui.view_mode_selector import ViewModeSelector  # Moved to Properties panel
     from hvsr_pro.gui.data_input_dialog import DataInputDialog
     from hvsr_pro.gui.data_load_tab import DataLoadTab
     from hvsr_pro.gui.azimuthal_tab import AzimuthalTab
+    from hvsr_pro.gui.workers import ProcessingThread
 
 
-class ProcessingThread(QThread):
-    """Background thread for HVSR processing with multi-file support."""
-    
-    progress = pyqtSignal(int, str)
-    finished = pyqtSignal(object, object, object)  # result, windows, data
-    error = pyqtSignal(str)
-    
-    def __init__(self, file_input, window_length, overlap, smoothing_bandwidth, load_mode='single', time_range=None,
-                 freq_min=0.2, freq_max=20.0, n_frequencies=100, qc_mode='balanced', apply_cox_fdwra=False,
-                 use_parallel=False, n_cores=None, manual_sampling_rate=None, custom_qc_settings=None):
-        super().__init__()
-        self.file_input = file_input  # Can be str, list, or dict
-        self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2'
-        self.window_length = window_length
-        self.overlap = overlap
-        self.smoothing_bandwidth = smoothing_bandwidth
-        self.time_range = time_range  # Optional time range filter
-        self.freq_min = freq_min
-        self.freq_max = freq_max
-        self.n_frequencies = n_frequencies
-        self.qc_mode = qc_mode  # QC strictness mode
-        self.apply_cox_fdwra = apply_cox_fdwra  # Apply Cox FDWRA after HVSR
-        self.use_parallel = use_parallel  # Enable parallel processing
-        self.n_cores = n_cores  # Number of cores to use for parallel processing
-        self.manual_sampling_rate = manual_sampling_rate  # Optional manual sampling rate override
-        self.custom_qc_settings = custom_qc_settings  # Optional custom QC settings
-    
-    def run(self):
-        """Execute processing pipeline with multi-file support."""
-        try:
-            # Step 1: Load data
-            handler = HVSRDataHandler()
-            
-            if self.load_mode == 'single':
-                self.progress.emit(10, "Loading seismic data...")
-                data = handler.load_data(self.file_input)
-                
-            elif self.load_mode == 'multi_type1':
-                self.progress.emit(10, f"Loading {len(self.file_input)} MiniSEED files (Type 1)...")
-                data = handler.load_multi_miniseed_type1(self.file_input)
-                
-            elif self.load_mode == 'multi_type2':
-                complete_groups = [g for g in self.file_input.values() 
-                                 if 'E' in g and 'N' in g and 'Z' in g]
-                self.progress.emit(10, f"Loading {len(complete_groups)} file groups (Type 2)...")
-                data = handler.load_multi_miniseed_type2(self.file_input)
-            
-            else:
-                raise ValueError(f"Unknown load mode: {self.load_mode}")
-
-            # Step 1.2: Apply manual sampling rate override (if enabled)
-            if self.manual_sampling_rate:
-                self.progress.emit(12, f"Overriding sampling rate to {self.manual_sampling_rate:.4f} Hz...")
-                data.east.sampling_rate = self.manual_sampling_rate
-                data.north.sampling_rate = self.manual_sampling_rate
-                data.vertical.sampling_rate = self.manual_sampling_rate
-
-            # Step 1.5: Apply time range slicing (if enabled)
-            if self.time_range and self.time_range.get('enabled'):
-                self.progress.emit(15, "Applying time range filter...")
-                
-                start_local = self.time_range['start']
-                end_local = self.time_range['end']
-                tz_offset = self.time_range['timezone_offset']
-                tz_name = self.time_range.get('timezone_name', f'UTC{tz_offset:+d}')
-                
-                self.progress.emit(17, f"Time range: {start_local.strftime('%Y-%m-%d %H:%M')} to {end_local.strftime('%H:%M')} ({tz_name})")
-                
-                try:
-                    # Apply time slicing
-                    data = handler.slice_by_time(data, start_local, end_local, tz_offset)
-                    
-                    duration_hours = data.duration / 3600
-                    self.progress.emit(20, f"Sliced to {duration_hours:.2f} hours")
-                    
-                except ValueError as e:
-                    # Time range error - show detailed message
-                    raise ValueError(f"Time range error: {str(e)}")
-            
-            # Step 2: Create windows
-            self.progress.emit(30, "Creating windows...")
-            manager = WindowManager(
-                window_length=self.window_length,
-                overlap=self.overlap
-            )
-            windows = manager.create_windows(data, calculate_quality=True)
-            
-            # Step 3: Quality control
-            engine = RejectionEngine()
-
-            # Check if QC is completely disabled
-            if self.custom_qc_settings and not self.custom_qc_settings.get('enabled', True):
-                self.progress.emit(50, "Quality control disabled (skipping)...")
-                # Skip QC entirely - all windows remain active
-            elif self.custom_qc_settings and self.qc_mode == 'custom':
-                # Use custom QC settings
-                self.progress.emit(50, "Applying quality control (custom settings)...")
-                self._apply_custom_qc(engine, self.custom_qc_settings)
-                engine.evaluate(windows, auto_apply=True)
-            else:
-                # Use default pipeline
-                self.progress.emit(50, f"Applying quality control ({self.qc_mode} mode)...")
-                engine.create_default_pipeline(mode=self.qc_mode)
-                engine.evaluate(windows, auto_apply=True)
-            
-            # Log QC results
-            self.progress.emit(60, f"QC: {windows.n_active}/{windows.n_windows} windows active ({windows.acceptance_rate*100:.1f}%)")
-            
-            # Check if NO windows passed QC
-            if windows.n_active == 0:
-                self.progress.emit(65, f"ERROR: No windows passed QC (0/{windows.n_windows})")
-                
-                # Create a dummy result with valid but empty data to prevent crash
-                import numpy as np
-                
-                # Create frequency array
-                frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
-                
-                # Create dummy HVSR values (all ones to avoid division issues)
-                dummy_hvsr = np.ones_like(frequencies)
-                
-                result = HVSRResult(
-                    frequencies=frequencies,
-                    mean_hvsr=dummy_hvsr,
-                    median_hvsr=dummy_hvsr,
-                    std_hvsr=np.zeros_like(frequencies),
-                    percentile_16=dummy_hvsr * 0.9,
-                    percentile_84=dummy_hvsr * 1.1,
-                    window_spectra=[],
-                    peaks=[],
-                    total_windows=windows.n_windows,
-                    valid_windows=0,
-                    metadata={'qc_failure': True, 'message': 'No windows passed QC'}
-                )
-                
-                # Emit error but continue to show the empty result
-                self.error.emit("No windows passed QC. Please adjust QC settings or check data quality.")
-                self.finished.emit(result, windows, data)
-                return
-            
-            # If too many rejected, warn but continue
-            if windows.n_active < 10 and windows.n_windows > 50:
-                self.progress.emit(65, f"WARNING: Only {windows.n_active} windows passed QC. Consider relaxing quality settings.")
-            
-            # Step 4: Compute HVSR
-            if self.use_parallel:
-                cores_msg = f" using {self.n_cores} cores" if self.n_cores else ""
-                self.progress.emit(70, f"Computing HVSR (parallel processing{cores_msg})...")
-            else:
-                self.progress.emit(70, "Computing HVSR...")
-
-            # Note: n_cores is stored for future use when HVSRProcessor supports it
-            # Currently, parallel processing uses all available cores
-            processor = HVSRProcessor(
-                smoothing_bandwidth=self.smoothing_bandwidth,
-                f_min=self.freq_min,
-                f_max=self.freq_max,
-                n_frequencies=self.n_frequencies,
-                parallel=self.use_parallel
-            )
-            result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
-            
-            # Step 5: Apply Cox FDWRA (if enabled or SESAME mode)
-            if self.apply_cox_fdwra or self.qc_mode == 'sesame':
-                self.progress.emit(85, "Applying Cox FDWRA (peak consistency)...")
-                
-                # Store raw spectra BEFORE Cox FDWRA rejection (for comparison plot)
-                raw_window_spectra = list(result.window_spectra)  # Copy before modification
-                
-                fdwra_result = engine.evaluate_fdwra(
-                    windows,
-                    result,
-                    n=2.0,
-                    distribution_fn="lognormal",
-                    distribution_mc="lognormal",
-                    search_range_hz=(self.freq_min, self.freq_max),
-                    auto_apply=True
-                )
-                
-                n_rejected = fdwra_result['n_rejected']
-                converged = fdwra_result['converged']
-                iterations = fdwra_result['iterations']
-                
-                self.progress.emit(90, f"Cox FDWRA: {n_rejected} windows rejected, converged in {iterations} iterations")
-                
-                # Recompute HVSR with updated window states
-                if n_rejected > 0:
-                    # Check if Cox FDWRA rejected ALL windows
-                    if windows.n_active == 0:
-                        self.progress.emit(92, f"ERROR: Cox FDWRA rejected all windows")
-                        
-                        # Create dummy result like before
-                        import numpy as np
-                        frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
-                        dummy_hvsr = np.ones_like(frequencies)
-                        
-                        result = HVSRResult(
-                            frequencies=frequencies,
-                            mean_hvsr=dummy_hvsr,
-                            median_hvsr=dummy_hvsr,
-                            std_hvsr=np.zeros_like(frequencies),
-                            percentile_16=dummy_hvsr * 0.9,
-                            percentile_84=dummy_hvsr * 1.1,
-                            window_spectra=[],
-                            peaks=[],
-                            total_windows=windows.n_windows,
-                            valid_windows=0,
-                            metadata={'qc_failure': True, 'message': 'Cox FDWRA rejected all windows'}
-                        )
-                        
-                        self.error.emit("Cox FDWRA rejected all windows. Please disable Cox FDWRA or adjust settings.")
-                        self.finished.emit(result, windows, data)
-                        return
-                    else:
-                        self.progress.emit(92, "Recomputing HVSR after Cox FDWRA...")
-                        result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
-                        
-                        # Store raw spectra in result metadata for comparison plot
-                        result.metadata['raw_window_spectra'] = raw_window_spectra
-                else:
-                    # No rejection, raw and final are the same
-                    result.metadata['raw_window_spectra'] = raw_window_spectra
-            
-            self.progress.emit(100, "Complete!")
-            self.finished.emit(result, windows, data)
-            
-        except Exception as e:
-            import traceback
-            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            self.error.emit(error_detail)
-
-    def _apply_custom_qc(self, engine, settings):
-        """Apply custom QC settings to rejection engine."""
-        from hvsr_pro.processing.rejection_algorithms import QualityThresholdRejection, StatisticalOutlierRejection
-        from hvsr_pro.processing.rejection_advanced import STALTARejection, FrequencyDomainRejection, AmplitudeRejection
-
-        algorithms = settings.get('algorithms', {})
-
-        # Add algorithms based on settings
-        if algorithms.get('amplitude', {}).get('enabled', False):
-            engine.add_algorithm(AmplitudeRejection())
-
-        if algorithms.get('quality_threshold', {}).get('enabled', False):
-            threshold = algorithms['quality_threshold']['params'].get('threshold', 0.5)
-            engine.add_algorithm(QualityThresholdRejection(threshold=threshold))
-
-        if algorithms.get('sta_lta', {}).get('enabled', False):
-            params = algorithms['sta_lta']['params']
-            engine.add_algorithm(STALTARejection(
-                sta_length=params.get('sta_length', 1.0),
-                lta_length=params.get('lta_length', 30.0),
-                min_ratio=params.get('min_ratio', 0.15),
-                max_ratio=params.get('max_ratio', 2.5)
-            ))
-
-        if algorithms.get('frequency_domain', {}).get('enabled', False):
-            spike_threshold = algorithms['frequency_domain']['params'].get('spike_threshold', 3.0)
-            engine.add_algorithm(FrequencyDomainRejection(spike_threshold=spike_threshold))
-
-        if algorithms.get('statistical_outlier', {}).get('enabled', False):
-            threshold = algorithms['statistical_outlier']['params'].get('threshold', 2.0)
-            engine.add_algorithm(StatisticalOutlierRejection(method='iqr', threshold=threshold))
 
 
 class HVSRMainWindow(QMainWindow):
@@ -614,6 +354,7 @@ class HVSRMainWindow(QMainWindow):
         """Handle Cox FDWRA enable checkbox toggle."""
         self.cox_n_spin.setEnabled(checked)
         self.cox_iterations_spin.setEnabled(checked)
+        self.cox_min_iterations_spin.setEnabled(checked)
         self.cox_dist_combo.setEnabled(checked)
 
     def init_ui(self):
@@ -644,7 +385,7 @@ class HVSRMainWindow(QMainWindow):
         processing_outer_layout.setSpacing(5)
 
         # Collapsible data panel at top
-        from hvsr_pro.gui.collapsible_data_panel import CollapsibleDataPanel
+        from hvsr_pro.gui.components import CollapsibleDataPanel
         self.processing_data_panel = CollapsibleDataPanel(title="Loaded Data")
         # Starts collapsed by default
         processing_outer_layout.addWidget(self.processing_data_panel)
@@ -698,6 +439,13 @@ class HVSRMainWindow(QMainWindow):
         # Create export dock
         self.export_dock = ExportDock(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.export_dock)
+        
+        # Create azimuthal properties dock (for azimuthal tab)
+        self.azimuthal_properties_dock = AzimuthalPropertiesDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.azimuthal_properties_dock)
+        
+        # Connect azimuthal properties dock signals
+        self.azimuthal_properties_dock.plot_options_changed.connect(self._on_azimuthal_options_changed)
 
         # Stack docks (layers, peak picker, properties, export as tabs)
         self.tabifyDockWidget(self.layers_dock, self.peak_picker_dock)
@@ -710,6 +458,7 @@ class HVSRMainWindow(QMainWindow):
         self.peak_picker_dock.setVisible(False)
         self.properties_dock.setVisible(False)
         self.export_dock.setVisible(False)
+        self.azimuthal_properties_dock.setVisible(False)
         
         # Connect layer dock references
         self.layers_dock.set_references(self.plot_manager, None)  # Windows set later
@@ -743,27 +492,31 @@ class HVSRMainWindow(QMainWindow):
             index: Tab index (0 = Data Load, 1 = Processing, 2 = Azimuthal)
         """
         if index == 0:  # Data Load tab
-            # Hide processing docks
+            # Hide all docks
             self.layers_dock.setVisible(False)
             self.peak_picker_dock.setVisible(False)
             self.properties_dock.setVisible(False)
             self.export_dock.setVisible(False)
+            self.azimuthal_properties_dock.setVisible(False)
             self.status_bar.showMessage("Data Load mode - Load and preview seismic data")
 
         elif index == 1:  # Processing tab
-            # Show processing docks
+            # Show processing docks, hide azimuthal dock
             self.layers_dock.setVisible(True)
             self.peak_picker_dock.setVisible(True)
             self.properties_dock.setVisible(True)
             self.export_dock.setVisible(True)
+            self.azimuthal_properties_dock.setVisible(False)
             self.status_bar.showMessage("Processing mode - Configure and run HVSR analysis")
 
         elif index == 2:  # Azimuthal tab
-            # Hide most docks for azimuthal (it has its own UI)
+            # Hide processing docks, show azimuthal properties dock
             self.layers_dock.setVisible(False)
             self.peak_picker_dock.setVisible(False)
             self.properties_dock.setVisible(False)
             self.export_dock.setVisible(False)
+            self.azimuthal_properties_dock.setVisible(True)
+            self.azimuthal_properties_dock.raise_()  # Bring to front
             self.status_bar.showMessage("Azimuthal mode - Analyze directional site response")
             
             # Pass windows to azimuthal tab if available
@@ -1167,12 +920,23 @@ class HVSRMainWindow(QMainWindow):
         self.cox_iterations_spin.setToolTip("Maximum iterations for convergence")
         cox_params_layout.addWidget(self.cox_iterations_spin, 1, 1)
 
-        cox_params_layout.addWidget(QLabel("Distribution:"), 2, 0)
+        cox_params_layout.addWidget(QLabel("Min Iter:"), 2, 0)
+        self.cox_min_iterations_spin = QSpinBox()
+        self.cox_min_iterations_spin.setRange(1, 20)
+        self.cox_min_iterations_spin.setValue(1)
+        self.cox_min_iterations_spin.setEnabled(False)
+        self.cox_min_iterations_spin.setToolTip(
+            "Minimum iterations before checking convergence.\n"
+            "Set higher to force more rejection passes even if convergence is reached early."
+        )
+        cox_params_layout.addWidget(self.cox_min_iterations_spin, 2, 1)
+
+        cox_params_layout.addWidget(QLabel("Distribution:"), 3, 0)
         self.cox_dist_combo = QComboBox()
         self.cox_dist_combo.addItems(["lognormal", "normal"])
         self.cox_dist_combo.setEnabled(False)
         self.cox_dist_combo.setToolTip("Statistical distribution for peak modeling")
-        cox_params_layout.addWidget(self.cox_dist_combo, 2, 1)
+        cox_params_layout.addWidget(self.cox_dist_combo, 3, 1)
 
         cox_group_layout.addLayout(cox_params_layout)
         layout.addWidget(cox_group)
@@ -1694,12 +1458,21 @@ class HVSRMainWindow(QMainWindow):
         # Determine which custom settings to use
         final_custom_settings = custom_qc_from_ui if custom_qc_from_ui else self.custom_qc_settings
         
+        # Get Cox FDWRA specific settings
+        cox_fdwra_settings = {
+            'n': self.cox_n_spin.value(),
+            'max_iterations': self.cox_iterations_spin.value(),
+            'min_iterations': self.cox_min_iterations_spin.value(),
+            'distribution': self.cox_dist_combo.currentText()
+        }
+        
         # Start processing thread with load mode and time range
         self.thread = ProcessingThread(
             self.current_file, window_length, overlap, smoothing,
             self.load_mode, self.current_time_range,
             freq_min, freq_max, n_frequencies, qc_mode, apply_cox_fdwra, use_parallel,
-            n_cores, manual_sampling_rate, final_custom_settings
+            n_cores, manual_sampling_rate, final_custom_settings,
+            cox_fdwra_settings
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)
@@ -2267,7 +2040,7 @@ class HVSRMainWindow(QMainWindow):
         
         if file_path:
             try:
-                from hvsr_pro.processing.hvsr_structures import HVSRResult
+                from hvsr_pro.processing.hvsr import HVSRResult
                 result = HVSRResult.load(file_path)
                 self.hvsr_result = result
                 self.add_info(f"Session loaded: {file_path}")
@@ -2295,7 +2068,7 @@ class HVSRMainWindow(QMainWindow):
         self.add_info(f"Peak detection: mode={mode}, settings={settings}")
         
         try:
-            from hvsr_pro.processing.peak_detection import find_top_n_peaks, find_multi_peaks
+            from hvsr_pro.processing.windows import find_top_n_peaks, find_multi_peaks
             
             frequencies = self.hvsr_result.frequencies
             mean_hvsr = self.hvsr_result.mean_hvsr
@@ -2383,6 +2156,23 @@ class HVSRMainWindow(QMainWindow):
         
         # Replot with properties
         self.replot_with_properties(properties)
+    
+    def _on_azimuthal_options_changed(self, options: dict):
+        """
+        Handle azimuthal plot options changes from properties dock.
+        
+        Args:
+            options: Dictionary with plot options from AzimuthalPropertiesDock
+        """
+        if not hasattr(self, 'azimuthal_tab') or not self.azimuthal_tab.result:
+            return
+        
+        # Update the azimuthal tab plot with new options
+        try:
+            self.azimuthal_tab.update_plot_with_options(options)
+            self.add_info(f"Azimuthal plot updated: {options.get('cmap', 'default')} colormap")
+        except Exception as e:
+            self.add_info(f"Error updating azimuthal plot: {str(e)}")
     
     def replot_with_properties(self, properties):
         """

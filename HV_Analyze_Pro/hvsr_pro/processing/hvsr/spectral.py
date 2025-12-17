@@ -1,8 +1,8 @@
 """
-Spectral Processing for HVSR Pro
-=================================
+Spectral Processing Functions
+==============================
 
-FFT computation, smoothing, and spectral analysis.
+FFT computation, Konno-Ohmachi smoothing, and spectral analysis.
 """
 
 import numpy as np
@@ -90,12 +90,10 @@ def konno_ohmachi_smoothing(frequencies: np.ndarray,
         fc = frequencies[i]  # Center frequency
         
         # Calculate smoothing window for this center frequency
-        # Avoid division by zero and log(0)
         ratio = frequencies / fc
         ratio = np.maximum(ratio, 1e-10)
         
         # Konno-Ohmachi window function
-        # W(f, fc) = [sin(b * log10(f/fc)) / (b * log10(f/fc))]^4
         log_ratio = np.log10(ratio)
         
         # Handle the case where log_ratio = 0 (f = fc)
@@ -198,19 +196,13 @@ def calculate_horizontal_spectrum(east_spectrum: np.ndarray,
         Combined horizontal spectrum
     """
     if method == 'geometric_mean':
-        # SESAME 2004 recommendation
         return np.sqrt(east_spectrum * north_spectrum)
-    
     elif method == 'arithmetic_mean':
         return (east_spectrum + north_spectrum) / 2.0
-    
     elif method == 'quadratic':
-        # Vector magnitude
         return np.sqrt(east_spectrum**2 + north_spectrum**2)
-    
     elif method == 'maximum':
         return np.maximum(east_spectrum, north_spectrum)
-    
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -229,7 +221,6 @@ def calculate_hvsr(horizontal_spectrum: np.ndarray,
     Returns:
         H/V ratio
     """
-    # Avoid division by zero
     vertical_safe = np.maximum(vertical_spectrum, epsilon)
     return horizontal_spectrum / vertical_safe
 
@@ -268,18 +259,13 @@ def resample_spectrum(frequencies: np.ndarray,
         Resampled spectrum
     """
     if method == 'log':
-        # Log-log interpolation (better for spectral data)
         log_freq = np.log10(frequencies)
         log_spec = np.log10(spectrum)
         log_target = np.log10(target_frequencies)
-        
-        # Interpolate
         log_resampled = np.interp(log_target, log_freq, log_spec)
         return 10 ** log_resampled
-    
     elif method == 'linear':
         return np.interp(target_frequencies, frequencies, spectrum)
-    
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -290,8 +276,6 @@ def logspace_frequencies(f_min: float = 0.1,
     """
     Generate logarithmically-spaced frequency array.
     
-    Useful for HVSR analysis which covers wide frequency range.
-    
     Args:
         f_min: Minimum frequency (Hz)
         f_max: Maximum frequency (Hz)
@@ -301,3 +285,4 @@ def logspace_frequencies(f_min: float = 0.1,
         Frequency array
     """
     return np.logspace(np.log10(f_min), np.log10(f_max), n_points)
+

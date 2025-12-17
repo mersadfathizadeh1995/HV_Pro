@@ -1,33 +1,39 @@
 """
-HVSR Processor for HVSR Pro
-============================
+HVSR Processor
+===============
 
 Main class for computing HVSR from window collections.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, TYPE_CHECKING
 import numpy as np
 from multiprocessing import Pool, cpu_count
-from functools import partial
 
-from hvsr_pro.processing.window_structures import WindowCollection, Window
-from hvsr_pro.processing.hvsr_structures import HVSRResult, WindowSpectrum, Peak
-from hvsr_pro.processing.spectral_processing import (
+if TYPE_CHECKING:
+    from hvsr_pro.processing.windows.structures import WindowCollection, Window
+
+from hvsr_pro.processing.hvsr.structures import HVSRResult, WindowSpectrum, Peak
+from hvsr_pro.processing.hvsr.spectral import (
     compute_fft,
     konno_ohmachi_smoothing_fast,
     calculate_horizontal_spectrum,
     calculate_hvsr,
-    frequency_range_mask,
     logspace_frequencies
 )
-from hvsr_pro.processing.peak_detection import (
-    detect_peaks,
-    identify_fundamental_peak,
-    refine_peak_frequency
-)
+
+# Import window structures directly to avoid circular imports
+# Peak detection is imported lazily in _detect_peaks method
 
 logger = logging.getLogger(__name__)
+
+
+def _get_window_classes():
+    """Lazy import to avoid circular dependencies."""
+    from hvsr_pro.processing.windows.structures import WindowCollection, Window
+    return WindowCollection, Window
 
 
 def _process_single_window_parallel(args):
@@ -45,7 +51,6 @@ def _process_single_window_parallel(args):
     window, target_frequencies, smoothing_bandwidth, horizontal_method, taper = args
     
     try:
-        # Get sampling rate
         sampling_rate = window.data.sampling_rate
         
         # Validate data
@@ -142,9 +147,9 @@ class HVSRProcessor:
             f_min: Minimum frequency in Hz (default: 0.2)
             f_max: Maximum frequency in Hz (default: 20.0)
             n_frequencies: Number of frequency points (default: 100)
-            parallel: Enable parallel processing for windows (default: False, experimental)
-            horizontal_method: Method for combining horizontal components (default: 'geometric_mean')
-            taper: Taper window type ('hann', 'hamming', 'blackman', None) (default: 'hann')
+            parallel: Enable parallel processing for windows (default: False)
+            horizontal_method: Method for combining horizontal components
+            taper: Taper window type ('hann', 'hamming', 'blackman', None)
         """
         self.smoothing_bandwidth = smoothing_bandwidth
         self.f_min = f_min
@@ -152,13 +157,13 @@ class HVSRProcessor:
         self.n_frequencies = n_frequencies
         self.parallel = parallel
         self.horizontal_method = horizontal_method
-        self.taper = taper if taper else None  # Convert empty string to None
-        self.use_only_active = True  # Always use only active windows
+        self.taper = taper if taper else None
+        self.use_only_active = True
         
         # Generate target frequency array (log-spaced)
         self.target_frequencies = logspace_frequencies(f_min, f_max, n_frequencies)
         
-        logger.info(f"HVSRProcessor initialized: b={smoothing_bandwidth}, f=[{f_min}, {f_max}] Hz, parallel={parallel}")
+        logger.info(f"HVSRProcessor initialized: b={smoothing_bandwidth}, f=[{f_min}, {f_max}] Hz")
     
     def process(self,
                 windows: WindowCollection,
@@ -195,21 +200,18 @@ class HVSRProcessor:
         
         if self.parallel and len(window_list) > 20:
             # Parallel processing for large datasets
-            n_workers = max(1, cpu_count() - 1)  # Leave one core free
+            n_workers = max(1, cpu_count() - 1)
             logger.info(f"Using parallel processing with {n_workers} workers")
             
-            # Prepare arguments for parallel processing
             args_list = [
                 (window, self.target_frequencies, self.smoothing_bandwidth, 
                  self.horizontal_method, self.taper)
                 for window in window_list
             ]
             
-            # Process in parallel
             with Pool(processes=n_workers) as pool:
                 results = pool.map(_process_single_window_parallel, args_list)
             
-            # Collect results
             for i, (spectrum, error) in enumerate(results):
                 if spectrum is not None:
                     window_spectra.append(spectrum)
@@ -221,9 +223,6 @@ class HVSRProcessor:
         
         else:
             # Sequential processing (default)
-            if self.parallel and len(window_list) <= 20:
-                logger.info("Parallel processing disabled for small datasets (<20 windows)")
-            
             for i, window in enumerate(window_list):
                 try:
                     spectrum = self._process_window(window)
@@ -234,7 +233,6 @@ class HVSRProcessor:
                     error_detail = f"{str(e)}\n{traceback.format_exc()}"
                     logger.error(f"Failed to process window {window.index}: {error_detail}")
                     failed_windows.append((window.index, str(e)))
-                    # Log first 3 failures in detail, then just count
                     if i < 3:
                         logger.error(f"Window {window.index} failure details:\n{error_detail}")
                     continue
@@ -246,7 +244,7 @@ class HVSRProcessor:
             raise ValueError(error_msg)
         
         # Stack into array for statistics
-        hvsr_array = np.array(hvsr_curves)  # Shape: (n_windows, n_frequencies)
+        hvsr_array = np.array(hvsr_curves)
         
         # Compute statistics
         mean_hvsr = np.mean(hvsr_array, axis=0)
@@ -286,14 +284,12 @@ class HVSRProcessor:
     
     def _process_window(self, window: Window) -> WindowSpectrum:
         """Process a single window."""
-        # Get sampling rate
         sampling_rate = window.data.sampling_rate
         
         # Validate data
         if window.data.east is None or window.data.north is None or window.data.vertical is None:
             raise ValueError("Window missing component data")
         
-        # Check for valid data
         if len(window.data.east.data) == 0:
             raise ValueError("East component has no data")
         if len(window.data.north.data) == 0:
@@ -342,7 +338,9 @@ class HVSRProcessor:
     
     def _detect_peaks(self, frequencies: np.ndarray, hvsr: np.ndarray) -> List[Peak]:
         """Detect and refine peaks."""
-        # Initial peak detection
+        # Lazy import to avoid circular dependency
+        from hvsr_pro.processing.windows.peaks import detect_peaks, refine_peak_frequency
+        
         peaks = detect_peaks(
             frequencies,
             hvsr,
@@ -389,3 +387,4 @@ class HVSRProcessor:
         return (f"HVSRProcessor(f=[{self.f_min}-{self.f_max}]Hz, "
                 f"smoothing=KO{self.smoothing_bandwidth}, "
                 f"method={self.horizontal_method})")
+

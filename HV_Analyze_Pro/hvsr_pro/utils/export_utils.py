@@ -9,7 +9,7 @@ import numpy as np
 import csv
 from pathlib import Path
 from typing import Optional
-from hvsr_pro.processing.hvsr_structures import HVSRResult
+from hvsr_pro.processing.hvsr import HVSRResult
 
 
 def export_hvsr_curve_csv(hvsr_result: HVSRResult,

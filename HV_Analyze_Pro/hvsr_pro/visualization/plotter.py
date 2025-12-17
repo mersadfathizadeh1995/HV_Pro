@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
-from hvsr_pro.processing.hvsr_structures import HVSRResult
-from hvsr_pro.processing.window_structures import WindowCollection, Window
+from hvsr_pro.processing.hvsr import HVSRResult
+from hvsr_pro.processing.windows import WindowCollection, Window
 from hvsr_pro.visualization.hvsr_plots import (
     plot_hvsr_curve,
     plot_hvsr_comparison,

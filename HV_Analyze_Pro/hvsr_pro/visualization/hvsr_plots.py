@@ -12,7 +12,7 @@ from matplotlib.axes import Axes
 from typing import Optional, List, Tuple, Dict, Any
 from pathlib import Path
 
-from hvsr_pro.processing.hvsr_structures import HVSRResult, Peak
+from hvsr_pro.processing.hvsr import HVSRResult, Peak
 
 
 def _calculate_smart_annotation_position(peak_x, peak_y, ax, x_data, y_data):

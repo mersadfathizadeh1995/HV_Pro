@@ -28,52 +28,8 @@ try:
 except ImportError:
     pass
 
-from hvsr_pro.gui.collapsible_data_panel import CollapsibleDataPanel
-
-
-class AzimuthalProcessingThread(QThread):
-    """Background thread for azimuthal HVSR processing."""
-    
-    progress = pyqtSignal(int, str)
-    finished = pyqtSignal(object)  # AzimuthalHVSRResult
-    error = pyqtSignal(str)
-    
-    def __init__(self, windows, settings):
-        super().__init__()
-        self.windows = windows
-        self.settings = settings
-    
-    def run(self):
-        """Execute azimuthal processing."""
-        try:
-            from hvsr_pro.processing.azimuthal import AzimuthalHVSRProcessor
-            
-            # Create processor
-            processor = AzimuthalHVSRProcessor(
-                azimuths=np.arange(
-                    self.settings['azimuth_start'],
-                    self.settings['azimuth_end'],
-                    self.settings['azimuth_step']
-                ),
-                smoothing_bandwidth=self.settings['smoothing_bandwidth'],
-                f_min=self.settings['f_min'],
-                f_max=self.settings['f_max'],
-                n_frequencies=self.settings['n_frequencies'],
-                parallel=self.settings['parallel'],
-                n_workers=self.settings.get('n_workers')
-            )
-            
-            # Process with progress callback
-            def progress_callback(progress, message):
-                self.progress.emit(progress, message)
-            
-            result = processor.process(self.windows, progress_callback=progress_callback)
-            
-            self.finished.emit(result)
-            
-        except Exception as e:
-            import traceback
-            self.error.emit(f"{str(e)}\n\n{traceback.format_exc()}")
+from hvsr_pro.gui.components import CollapsibleDataPanel
+from hvsr_pro.gui.workers import AzimuthalProcessingThread
 
 
 if HAS_PYQT5:
@@ -510,6 +466,11 @@ if HAS_PYQT5:
             
             # Update plot
             self.update_plot()
+            
+            # Update azimuthal properties dock if available
+            parent = self.parent()
+            if parent and hasattr(parent, 'azimuthal_properties_dock'):
+                parent.azimuthal_properties_dock.set_result(result, self.figure)
         
         def on_processing_error(self, error_msg: str):
             """Handle processing error."""
@@ -519,8 +480,12 @@ if HAS_PYQT5:
             
             QMessageBox.critical(self, "Processing Error", error_msg)
         
-        def update_plot(self):
-            """Update the plot based on current view selection."""
+        def update_plot(self, options: dict = None):
+            """Update the plot based on current view selection.
+            
+            Args:
+                options: Optional dictionary with plot options from properties dock
+            """
             if not self.result:
                 return
             
@@ -530,21 +495,36 @@ if HAS_PYQT5:
                 plot_azimuthal_summary
             )
             
-            view = self.view_combo.currentData()
-            cmap = self.cmap_combo.currentText()
+            # Get options from dock or use defaults
+            if options is None:
+                view = self.view_combo.currentData()
+                cmap = self.cmap_combo.currentText()
+                legend_loc = "outside_right"
+                show_peaks = True
+                show_individual = True
+                show_labels = True
+            else:
+                view = options.get('figure_type', self.view_combo.currentData())
+                cmap = options.get('cmap', self.cmap_combo.currentText())
+                legend_loc = options.get('legend_loc', 'outside_right')
+                show_peaks = options.get('show_peaks', True)
+                show_individual = options.get('show_individual_curves', True)
+                show_labels = options.get('show_panel_labels', True)
             
             self.figure.clear()
             
             try:
                 if view == "summary":
-                    plot_azimuthal_summary(
+                    fig, axes = plot_azimuthal_summary(
                         self.result,
                         figsize=(10, 8),
-                        dpi=100
+                        dpi=100,
+                        cmap=cmap,
+                        legend_loc=legend_loc,
+                        plot_mean_curve_peak_by_azimuth=show_peaks,
+                        plot_individual_curves=show_individual,
+                        show_panel_labels=show_labels
                     )
-                    # Copy to our figure
-                    self.figure.clear()
-                    fig, axes = plot_azimuthal_summary(self.result)
                     # Replace figure
                     self.figure = fig
                     self.canvas.figure = fig
@@ -554,7 +534,8 @@ if HAS_PYQT5:
                     plot_azimuthal_contour_3d(
                         self.result,
                         ax=ax,
-                        cmap=cmap
+                        cmap=cmap,
+                        plot_mean_curve_peak_by_azimuth=show_peaks
                     )
                     
                 elif view == "2d":
@@ -562,13 +543,27 @@ if HAS_PYQT5:
                     plot_azimuthal_contour_2d(
                         self.result,
                         ax=ax,
-                        cmap=cmap
+                        cmap=cmap,
+                        plot_mean_curve_peak_by_azimuth=show_peaks
                     )
                 
                 self.canvas.draw()
                 
+                # Update properties dock figure reference
+                parent = self.parent()
+                if parent and hasattr(parent, 'azimuthal_properties_dock'):
+                    parent.azimuthal_properties_dock.figure = self.figure
+                
             except Exception as e:
                 self.status_label.setText(f"Plot error: {str(e)}")
+        
+        def update_plot_with_options(self, options: dict):
+            """Update plot with options from properties dock.
+            
+            Args:
+                options: Dictionary with plot options
+            """
+            self.update_plot(options)
         
         def export_plot(self, format_type: str):
             """Export current plot."""

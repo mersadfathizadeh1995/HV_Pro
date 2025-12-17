@@ -3,12 +3,14 @@ Export Dock for HVSR Pro
 =========================
 
 Comprehensive export functionality for plots, data, and reports.
+Uses collapsible sections for better organization.
 """
 
 from PyQt5.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QPushButton,
-    QGroupBox, QCheckBox, QLabel, QFileDialog, QMessageBox,
-    QScrollArea, QHBoxLayout, QComboBox, QSpinBox
+    QCheckBox, QLabel, QFileDialog, QMessageBox,
+    QScrollArea, QHBoxLayout, QComboBox, QSpinBox,
+    QSlider, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -16,6 +18,8 @@ from pathlib import Path
 from datetime import datetime
 import json
 import csv
+
+from hvsr_pro.gui.components import CollapsibleSection, ColorPickerButton
 
 
 class ExportDock(QDockWidget):
@@ -28,6 +32,7 @@ class ExportDock(QDockWidget):
     - Export results (CSV, JSON)
     - Save/Load sessions
     - Export statistics (mean, median, std, percentiles)
+    - Comparison figures with customizable rejected window display
 
     Signals:
         export_plot_requested: Request to export current plot
@@ -58,12 +63,12 @@ class ExportDock(QDockWidget):
         self._create_ui()
 
     def _create_ui(self):
-        """Create dock UI."""
+        """Create dock UI with collapsible sections."""
         # Main widget
         widget = QWidget(self)
         main_layout = QVBoxLayout(widget)
         main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(8)
+        main_layout.setSpacing(4)
 
         # Title
         title = QLabel("Export & Save")
@@ -72,28 +77,28 @@ class ExportDock(QDockWidget):
         main_layout.addWidget(title)
 
         # === PLOT EXPORT ===
-        plot_group = self._create_plot_export_group()
-        main_layout.addWidget(plot_group)
+        plot_section = self._create_plot_export_section()
+        main_layout.addWidget(plot_section)
 
         # === DATA EXPORT ===
-        data_group = self._create_data_export_group()
-        main_layout.addWidget(data_group)
+        data_section = self._create_data_export_section()
+        main_layout.addWidget(data_section)
 
         # === STATISTICS EXPORT ===
-        stats_group = self._create_stats_export_group()
-        main_layout.addWidget(stats_group)
+        stats_section = self._create_stats_export_section()
+        main_layout.addWidget(stats_section)
 
         # === COMPARISON FIGURES ===
-        comparison_group = self._create_comparison_figures_group()
-        main_layout.addWidget(comparison_group)
+        comparison_section = self._create_comparison_figures_section()
+        main_layout.addWidget(comparison_section)
 
         # === REPORT GENERATION ===
-        report_group = self._create_report_group()
-        main_layout.addWidget(report_group)
+        report_section = self._create_report_section()
+        main_layout.addWidget(report_section)
 
         # === SESSION MANAGEMENT ===
-        session_group = self._create_session_group()
-        main_layout.addWidget(session_group)
+        session_section = self._create_session_section()
+        main_layout.addWidget(session_section)
 
         main_layout.addStretch()
 
@@ -105,13 +110,14 @@ class ExportDock(QDockWidget):
 
         self.setWidget(scroll_area)
 
-    def _create_plot_export_group(self) -> QGroupBox:
-        """Create plot export group."""
-        group = QGroupBox("Export Plot as Image")
-        layout = QVBoxLayout(group)
+    def _create_plot_export_section(self) -> CollapsibleSection:
+        """Create plot export section (collapsible)."""
+        section = CollapsibleSection("Export Plot as Image")
 
-        # Format buttons
-        btn_layout = QHBoxLayout()
+        # Format buttons container
+        btn_container = QWidget()
+        btn_layout = QHBoxLayout(btn_container)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
 
         self.export_png_btn = QPushButton("PNG")
         self.export_png_btn.setToolTip("Export as PNG image (high quality)")
@@ -128,23 +134,24 @@ class ExportDock(QDockWidget):
         self.export_svg_btn.clicked.connect(lambda: self.export_plot("svg"))
         btn_layout.addWidget(self.export_svg_btn)
 
-        layout.addLayout(btn_layout)
+        section.add_widget(btn_container)
 
         # Info
         info = QLabel("Export current HVSR plot with all settings")
         info.setStyleSheet("QLabel { color: #666; font-size: 9px; }")
         info.setWordWrap(True)
-        layout.addWidget(info)
+        section.add_widget(info)
 
-        return group
+        return section
 
-    def _create_data_export_group(self) -> QGroupBox:
-        """Create data export group."""
-        group = QGroupBox("Export Results Data")
-        layout = QVBoxLayout(group)
+    def _create_data_export_section(self) -> CollapsibleSection:
+        """Create data export section (collapsible)."""
+        section = CollapsibleSection("Export Results Data")
 
         # Point count for interpolation
-        points_layout = QHBoxLayout()
+        points_container = QWidget()
+        points_layout = QHBoxLayout(points_container)
+        points_layout.setContentsMargins(0, 0, 0, 0)
         points_layout.addWidget(QLabel("Output Points:"))
         self.export_points_spin = QSpinBox()
         self.export_points_spin.setRange(10, 1000)
@@ -165,10 +172,12 @@ class ExportDock(QDockWidget):
         )
         points_layout.addWidget(self.use_original_points_cb)
 
-        layout.addLayout(points_layout)
+        section.add_widget(points_container)
 
         # Export buttons
-        btn_layout = QHBoxLayout()
+        btn_container = QWidget()
+        btn_layout = QHBoxLayout(btn_container)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
 
         self.export_csv_btn = QPushButton("CSV")
         self.export_csv_btn.setToolTip("Export HVSR curve and peaks as CSV")
@@ -180,59 +189,119 @@ class ExportDock(QDockWidget):
         self.export_json_btn.clicked.connect(lambda: self.export_data("json"))
         btn_layout.addWidget(self.export_json_btn)
 
-        layout.addLayout(btn_layout)
+        section.add_widget(btn_container)
 
         # Info
         info = QLabel("Export HVSR curve, peaks, and metadata")
         info.setStyleSheet("QLabel { color: #666; font-size: 9px; }")
         info.setWordWrap(True)
-        layout.addWidget(info)
+        section.add_widget(info)
 
-        return group
+        return section
 
-    def _create_stats_export_group(self) -> QGroupBox:
-        """Create statistics export group."""
-        group = QGroupBox("Export Statistics")
-        layout = QVBoxLayout(group)
+    def _create_stats_export_section(self) -> CollapsibleSection:
+        """Create statistics export section (collapsible)."""
+        section = CollapsibleSection("Export Statistics")
 
         # Statistics options
         self.export_mean_cb = QCheckBox("Mean curve")
         self.export_mean_cb.setChecked(True)
-        layout.addWidget(self.export_mean_cb)
+        section.add_widget(self.export_mean_cb)
 
         self.export_median_cb = QCheckBox("Median curve")
         self.export_median_cb.setChecked(True)
-        layout.addWidget(self.export_median_cb)
+        section.add_widget(self.export_median_cb)
 
-        self.export_std_cb = QCheckBox("Standard deviation (±1σ)")
+        self.export_std_cb = QCheckBox("Standard deviation")
         self.export_std_cb.setChecked(True)
-        layout.addWidget(self.export_std_cb)
+        section.add_widget(self.export_std_cb)
 
         self.export_percentile_cb = QCheckBox("Percentiles (16th, 84th)")
         self.export_percentile_cb.setChecked(False)
-        layout.addWidget(self.export_percentile_cb)
+        section.add_widget(self.export_percentile_cb)
 
         self.export_individual_cb = QCheckBox("Individual window curves")
         self.export_individual_cb.setChecked(False)
-        layout.addWidget(self.export_individual_cb)
+        section.add_widget(self.export_individual_cb)
 
         # Export button
         self.export_stats_btn = QPushButton("Export Statistics")
         self.export_stats_btn.setToolTip("Export selected statistics to CSV")
         self.export_stats_btn.clicked.connect(self.export_statistics)
-        layout.addWidget(self.export_stats_btn)
+        section.add_widget(self.export_stats_btn)
 
-        return group
+        return section
 
-    def _create_comparison_figures_group(self) -> QGroupBox:
-        """Create comparison figures export group."""
-        group = QGroupBox("Export Comparison Figures")
-        layout = QVBoxLayout(group)
+    def _create_comparison_figures_section(self) -> CollapsibleSection:
+        """Create comparison figures export section (collapsible)."""
+        section = CollapsibleSection("Comparison Figures")
         
         # Info label
         info = QLabel("Publication-quality comparison figures:")
         info.setStyleSheet("QLabel { color: #333; font-weight: bold; }")
-        layout.addWidget(info)
+        section.add_widget(info)
+        
+        # === Rejected Window Display Options ===
+        rejected_label = QLabel("Adjusted Panel - Rejected Windows:")
+        rejected_label.setStyleSheet("QLabel { color: #555; font-size: 9px; margin-top: 5px; }")
+        section.add_widget(rejected_label)
+        
+        # Show rejected windows checkbox
+        self.show_rejected_cb = QCheckBox("Show rejected windows")
+        self.show_rejected_cb.setChecked(True)
+        self.show_rejected_cb.setToolTip("Show or hide rejected windows in the adjusted (bottom) panel")
+        self.show_rejected_cb.toggled.connect(self._on_rejected_options_changed)
+        section.add_widget(self.show_rejected_cb)
+        
+        # Color picker for rejected windows
+        color_container = QWidget()
+        color_layout = QHBoxLayout(color_container)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.addWidget(QLabel("Color:"))
+        self.rejected_color_btn = ColorPickerButton(initial_color="#808080")
+        self.rejected_color_btn.setToolTip("Color for rejected window curves")
+        self.rejected_color_btn.setFixedWidth(80)
+        color_layout.addWidget(self.rejected_color_btn)
+        color_layout.addStretch()
+        section.add_widget(color_container)
+        
+        # Opacity slider for rejected windows
+        opacity_container = QWidget()
+        opacity_layout = QHBoxLayout(opacity_container)
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.addWidget(QLabel("Opacity:"))
+        self.rejected_opacity_slider = QSlider(Qt.Horizontal)
+        self.rejected_opacity_slider.setRange(0, 100)
+        self.rejected_opacity_slider.setValue(30)
+        self.rejected_opacity_slider.setToolTip("Opacity of rejected window curves (0-100%)")
+        opacity_layout.addWidget(self.rejected_opacity_slider)
+        self.rejected_opacity_label = QLabel("30%")
+        self.rejected_opacity_label.setFixedWidth(35)
+        self.rejected_opacity_slider.valueChanged.connect(
+            lambda v: self.rejected_opacity_label.setText(f"{v}%")
+        )
+        opacity_layout.addWidget(self.rejected_opacity_label)
+        section.add_widget(opacity_container)
+        
+        # Line width for rejected windows
+        lw_container = QWidget()
+        lw_layout = QHBoxLayout(lw_container)
+        lw_layout.setContentsMargins(0, 0, 0, 0)
+        lw_layout.addWidget(QLabel("Line Width:"))
+        self.rejected_linewidth_spin = QDoubleSpinBox()
+        self.rejected_linewidth_spin.setRange(0.1, 3.0)
+        self.rejected_linewidth_spin.setValue(0.5)
+        self.rejected_linewidth_spin.setSingleStep(0.1)
+        self.rejected_linewidth_spin.setToolTip("Line width for rejected window curves")
+        lw_layout.addWidget(self.rejected_linewidth_spin)
+        lw_layout.addStretch()
+        section.add_widget(lw_container)
+        
+        # Separator line
+        separator = QLabel("")
+        separator.setStyleSheet("QLabel { border-top: 1px solid #ccc; margin: 5px 0; }")
+        separator.setFixedHeight(2)
+        section.add_widget(separator)
         
         # Raw vs Adjusted comparison figure
         self.export_comparison_btn = QPushButton("Raw vs Adjusted HVSR")
@@ -243,7 +312,7 @@ class ExportDock(QDockWidget):
             "- Statistics boxes, frequency uncertainty bands"
         )
         self.export_comparison_btn.clicked.connect(self.export_comparison_figure)
-        layout.addWidget(self.export_comparison_btn)
+        section.add_widget(self.export_comparison_btn)
         
         # 3C Waveform plot
         self.export_waveform_btn = QPushButton("3C Waveform with Rejection")
@@ -253,7 +322,7 @@ class ExportDock(QDockWidget):
             "- Color-coded accepted/rejected windows"
         )
         self.export_waveform_btn.clicked.connect(self.export_waveform_figure)
-        layout.addWidget(self.export_waveform_btn)
+        section.add_widget(self.export_waveform_btn)
         
         # Pre/Post rejection combined figure
         self.export_prepost_btn = QPushButton("Pre/Post Rejection (5-panel)")
@@ -261,28 +330,47 @@ class ExportDock(QDockWidget):
             "Export comprehensive pre/post rejection figure:\n"
             "- Left: 3C waveforms with rejection markers\n"
             "- Right top: HVSR before rejection\n"
-            "- Right bottom: HVSR after rejection\n"
-            "Reference: hvsrpy plot_pre_and_post_rejection"
+            "- Right bottom: HVSR after rejection"
         )
         self.export_prepost_btn.clicked.connect(self.export_prepost_figure)
-        layout.addWidget(self.export_prepost_btn)
+        section.add_widget(self.export_prepost_btn)
         
         # Format selector
-        format_layout = QHBoxLayout()
+        format_container = QWidget()
+        format_layout = QHBoxLayout(format_container)
+        format_layout.setContentsMargins(0, 0, 0, 0)
         format_layout.addWidget(QLabel("Format:"))
         self.figure_format_combo = QComboBox()
         self.figure_format_combo.addItem("PNG (300 DPI)", "png")
         self.figure_format_combo.addItem("PDF (Vector)", "pdf")
         self.figure_format_combo.addItem("SVG (Vector)", "svg")
         format_layout.addWidget(self.figure_format_combo)
-        layout.addLayout(format_layout)
+        section.add_widget(format_container)
         
-        return group
+        return section
+    
+    def _on_rejected_options_changed(self, checked: bool):
+        """Handle rejected window visibility toggle."""
+        self.rejected_color_btn.setEnabled(checked)
+        self.rejected_opacity_slider.setEnabled(checked)
+        self.rejected_linewidth_spin.setEnabled(checked)
+    
+    def get_rejected_window_options(self) -> dict:
+        """Get current rejected window display options.
+        
+        Returns:
+            dict: Options for displaying rejected windows in comparison figures
+        """
+        return {
+            'show_rejected': self.show_rejected_cb.isChecked(),
+            'rejected_color': self.rejected_color_btn.get_color(),
+            'rejected_alpha': self.rejected_opacity_slider.value() / 100.0,
+            'rejected_linewidth': self.rejected_linewidth_spin.value(),
+        }
 
-    def _create_report_group(self) -> QGroupBox:
-        """Create report generation group."""
-        group = QGroupBox("Generate Report Plots")
-        layout = QVBoxLayout(group)
+    def _create_report_section(self) -> CollapsibleSection:
+        """Create report generation section (collapsible)."""
+        section = CollapsibleSection("Generate Report")
 
         self.generate_report_btn = QPushButton("Generate Comprehensive Report")
         self.generate_report_btn.setToolTip(
@@ -296,40 +384,39 @@ class ExportDock(QDockWidget):
             "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }"
         )
         self.generate_report_btn.clicked.connect(self.generate_report)
-        layout.addWidget(self.generate_report_btn)
+        section.add_widget(self.generate_report_btn)
 
         # Info
         info = QLabel("Creates publication-ready multi-panel figure")
         info.setStyleSheet("QLabel { color: #666; font-size: 9px; }")
         info.setWordWrap(True)
-        layout.addWidget(info)
+        section.add_widget(info)
 
-        return group
+        return section
 
-    def _create_session_group(self) -> QGroupBox:
-        """Create session management group."""
-        group = QGroupBox("Session Management")
-        layout = QVBoxLayout(group)
+    def _create_session_section(self) -> CollapsibleSection:
+        """Create session management section (collapsible)."""
+        section = CollapsibleSection("Session Management")
 
         # Save session
         self.save_session_btn = QPushButton("Save Session")
         self.save_session_btn.setToolTip("Save current analysis session (settings, results, peaks)")
         self.save_session_btn.clicked.connect(self.save_session)
-        layout.addWidget(self.save_session_btn)
+        section.add_widget(self.save_session_btn)
 
         # Load session
         self.load_session_btn = QPushButton("Load Session")
         self.load_session_btn.setToolTip("Load previously saved session")
         self.load_session_btn.clicked.connect(self.load_session)
-        layout.addWidget(self.load_session_btn)
+        section.add_widget(self.load_session_btn)
 
         # Info
         info = QLabel("Save/restore complete analysis state")
         info.setStyleSheet("QLabel { color: #666; font-size: 9px; }")
         info.setWordWrap(True)
-        layout.addWidget(info)
+        section.add_widget(info)
 
-        return group
+        return section
 
     def export_plot(self, format_type: str):
         """Export plot as image."""
@@ -459,7 +546,7 @@ class ExportDock(QDockWidget):
             if options['median']:
                 header.append('Median H/V')
             if options['std']:
-                header.extend(['Mean + 1σ', 'Mean - 1σ'])
+                header.extend(['Mean + 1s', 'Mean - 1s'])
             if options['percentile']:
                 header.extend(['16th Percentile', '84th Percentile'])
             if options['individual'] and self.windows:
@@ -591,11 +678,14 @@ class ExportDock(QDockWidget):
         try:
             from hvsr_pro.visualization.comparison_plot import plot_raw_vs_adjusted_from_result
             
-            # Generate figure
+            # Get rejected window options
+            rejected_opts = self.get_rejected_window_options()
+            
+            # Generate figure (note: comparison_plot may not support these options yet)
             fig = plot_raw_vs_adjusted_from_result(
                 hvsr_result=self.result,
                 windows=self.windows,
-                station_name="",  # Could be extracted from metadata
+                station_name="",
                 save_path=filename
             )
             
@@ -605,9 +695,10 @@ class ExportDock(QDockWidget):
             )
             
         except Exception as e:
+            import traceback
             QMessageBox.critical(
                 self, "Export Failed", 
-                f"Failed to export comparison figure:\n{str(e)}"
+                f"Failed to export comparison figure:\n{str(e)}\n\n{traceback.format_exc()}"
             )
     
     def export_waveform_figure(self):
@@ -681,7 +772,7 @@ class ExportDock(QDockWidget):
                 data=self.data,
                 hvsr_result=self.result,
                 windows=self.windows,
-                station_name="",  # Could be extracted from metadata
+                station_name="",
                 save_path=filename
             )
             

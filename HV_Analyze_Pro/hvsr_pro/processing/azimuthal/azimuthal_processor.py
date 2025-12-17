@@ -12,8 +12,8 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-from hvsr_pro.processing.window_structures import WindowCollection, Window
-from hvsr_pro.processing.spectral_processing import (
+from hvsr_pro.processing.windows import WindowCollection, Window
+from hvsr_pro.processing.hvsr import (
     compute_fft,
     konno_ohmachi_smoothing_fast,
     calculate_hvsr,

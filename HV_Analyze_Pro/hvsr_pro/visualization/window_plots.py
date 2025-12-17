@@ -13,7 +13,7 @@ from matplotlib.patches import Rectangle
 from typing import Optional, List, Tuple
 from scipy import signal as scipy_signal
 
-from hvsr_pro.processing.window_structures import Window, WindowCollection
+from hvsr_pro.processing.windows import Window, WindowCollection
 
 
 def plot_window_time_series(window: Window,

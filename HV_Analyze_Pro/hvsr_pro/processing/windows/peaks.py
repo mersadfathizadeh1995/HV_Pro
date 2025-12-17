@@ -1,6 +1,6 @@
 """
-Peak Detection for HVSR Pro
-============================
+Peak Detection
+===============
 
 Peak identification and characterization for HVSR curves.
 """
@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict
 from scipy import signal as scipy_signal
 
-from hvsr_pro.processing.hvsr_structures import Peak
+from hvsr_pro.processing.hvsr.structures import Peak
 
 
 def detect_peaks(frequencies: np.ndarray,

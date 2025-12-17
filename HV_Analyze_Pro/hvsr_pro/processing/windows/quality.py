@@ -9,7 +9,7 @@ import numpy as np
 from typing import Dict, Any
 from scipy import stats, signal as scipy_signal
 
-from hvsr_pro.processing.window_structures import Window
+from hvsr_pro.processing.windows.structures import Window
 
 
 class WindowQualityCalculator:
@@ -343,3 +343,4 @@ class WindowQualityCalculator:
                     return False
         
         return True
+

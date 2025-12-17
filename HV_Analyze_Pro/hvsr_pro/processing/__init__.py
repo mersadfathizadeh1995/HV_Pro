@@ -3,38 +3,79 @@ Processing module for HVSR Pro
 ===============================
 
 Contains window management, rejection algorithms, and HVSR processing.
+
+Submodules:
+    - windows: Window management and structures
+    - rejection: Quality control and rejection algorithms
+    - hvsr: HVSR processing engine
+    - azimuthal: Azimuthal HVSR processing
 """
 
-from hvsr_pro.processing.window_manager import WindowManager
-from hvsr_pro.processing.window_structures import Window, WindowState, WindowCollection
-from hvsr_pro.processing.rejection_engine import RejectionEngine
-from hvsr_pro.processing.rejection_algorithms import (
+# Window management (new modular structure)
+from hvsr_pro.processing.windows import (
+    WindowManager,
+    Window,
+    WindowState,
+    WindowCollection,
+    detect_peaks,
+    identify_fundamental_peak,
+    refine_peak_frequency,
+)
+
+# Rejection system (new modular structure)
+from hvsr_pro.processing.rejection import (
+    RejectionEngine,
     BaseRejectionAlgorithm,
+    RejectionResult,
     QualityThresholdRejection,
     StatisticalOutlierRejection,
-    RejectionResult
-)
-from hvsr_pro.processing.rejection_advanced import (
+    AmplitudeRejection,
     STALTARejection,
     FrequencyDomainRejection,
-    AmplitudeRejection
+    HVSRAmplitudeRejection,
+    FlatPeakRejection,
+    CoxFDWRARejection,
+    create_preset_pipeline,
+    get_available_presets,
+    get_preset_description,
 )
-from hvsr_pro.processing.hvsr_processor import HVSRProcessor
-from hvsr_pro.processing.hvsr_structures import HVSRResult, WindowSpectrum, Peak
+
+# HVSR processing (new modular structure)
+from hvsr_pro.processing.hvsr import (
+    HVSRProcessor,
+    HVSRResult,
+    WindowSpectrum,
+    Peak,
+    compute_fft,
+    konno_ohmachi_smoothing,
+    konno_ohmachi_smoothing_fast,
+    calculate_horizontal_spectrum,
+    calculate_hvsr,
+    logspace_frequencies,
+)
 
 __all__ = [
+    # Window management
     'WindowManager',
     'Window',
     'WindowState',
     'WindowCollection',
+    # Rejection
     'RejectionEngine',
     'BaseRejectionAlgorithm',
+    'RejectionResult',
     'QualityThresholdRejection',
     'StatisticalOutlierRejection',
+    'AmplitudeRejection',
     'STALTARejection',
     'FrequencyDomainRejection',
-    'AmplitudeRejection',
-    'RejectionResult',
+    'HVSRAmplitudeRejection',
+    'FlatPeakRejection',
+    'CoxFDWRARejection',
+    'create_preset_pipeline',
+    'get_available_presets',
+    'get_preset_description',
+    # HVSR
     'HVSRProcessor',
     'HVSRResult',
     'WindowSpectrum',

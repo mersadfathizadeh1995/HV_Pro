@@ -136,10 +136,12 @@ def plot_azimuthal_contour_2d(result: AzimuthalHVSRResult,
         peak_freqs, _ = result.mean_curve_peak_by_azimuth(distribution_mc)
         ax.plot(peak_freqs, result.azimuths, 
                 **DEFAULT_AZIMUTHAL_KWARGS["peak_marker_2d"])
-        ax.legend(loc="lower right", fontsize=8)
+        # Position legend in lower right corner, away from data
+        ax.legend(loc="lower right", fontsize=7, framealpha=0.9,
+                 edgecolor='gray', fancybox=True)
     
     if ax_was_none:
-        fig.tight_layout()
+        fig.tight_layout(rect=[0, 0, 1, 0.95])  # Leave room for colorbar
     
     return (fig, (ax, cax))
 
@@ -224,10 +226,13 @@ def plot_azimuthal_contour_3d(result: AzimuthalHVSRResult,
             np.log10(peak_freqs_ext), azimuths_ext, peak_amps_ext * 1.05,
             **DEFAULT_AZIMUTHAL_KWARGS["peak_marker"]
         )
-        ax.legend(loc="upper left", fontsize=8)
+        # Position legend in upper left, outside the 3D view area
+        ax.legend(bbox_to_anchor=(0.0, 1.0), loc='upper left', fontsize=7,
+                 framealpha=0.9, edgecolor='gray', fancybox=True)
     
     if ax_was_none:
         fig.tight_layout()
+        fig.subplots_adjust(right=0.92)  # Make room for any overflow
     
     return (fig, ax)
 
@@ -237,8 +242,11 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
                            distribution_fn: str = "lognormal",
                            plot_mean_curve_peak_by_azimuth: bool = True,
                            plot_individual_curves: bool = True,
-                           figsize: Tuple[float, float] = (10, 8),
-                           dpi: int = 150) -> Tuple[plt.Figure, Tuple[Axes3D, plt.Axes, plt.Axes]]:
+                           figsize: Tuple[float, float] = (12, 8),
+                           dpi: int = 150,
+                           legend_loc: str = "outside_right",
+                           cmap: str = "plasma",
+                           show_panel_labels: bool = True) -> Tuple[plt.Figure, Tuple[Axes3D, plt.Axes, plt.Axes]]:
     """
     Create comprehensive summary figure with 3D surface, 2D contour, and HVSR curves.
     
@@ -255,14 +263,29 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
         plot_individual_curves: Show individual azimuth curves in bottom panel
         figsize: Figure size
         dpi: DPI for figure
+        legend_loc: Legend location ('outside_right', 'outside_bottom', 'upper_right', 'none')
+        cmap: Colormap name for individual curves
+        show_panel_labels: Whether to show (a), (b), (c) labels
         
     Returns:
         (figure, (ax_3d, ax_2d, ax_curves))
     """
-    # Create figure with custom gridspec
+    # Create figure with custom gridspec - add space for legend on right
     fig = plt.figure(figsize=figsize, dpi=dpi)
-    gs = fig.add_gridspec(nrows=4, ncols=2, wspace=0.3, hspace=0.35, 
-                          width_ratios=(1.2, 0.8))
+    
+    # Adjust gridspec based on legend location
+    if legend_loc == "outside_right":
+        gs = fig.add_gridspec(nrows=4, ncols=2, wspace=0.35, hspace=0.35, 
+                              width_ratios=(1.2, 0.8),
+                              left=0.08, right=0.82, top=0.92, bottom=0.08)
+    elif legend_loc == "outside_bottom":
+        gs = fig.add_gridspec(nrows=4, ncols=2, wspace=0.3, hspace=0.4, 
+                              width_ratios=(1.2, 0.8),
+                              left=0.08, right=0.95, top=0.92, bottom=0.15)
+    else:
+        gs = fig.add_gridspec(nrows=4, ncols=2, wspace=0.3, hspace=0.35, 
+                              width_ratios=(1.2, 0.8),
+                              left=0.08, right=0.95, top=0.92, bottom=0.08)
     
     # 3D surface plot (top-left, spans 3 rows)
     ax_3d = fig.add_subplot(gs[0:3, 0:1], projection='3d')
@@ -270,8 +293,11 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
         result,
         distribution_mc=distribution_mc,
         ax=ax_3d,
-        plot_mean_curve_peak_by_azimuth=plot_mean_curve_peak_by_azimuth
+        plot_mean_curve_peak_by_azimuth=plot_mean_curve_peak_by_azimuth,
+        cmap=cmap
     )
+    # Remove legend from 3D plot (will use combined legend)
+    ax_3d.legend().remove() if ax_3d.get_legend() else None
     
     # 2D contour plot (top-right, spans 2 rows)
     ax_2d = fig.add_subplot(gs[0:2, 1:2])
@@ -279,19 +305,22 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
         result,
         distribution_mc=distribution_mc,
         ax=ax_2d,
-        plot_mean_curve_peak_by_azimuth=plot_mean_curve_peak_by_azimuth
+        plot_mean_curve_peak_by_azimuth=plot_mean_curve_peak_by_azimuth,
+        cmap=cmap
     )
     ax_2d.set_xlabel("")  # Remove x label (shared with bottom)
+    # Remove legend from 2D plot (will use combined legend)
+    ax_2d.legend().remove() if ax_2d.get_legend() else None
     
     # Traditional HVSR curves (bottom-right, spans 2 rows)
     ax_curves = fig.add_subplot(gs[2:4, 1:2])
     
     # Plot individual azimuth curves
     if plot_individual_curves:
-        cmap = cm.get_cmap("viridis")
+        cmap_obj = cm.get_cmap(cmap if cmap != "plasma" else "viridis")
         n_azimuths = len(result.azimuths)
         for i, azimuth in enumerate(result.azimuths):
-            color = cmap(i / n_azimuths)
+            color = cmap_obj(i / n_azimuths)
             ax_curves.plot(
                 result.frequencies, 
                 result.mean_curves_per_azimuth[i],
@@ -330,23 +359,40 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
     ax_curves.set_xscale("log")
     ax_curves.set_xlabel("Frequency (Hz)")
     ax_curves.set_ylabel("HVSR Amplitude")
-    ax_curves.legend(loc="upper right", fontsize=8)
     ax_curves.grid(True, alpha=0.3)
     
-    # Add panel labels
-    for ax, label, pos in zip([ax_3d, ax_2d, ax_curves], ['(a)', '(b)', '(c)'],
-                               [(0.02, 0.95), (0.02, 0.95), (0.02, 0.95)]):
-        if hasattr(ax, 'text2D'):  # 3D axes
-            ax.text2D(pos[0], pos[1], label, transform=ax.transAxes,
-                     fontsize=12, fontweight='bold',
-                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        else:
-            ax.text(pos[0], pos[1], label, transform=ax.transAxes,
-                   fontsize=12, fontweight='bold',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    # Handle legend positioning
+    if legend_loc == "outside_right":
+        ax_curves.legend(bbox_to_anchor=(1.05, 1), loc='upper left', 
+                        fontsize=8, frameon=True, fancybox=True)
+    elif legend_loc == "outside_bottom":
+        ax_curves.legend(bbox_to_anchor=(0.5, -0.15), loc='upper center',
+                        fontsize=8, frameon=True, fancybox=True, ncol=3)
+    elif legend_loc == "none":
+        pass  # No legend
+    else:  # Default: upper_right
+        ax_curves.legend(loc="upper right", fontsize=8)
+    
+    # Add panel labels in upper-left corner with white background
+    if show_panel_labels:
+        label_style = dict(fontsize=11, fontweight='bold',
+                          bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                   edgecolor='gray', alpha=0.9))
+        
+        # 3D axes - position in upper left corner
+        ax_3d.text2D(0.02, 0.98, '(a)', transform=ax_3d.transAxes,
+                    verticalalignment='top', **label_style)
+        
+        # 2D axes - position below colorbar  
+        ax_2d.text(0.02, 0.88, '(b)', transform=ax_2d.transAxes,
+                  verticalalignment='top', **label_style)
+        
+        # Curves axes
+        ax_curves.text(0.02, 0.98, '(c)', transform=ax_curves.transAxes,
+                      verticalalignment='top', **label_style)
     
     # Add title
-    fig.suptitle("Azimuthal HVSR Analysis", fontsize=14, fontweight='bold', y=0.98)
+    fig.suptitle("Azimuthal HVSR Analysis", fontsize=14, fontweight='bold')
     
     return (fig, (ax_3d, ax_2d, ax_curves))
 

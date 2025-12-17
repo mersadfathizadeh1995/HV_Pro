@@ -282,3 +282,4 @@ else:
     class CollapsibleDataPanel:
         def __init__(self, *args, **kwargs):
             raise ImportError("PyQt5 is required for GUI functionality")
+

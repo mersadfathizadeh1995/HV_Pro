@@ -1114,7 +1114,7 @@ if HAS_PYQT5:
                 
                 # Selection checkbox
                 checkbox = QCheckBox()
-                checkbox.setChecked(True)  # Select all by default
+                checkbox.setChecked(False)  # Unchecked by default - user selects which to load
                 checkbox.stateChanged.connect(self.update_type1_count)
                 checkbox_widget = QWidget()
                 checkbox_layout = QHBoxLayout(checkbox_widget)
@@ -1128,16 +1128,21 @@ if HAS_PYQT5:
             
             progress.setValue(len(mseed_files))
             
-            # Select all in old list
-            self.type1_file_list.selectAll()
+            # Don't select by default - user chooses which files to load
+            self.type1_file_list.clearSelection()
             
             count = len(mseed_files)
-            self.type1_count_label.setText(f"{count} files detected | {count} selected | 0 mapped")
+            self.type1_count_label.setText(f"{count} files found - select files to load | 0 selected | 0 mapped")
 
             if count > 0:
                 self.load_mode = 'multi_type1'
-                self.load_btn.setEnabled(True)
-                self.update_preview_type1([Path(f) for f in self.type1_all_files])
+                # Don't enable load button until files are selected
+                self.load_btn.setEnabled(False)
+                self.preview_text.setText(
+                    f"{count} MiniSEED files found in directory.\n\n"
+                    "Check the files you want to load, then click 'Load Selected Data'.\n"
+                    "Use 'Select All' to quickly select all files."
+                )
             else:
                 self.load_btn.setEnabled(False)
                 self.preview_text.setText("No MiniSEED files found in directory.")
@@ -1190,7 +1195,10 @@ if HAS_PYQT5:
                     if checkbox and checkbox.isChecked():
                         selected += 1
             
-            self.type1_count_label.setText(f"{total} files detected | {selected} selected | {mapped} mapped")
+            if selected > 0:
+                self.type1_count_label.setText(f"{total} files | {selected} selected | {mapped} mapped")
+            else:
+                self.type1_count_label.setText(f"{total} files found - select files to load | 0 selected | {mapped} mapped")
             self.load_btn.setEnabled(selected > 0)
             
             # Update selected files list
@@ -1369,9 +1377,8 @@ if HAS_PYQT5:
                 self.type2_group_list.addItem(item)
                 self.type2_group_names.append(base_name)
                 
-                # Auto-select complete groups only
-                if is_complete:
-                    item.setSelected(True)
+                # Do NOT auto-select - user chooses which groups to load
+                item.setSelected(False)
             
             # Connect selection change
             self.type2_group_list.itemSelectionChanged.connect(self.update_type2_selection)
@@ -1381,15 +1388,21 @@ if HAS_PYQT5:
                                 if 'E' in g and 'N' in g and 'Z' in g)
             
             self.type2_count_label.setText(
-                f"{count} groups detected | {complete_count} selected"
+                f"{count} groups found ({complete_count} complete) - select groups to load | 0 selected"
             )
             
-            # Update grouped_files with only complete ones
-            self.update_type2_selection()
+            # Initialize grouped_files as empty - user must select
+            self.grouped_files = {}
             
             if complete_count > 0:
                 self.load_mode = 'multi_type2'
-                self.load_btn.setEnabled(True)
+                # Don't enable load button until groups are selected
+                self.load_btn.setEnabled(False)
+                self.preview_text.setText(
+                    f"{count} file groups found ({complete_count} complete E+N+Z).\n\n"
+                    "Select the groups you want to load, then click 'Load Selected Data'.\n"
+                    "Use 'Select All' to quickly select all groups."
+                )
             else:
                 self.load_btn.setEnabled(False)
                 self.preview_text.setText(
@@ -1414,9 +1427,17 @@ if HAS_PYQT5:
                                    if all(c in self.type2_all_groups[name] for c in ['E', 'N', 'Z']))
             
             total = len(self.type2_all_groups)
-            self.type2_count_label.setText(
-                f"{total} groups detected | {complete_selected} selected"
-            )
+            total_complete = sum(1 for g in self.type2_all_groups.values() 
+                                if all(c in g for c in ['E', 'N', 'Z']))
+            
+            if complete_selected > 0:
+                self.type2_count_label.setText(
+                    f"{total} groups ({total_complete} complete) | {complete_selected} selected"
+                )
+            else:
+                self.type2_count_label.setText(
+                    f"{total} groups found ({total_complete} complete) - select groups to load | 0 selected"
+                )
             
             # Update load button
             self.load_btn.setEnabled(complete_selected > 0)
