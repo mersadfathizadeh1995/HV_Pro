@@ -2372,10 +2372,15 @@ class HVSRMainWindow(QMainWindow):
             windows: WindowCollection object (can be None)
             seismic_data: SeismicData object (can be None)
         """
-        # 1. Store data in instance variables
+        # 1. Store data in instance variables FIRST (before any dock updates)
         self.hvsr_result = hvsr_result
         self.windows = windows
         self.data = seismic_data
+        
+        # Log data availability for debugging
+        self.add_info(f"Session data: HVSR={'Yes' if hvsr_result else 'No'}, "
+                     f"Windows={'Yes' if windows else 'No'}, "
+                     f"SeismicData={'Yes' if seismic_data else 'No'}")
         
         # 2. Update interactive canvas
         if hasattr(self, 'canvas') and hvsr_result is not None:
@@ -2402,12 +2407,17 @@ class HVSRMainWindow(QMainWindow):
             except Exception as e:
                 self.add_info(f"Warning: Could not update peak picker: {str(e)}")
         
-        # 5. Update export dock
+        # 5. Update export dock with all references including seismic data
         if hasattr(self, 'export_dock'):
             try:
                 self.export_dock.set_references(
                     hvsr_result, windows, self.plot_manager, seismic_data
                 )
+                # Log whether waveform export will be available
+                if seismic_data is not None:
+                    self.add_info("Export dock: All figure types available (including waveform plots)")
+                else:
+                    self.add_info("Export dock: Waveform plots unavailable (no seismic data)")
             except Exception as e:
                 self.add_info(f"Warning: Could not update export dock: {str(e)}")
         

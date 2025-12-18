@@ -293,9 +293,10 @@ if HAS_PYQT5:
             dpi_layout.setContentsMargins(0, 0, 0, 0)
             dpi_layout.addWidget(QLabel("DPI:"))
             self.dpi_spin = QSpinBox()
-            self.dpi_spin.setRange(72, 600)
+            self.dpi_spin.setRange(72, 1200)
             self.dpi_spin.setValue(300)
             self.dpi_spin.setSingleStep(50)
+            self.dpi_spin.setToolTip("Figure resolution (72-1200 DPI)")
             dpi_layout.addWidget(self.dpi_spin)
             section.add_widget(dpi_container)
             
@@ -371,8 +372,20 @@ if HAS_PYQT5:
         
         def _export_plot(self, format_type: str):
             """Export plot to file."""
+            if not self.result:
+                QMessageBox.warning(
+                    self, "No Results", 
+                    "No azimuthal processing results available.\n\n"
+                    "Please run azimuthal processing first."
+                )
+                return
+            
             if not self.figure:
-                QMessageBox.warning(self, "No Plot", "No azimuthal plot available.")
+                QMessageBox.warning(
+                    self, "No Plot", 
+                    "No azimuthal plot available.\n\n"
+                    "Please select a view type and click 'Apply Changes' to generate the plot."
+                )
                 return
             
             ext_map = {

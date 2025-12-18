@@ -602,10 +602,11 @@ if HAS_PYQT5:
                 
                 self.canvas.draw()
                 
-                # Update properties dock figure reference
+                # Update properties dock with figure reference
+                # This ensures the export function has access to the current figure
                 parent = self.parent()
                 if parent and hasattr(parent, 'azimuthal_properties_dock'):
-                    parent.azimuthal_properties_dock.figure = self.figure
+                    parent.azimuthal_properties_dock.set_result(self.result, self.figure)
                 
             except Exception as e:
                 self.status_label.setText(f"Plot error: {str(e)}")

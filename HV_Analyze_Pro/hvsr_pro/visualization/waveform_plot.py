@@ -20,9 +20,10 @@ from matplotlib.patches import Rectangle
 from matplotlib.collections import PatchCollection
 from typing import Optional, Dict, Any, List, Tuple, Union
 
-# Style constants
-AXIS_FONT_SIZE = 12
-TITLE_FONT_SIZE = 14
+# Style constants (defaults - can be overridden in function calls)
+AXIS_FONT_SIZE = 10
+TITLE_FONT_SIZE = 11
+SUPTITLE_FONT_SIZE = 14
 FONT_FAMILY = 'serif'
 
 # Default style settings
@@ -45,7 +46,11 @@ def plot_seismic_recordings_3c(
     dpi: int = 150,
     save_path: Optional[str] = None,
     style: Optional[Dict[str, Any]] = None,
-    title: str = "3-Component Seismic Recording"
+    title: str = "3-Component Seismic Recording",
+    title_fontsize: int = TITLE_FONT_SIZE,
+    axis_fontsize: int = AXIS_FONT_SIZE,
+    suptitle_fontsize: int = SUPTITLE_FONT_SIZE,
+    hspace: float = 0.25
 ) -> Figure:
     """
     Plot 3-component seismic recording with optional window rejection markers.
@@ -65,6 +70,10 @@ def plot_seismic_recordings_3c(
         save_path: Path to save figure (optional)
         style: Custom style dictionary (optional)
         title: Figure title
+        title_fontsize: Font size for subplot titles
+        axis_fontsize: Font size for axis labels
+        suptitle_fontsize: Font size for main figure title
+        hspace: Vertical spacing between subplots
         
     Returns:
         matplotlib Figure object
@@ -81,7 +90,7 @@ def plot_seismic_recordings_3c(
     # Create figure with 3 subplots
     fig, axs = plt.subplots(3, 1, figsize=figsize, dpi=dpi, 
                            sharex=True, sharey=True,
-                           gridspec_kw={'hspace': 0.15})
+                           gridspec_kw={'hspace': hspace})
     
     # Get component data
     components = [
@@ -117,9 +126,9 @@ def plot_seismic_recordings_3c(
             ax.plot(time, amplitude, color=plot_style['accepted_color'],
                    linewidth=plot_style['accepted_linewidth'])
         
-        ax.set_title(label, fontsize=TITLE_FONT_SIZE, fontfamily=FONT_FAMILY)
+        ax.set_title(label, fontsize=title_fontsize, fontfamily=FONT_FAMILY)
         ax.set_ylabel('Normalized\nAmplitude' if normalize else 'Amplitude\n(counts)',
-                     fontsize=AXIS_FONT_SIZE, fontfamily=FONT_FAMILY)
+                     fontsize=axis_fontsize, fontfamily=FONT_FAMILY)
         
         # Remove top and right spines
         ax.spines['top'].set_visible(False)
@@ -130,13 +139,13 @@ def plot_seismic_recordings_3c(
             ax.set_ylim(-1.1, 1.1)
     
     # Set x label on bottom subplot only
-    axs[-1].set_xlabel('Time (s)', fontsize=AXIS_FONT_SIZE, fontfamily=FONT_FAMILY)
+    axs[-1].set_xlabel('Time (s)', fontsize=axis_fontsize, fontfamily=FONT_FAMILY)
     axs[-1].set_xlim(0, time[-1])
     
     # Add main title
-    fig.suptitle(title, fontsize=TITLE_FONT_SIZE + 2, fontfamily=FONT_FAMILY, fontweight='bold')
+    fig.suptitle(title, fontsize=suptitle_fontsize, fontfamily=FONT_FAMILY, fontweight='bold')
     
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     
     if save_path:
         fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
@@ -224,7 +233,12 @@ def plot_pre_and_post_rejection(
     dpi: int = 150,
     save_path: Optional[str] = None,
     distribution_mc: str = "lognormal",
-    distribution_fn: str = "lognormal"
+    distribution_fn: str = "lognormal",
+    title_fontsize: int = 11,
+    axis_fontsize: int = 10,
+    suptitle_fontsize: int = 14,
+    hspace: float = 0.5,
+    wspace: float = 0.5
 ) -> Figure:
     """
     Create a comprehensive pre- and post-rejection figure.
@@ -244,6 +258,11 @@ def plot_pre_and_post_rejection(
         save_path: Path to save figure
         distribution_mc: Distribution for mean curve ("lognormal" or "normal")
         distribution_fn: Distribution for fn ("lognormal" or "normal")
+        title_fontsize: Font size for subplot titles
+        axis_fontsize: Font size for axis labels
+        suptitle_fontsize: Font size for main figure title
+        hspace: Vertical spacing between subplots
+        wspace: Horizontal spacing between subplots
         
     Returns:
         matplotlib Figure object
@@ -251,7 +270,7 @@ def plot_pre_and_post_rejection(
     from .comparison_plot import _plot_hvsr_panel, DEFAULT_STYLE as HVSR_STYLE
     
     fig = plt.figure(figsize=figsize, dpi=dpi)
-    gs = fig.add_gridspec(nrows=6, ncols=6, hspace=0.4, wspace=0.4)
+    gs = fig.add_gridspec(nrows=6, ncols=6, hspace=hspace, wspace=wspace)
     
     # Left column: Waveforms
     ax_ns = fig.add_subplot(gs[0:2, 0:3])
@@ -285,19 +304,22 @@ def plot_pre_and_post_rejection(
     # Plot waveforms (use full window mask for waveforms)
     if n_windows > 0:
         waveform_mask = np.array([w.is_active() for w in windows.windows])
-        _plot_waveform_component(ax_ns, data.north, data.sampling_rate, windows, waveform_mask, 'NS Recording')
-        _plot_waveform_component(ax_ew, data.east, data.sampling_rate, windows, waveform_mask, 'EW Recording')
-        _plot_waveform_component(ax_vt, data.vertical, data.sampling_rate, windows, waveform_mask, 'VT Recording')
+        _plot_waveform_component(ax_ns, data.north, data.sampling_rate, windows, waveform_mask, 'NS Recording',
+                                  title_fontsize=title_fontsize, axis_fontsize=axis_fontsize)
+        _plot_waveform_component(ax_ew, data.east, data.sampling_rate, windows, waveform_mask, 'EW Recording',
+                                  title_fontsize=title_fontsize, axis_fontsize=axis_fontsize)
+        _plot_waveform_component(ax_vt, data.vertical, data.sampling_rate, windows, waveform_mask, 'VT Recording',
+                                  title_fontsize=title_fontsize, axis_fontsize=axis_fontsize)
     else:
         # No windows, just plot the raw data
         sampling_rate = data.sampling_rate
         time = np.arange(len(data.vertical.data)) / sampling_rate
         for ax, comp_data, title in [(ax_ns, data.north.data, 'NS'), (ax_ew, data.east.data, 'EW'), (ax_vt, data.vertical.data, 'VT')]:
             ax.plot(time, comp_data / np.max(np.abs(comp_data)), color=DEFAULT_STYLE['accepted_color'], linewidth=0.5)
-            ax.set_title(f'{title} Recording', fontsize=TITLE_FONT_SIZE)
-            ax.set_ylabel('Normalized\nAmplitude', fontsize=AXIS_FONT_SIZE)
+            ax.set_title(f'{title} Recording', fontsize=title_fontsize)
+            ax.set_ylabel('Normalized\nAmplitude', fontsize=axis_fontsize)
     
-    ax_vt.set_xlabel('Time (s)', fontsize=AXIS_FONT_SIZE)
+    ax_vt.set_xlabel('Time (s)', fontsize=axis_fontsize)
     
     # Extract HVSR data for plotting
     frequency = hvsr_result.frequencies
@@ -367,9 +389,10 @@ def plot_pre_and_post_rejection(
     title_str = f'HVSR Analysis - {station_name}' if station_name else 'HVSR Analysis'
     n_rejected = n_spectra - len(accepted_indices)
     title_str += f'\n({n_spectra} windows, {n_rejected} rejected)'
-    fig.suptitle(title_str, fontsize=16, fontweight='bold', fontfamily=FONT_FAMILY)
+    fig.suptitle(title_str, fontsize=suptitle_fontsize, fontweight='bold', fontfamily=FONT_FAMILY)
     
-    plt.tight_layout(rect=[0, 0.05, 1, 0.94])
+    # Use tighter layout with more room for title and legend
+    plt.tight_layout(rect=[0, 0.06, 1, 0.92])
     
     # Add legend at bottom
     from matplotlib.lines import Line2D
@@ -395,9 +418,22 @@ def _plot_waveform_component(
     sampling_rate: float,
     windows,
     valid_mask: np.ndarray,
-    title: str
+    title: str,
+    title_fontsize: int = TITLE_FONT_SIZE,
+    axis_fontsize: int = AXIS_FONT_SIZE
 ) -> None:
-    """Plot a single waveform component with rejection markers."""
+    """Plot a single waveform component with rejection markers.
+    
+    Args:
+        ax: Matplotlib axes
+        component: Component data object
+        sampling_rate: Sampling rate in Hz
+        windows: WindowCollection
+        valid_mask: Boolean array of window validity
+        title: Subplot title
+        title_fontsize: Font size for title
+        axis_fontsize: Font size for axis labels
+    """
     # Get data
     amplitude = component.data
     n_samples = len(amplitude)
@@ -411,8 +447,8 @@ def _plot_waveform_component(
     # Plot with window coloring
     _plot_with_windows(ax, time, amplitude, windows, valid_mask, DEFAULT_STYLE)
     
-    ax.set_title(title, fontsize=TITLE_FONT_SIZE, fontfamily=FONT_FAMILY)
-    ax.set_ylabel('Normalized\nAmplitude', fontsize=AXIS_FONT_SIZE)
+    ax.set_title(title, fontsize=title_fontsize, fontfamily=FONT_FAMILY)
+    ax.set_ylabel('Normalized\nAmplitude', fontsize=axis_fontsize)
     ax.set_xlim(0, time[-1])
     ax.set_ylim(-1.1, 1.1)
     

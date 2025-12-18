@@ -298,10 +298,75 @@ class ExportDock(QDockWidget):
         section.add_widget(lw_container)
         
         # Separator line
-        separator = QLabel("")
-        separator.setStyleSheet("QLabel { border-top: 1px solid #ccc; margin: 5px 0; }")
-        separator.setFixedHeight(2)
-        section.add_widget(separator)
+        separator1 = QLabel("")
+        separator1.setStyleSheet("QLabel { border-top: 1px solid #ccc; margin: 5px 0; }")
+        separator1.setFixedHeight(2)
+        section.add_widget(separator1)
+        
+        # === Figure Layout Options ===
+        layout_label = QLabel("Figure Layout Options:")
+        layout_label.setStyleSheet("QLabel { color: #555; font-size: 9px; margin-top: 5px; }")
+        section.add_widget(layout_label)
+        
+        # Title font size
+        title_fs_container = QWidget()
+        title_fs_layout = QHBoxLayout(title_fs_container)
+        title_fs_layout.setContentsMargins(0, 0, 0, 0)
+        title_fs_layout.addWidget(QLabel("Title Font:"))
+        self.fig_title_fontsize_spin = QSpinBox()
+        self.fig_title_fontsize_spin.setRange(8, 24)
+        self.fig_title_fontsize_spin.setValue(11)
+        self.fig_title_fontsize_spin.setToolTip("Font size for subplot titles")
+        title_fs_layout.addWidget(self.fig_title_fontsize_spin)
+        title_fs_layout.addStretch()
+        section.add_widget(title_fs_container)
+        
+        # Axis font size
+        axis_fs_container = QWidget()
+        axis_fs_layout = QHBoxLayout(axis_fs_container)
+        axis_fs_layout.setContentsMargins(0, 0, 0, 0)
+        axis_fs_layout.addWidget(QLabel("Axis Font:"))
+        self.fig_axis_fontsize_spin = QSpinBox()
+        self.fig_axis_fontsize_spin.setRange(8, 20)
+        self.fig_axis_fontsize_spin.setValue(10)
+        self.fig_axis_fontsize_spin.setToolTip("Font size for axis labels")
+        axis_fs_layout.addWidget(self.fig_axis_fontsize_spin)
+        axis_fs_layout.addStretch()
+        section.add_widget(axis_fs_container)
+        
+        # Subplot spacing
+        spacing_container = QWidget()
+        spacing_layout = QHBoxLayout(spacing_container)
+        spacing_layout.setContentsMargins(0, 0, 0, 0)
+        spacing_layout.addWidget(QLabel("Spacing:"))
+        self.fig_spacing_spin = QDoubleSpinBox()
+        self.fig_spacing_spin.setRange(0.2, 0.8)
+        self.fig_spacing_spin.setValue(0.5)
+        self.fig_spacing_spin.setSingleStep(0.1)
+        self.fig_spacing_spin.setToolTip("Spacing between subplots (0.2 = tight, 0.8 = loose)")
+        spacing_layout.addWidget(self.fig_spacing_spin)
+        spacing_layout.addStretch()
+        section.add_widget(spacing_container)
+        
+        # DPI setting
+        dpi_container = QWidget()
+        dpi_layout = QHBoxLayout(dpi_container)
+        dpi_layout.setContentsMargins(0, 0, 0, 0)
+        dpi_layout.addWidget(QLabel("DPI:"))
+        self.fig_dpi_spin = QSpinBox()
+        self.fig_dpi_spin.setRange(72, 1200)
+        self.fig_dpi_spin.setValue(300)
+        self.fig_dpi_spin.setSingleStep(50)
+        self.fig_dpi_spin.setToolTip("Figure resolution (72-1200 DPI)")
+        dpi_layout.addWidget(self.fig_dpi_spin)
+        dpi_layout.addStretch()
+        section.add_widget(dpi_container)
+        
+        # Separator line
+        separator2 = QLabel("")
+        separator2.setStyleSheet("QLabel { border-top: 1px solid #ccc; margin: 5px 0; }")
+        separator2.setFixedHeight(2)
+        section.add_widget(separator2)
         
         # Raw vs Adjusted comparison figure
         self.export_comparison_btn = QPushButton("Raw vs Adjusted HVSR")
@@ -341,7 +406,7 @@ class ExportDock(QDockWidget):
         format_layout.setContentsMargins(0, 0, 0, 0)
         format_layout.addWidget(QLabel("Format:"))
         self.figure_format_combo = QComboBox()
-        self.figure_format_combo.addItem("PNG (300 DPI)", "png")
+        self.figure_format_combo.addItem("PNG (Raster)", "png")
         self.figure_format_combo.addItem("PDF (Vector)", "pdf")
         self.figure_format_combo.addItem("SVG (Vector)", "svg")
         format_layout.addWidget(self.figure_format_combo)
@@ -703,8 +768,18 @@ class ExportDock(QDockWidget):
     
     def export_waveform_figure(self):
         """Export 3C waveform plot with rejection markers."""
-        if not self.result or not self.data:
-            QMessageBox.warning(self, "No Data", "No HVSR results or seismic data available.")
+        if not self.result:
+            QMessageBox.warning(self, "No Data", "No HVSR results available. Please run HVSR processing first.")
+            return
+        if not self.data:
+            QMessageBox.warning(
+                self, "No Seismic Data", 
+                "Seismic data not available.\n\n"
+                "This can happen when:\n"
+                "- Loading a session without the original data file\n"
+                "- The data was not properly saved with the session\n\n"
+                "Please reload the original seismic data file."
+            )
             return
         
         # Get format
@@ -724,18 +799,29 @@ class ExportDock(QDockWidget):
         try:
             from hvsr_pro.visualization.waveform_plot import plot_seismic_recordings_3c
             
+            # Get figure options from UI
+            dpi = self.fig_dpi_spin.value()
+            title_fontsize = self.fig_title_fontsize_spin.value()
+            axis_fontsize = self.fig_axis_fontsize_spin.value()
+            hspace = self.fig_spacing_spin.value()
+            
             # Generate figure
             fig = plot_seismic_recordings_3c(
                 data=self.data,
                 windows=self.windows,
                 normalize=True,
+                dpi=dpi,
                 save_path=filename,
-                title="3-Component Seismic Recording with QC"
+                title="3-Component Seismic Recording with QC",
+                title_fontsize=title_fontsize,
+                axis_fontsize=axis_fontsize,
+                hspace=hspace
             )
             
             QMessageBox.information(
                 self, "Export Successful", 
-                f"Waveform figure saved to:\n{filename}"
+                f"Waveform figure saved to:\n{filename}\n"
+                f"Resolution: {dpi} DPI"
             )
             
         except Exception as e:
@@ -746,8 +832,18 @@ class ExportDock(QDockWidget):
     
     def export_prepost_figure(self):
         """Export comprehensive pre/post rejection figure."""
-        if not self.result or not self.data:
-            QMessageBox.warning(self, "No Data", "No HVSR results or seismic data available.")
+        if not self.result:
+            QMessageBox.warning(self, "No Data", "No HVSR results available. Please run HVSR processing first.")
+            return
+        if not self.data:
+            QMessageBox.warning(
+                self, "No Seismic Data", 
+                "Seismic data not available.\n\n"
+                "This can happen when:\n"
+                "- Loading a session without the original data file\n"
+                "- The data was not properly saved with the session\n\n"
+                "Please reload the original seismic data file."
+            )
             return
         
         # Get format
@@ -767,18 +863,30 @@ class ExportDock(QDockWidget):
         try:
             from hvsr_pro.visualization.waveform_plot import plot_pre_and_post_rejection
             
+            # Get figure options from UI
+            dpi = self.fig_dpi_spin.value()
+            title_fontsize = self.fig_title_fontsize_spin.value()
+            axis_fontsize = self.fig_axis_fontsize_spin.value()
+            spacing = self.fig_spacing_spin.value()
+            
             # Generate figure
             fig = plot_pre_and_post_rejection(
                 data=self.data,
                 hvsr_result=self.result,
                 windows=self.windows,
                 station_name="",
-                save_path=filename
+                dpi=dpi,
+                save_path=filename,
+                title_fontsize=title_fontsize,
+                axis_fontsize=axis_fontsize,
+                hspace=spacing,
+                wspace=spacing
             )
             
             QMessageBox.information(
                 self, "Export Successful", 
-                f"Pre/Post rejection figure saved to:\n{filename}"
+                f"Pre/Post rejection figure saved to:\n{filename}\n"
+                f"Resolution: {dpi} DPI"
             )
             
         except Exception as e:
