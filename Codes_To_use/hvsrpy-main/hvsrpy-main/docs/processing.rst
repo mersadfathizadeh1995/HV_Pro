@@ -1,4 +1,0 @@
-Process
-=======
-
-.. autofunction:: hvsrpy.process

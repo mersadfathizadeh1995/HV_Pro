@@ -1,4 +1,0 @@
-PreProcess
-==========
-
-.. autofunction:: hvsrpy.preprocess
