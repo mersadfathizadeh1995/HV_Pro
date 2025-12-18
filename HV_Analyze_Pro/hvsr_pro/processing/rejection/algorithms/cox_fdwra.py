@@ -160,23 +160,22 @@ class CoxFDWRARejection(BaseRejectionAlgorithm):
             
             # Mark windows outside bounds as invalid
             new_valid_mask = valid_mask.copy()
+            n_rejected_this_iteration = 0
             for i, valid_idx in enumerate(valid_indices):
                 if peak_frequencies[i] < lower_bound or peak_frequencies[i] > upper_bound:
                     new_valid_mask[valid_idx] = False
+                    n_rejected_this_iteration += 1
             
-            # Check if any windows were rejected this iteration
-            if np.array_equal(new_valid_mask, valid_mask):
-                # Only stop if we've reached minimum iterations
-                if iteration >= self.min_iterations:
-                    converged = True
-                    self.converged_iteration = iteration
-                    break
+            # Update mask if windows were rejected
+            windows_rejected = n_rejected_this_iteration > 0
+            if windows_rejected:
+                valid_mask = new_valid_mask
             
-            valid_mask = new_valid_mask
-            
-            # Recalculate statistics AFTER rejection
+            # Recalculate statistics (always, to track iteration progress)
             valid_indices_after = np.where(valid_mask)[0]
             if len(valid_indices_after) < 3:
+                # Not enough windows remaining
+                self.converged_iteration = iteration
                 break
             
             valid_curves_after = [window_hvsr_curves[i] for i in valid_indices_after]
@@ -193,21 +192,19 @@ class CoxFDWRARejection(BaseRejectionAlgorithm):
             
             diff_after = abs(mean_fn_after - mc_peak_freq_after)
             
-            # Check convergence criteria
+            # Calculate convergence metrics (handle zero values)
             if diff_before == 0 or std_fn_before == 0 or std_fn_after == 0:
-                # Only stop if we've reached minimum iterations
-                if iteration >= self.min_iterations:
-                    converged = True
-                    self.converged_iteration = iteration
-                    break
-            
-            d_diff = abs(diff_after - diff_before) / diff_before
-            s_diff = abs(std_fn_after - std_fn_before)
+                d_diff = 0.0
+                s_diff = 0.0
+            else:
+                d_diff = abs(diff_after - diff_before) / diff_before
+                s_diff = abs(std_fn_after - std_fn_before)
             
             # Store iteration info
             self.iteration_history.append({
                 'iteration': iteration,
                 'n_valid': len(valid_indices_after),
+                'n_rejected': n_rejected_this_iteration,
                 'mean_fn': mean_fn_after,
                 'std_fn': std_fn_after,
                 'mc_peak': mc_peak_freq_after,
@@ -219,12 +216,23 @@ class CoxFDWRARejection(BaseRejectionAlgorithm):
                 'min_iterations_reached': iteration >= self.min_iterations
             })
             
-            # Check convergence (only after minimum iterations)
+            # Check if we should stop
+            # Only allow stopping if we've completed minimum iterations
             if iteration >= self.min_iterations:
+                # Check if no windows rejected this iteration (natural convergence)
+                if not windows_rejected:
+                    converged = True
+                    self.converged_iteration = iteration
+                    break
+                
+                # Check convergence criteria
                 if d_diff < self.convergence_threshold_diff and s_diff < self.convergence_threshold_std:
                     converged = True
                     self.converged_iteration = iteration
                     break
+            
+            # If we haven't reached min_iterations, continue even if converged
+            # This forces at least min_iterations to run
         
         # Create results for each window
         results = []

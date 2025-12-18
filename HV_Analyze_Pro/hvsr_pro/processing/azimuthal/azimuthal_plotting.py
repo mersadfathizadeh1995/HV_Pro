@@ -20,6 +20,8 @@ __all__ = [
     "plot_azimuthal_contour_2d",
     "plot_azimuthal_contour_3d",
     "plot_azimuthal_summary",
+    "plot_azimuthal_polar",
+    "plot_azimuthal_curves",
     "DEFAULT_AZIMUTHAL_KWARGS"
 ]
 
@@ -246,7 +248,11 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
                            dpi: int = 150,
                            legend_loc: str = "outside_right",
                            cmap: str = "plasma",
-                           show_panel_labels: bool = True) -> Tuple[plt.Figure, Tuple[Axes3D, plt.Axes, plt.Axes]]:
+                           show_panel_labels: bool = True,
+                           title_fontsize: int = 14,
+                           axis_fontsize: int = 10,
+                           tick_fontsize: int = 8,
+                           legend_fontsize: int = 8) -> Tuple[plt.Figure, Tuple[Axes3D, plt.Axes, plt.Axes]]:
     """
     Create comprehensive summary figure with 3D surface, 2D contour, and HVSR curves.
     
@@ -357,21 +363,33 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
                    label=f'Peak: {peak_freq:.2f} Hz')
     
     ax_curves.set_xscale("log")
-    ax_curves.set_xlabel("Frequency (Hz)")
-    ax_curves.set_ylabel("HVSR Amplitude")
+    ax_curves.set_xlabel("Frequency (Hz)", fontsize=axis_fontsize)
+    ax_curves.set_ylabel("HVSR Amplitude", fontsize=axis_fontsize)
+    ax_curves.tick_params(axis='both', labelsize=tick_fontsize)
     ax_curves.grid(True, alpha=0.3)
+    
+    # Apply font sizes to 2D axes as well
+    ax_2d.set_xlabel("Frequency (Hz)", fontsize=axis_fontsize)
+    ax_2d.set_ylabel("Azimuth (deg)", fontsize=axis_fontsize)
+    ax_2d.tick_params(axis='both', labelsize=tick_fontsize)
+    
+    # Apply font sizes to 3D axes
+    ax_3d.set_xlabel("Frequency (Hz)", fontsize=axis_fontsize)
+    ax_3d.set_ylabel("Azimuth (deg)", fontsize=axis_fontsize)
+    ax_3d.set_zlabel("HVSR Amplitude", fontsize=axis_fontsize)
+    ax_3d.tick_params(axis='both', labelsize=tick_fontsize)
     
     # Handle legend positioning
     if legend_loc == "outside_right":
         ax_curves.legend(bbox_to_anchor=(1.05, 1), loc='upper left', 
-                        fontsize=8, frameon=True, fancybox=True)
+                        fontsize=legend_fontsize, frameon=True, fancybox=True)
     elif legend_loc == "outside_bottom":
         ax_curves.legend(bbox_to_anchor=(0.5, -0.15), loc='upper center',
-                        fontsize=8, frameon=True, fancybox=True, ncol=3)
+                        fontsize=legend_fontsize, frameon=True, fancybox=True, ncol=3)
     elif legend_loc == "none":
         pass  # No legend
     else:  # Default: upper_right
-        ax_curves.legend(loc="upper right", fontsize=8)
+        ax_curves.legend(loc="upper right", fontsize=legend_fontsize)
     
     # Add panel labels in upper-left corner with white background
     if show_panel_labels:
@@ -392,9 +410,170 @@ def plot_azimuthal_summary(result: AzimuthalHVSRResult,
                       verticalalignment='top', **label_style)
     
     # Add title
-    fig.suptitle("Azimuthal HVSR Analysis", fontsize=14, fontweight='bold')
+    fig.suptitle("Azimuthal HVSR Analysis", fontsize=title_fontsize, fontweight='bold')
     
     return (fig, (ax_3d, ax_2d, ax_curves))
+
+
+def plot_azimuthal_polar(result: AzimuthalHVSRResult,
+                         distribution_mc: str = "lognormal",
+                         fig: plt.Figure = None,
+                         ax: plt.Axes = None,
+                         cmap: str = "viridis",
+                         show_peak_amplitude: bool = True,
+                         title_fontsize: int = 14,
+                         axis_fontsize: int = 10,
+                         tick_fontsize: int = 8) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Create polar plot showing HVSR amplitude at peak frequency vs azimuth.
+    
+    Args:
+        result: AzimuthalHVSRResult object
+        distribution_mc: Distribution for mean curve
+        fig: Existing figure (optional)
+        ax: Existing polar axes (optional)
+        cmap: Colormap for amplitude coloring
+        show_peak_amplitude: Whether to show amplitude at peak for each azimuth
+        title_fontsize: Font size for title
+        axis_fontsize: Font size for axis labels
+        tick_fontsize: Font size for tick labels
+        
+    Returns:
+        (figure, axes)
+    """
+    ax_was_none = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(subplot_kw=dict(projection='polar'), figsize=(8, 8), dpi=100)
+    
+    # Get peak frequency and amplitude for each azimuth
+    peak_freqs, peak_amps = result.mean_curve_peak_by_azimuth(distribution_mc)
+    
+    # Convert azimuths to radians
+    azimuths_rad = np.radians(result.azimuths)
+    
+    # Create colormap based on peak amplitudes
+    cmap_obj = cm.get_cmap(cmap)
+    norm = Normalize(vmin=np.min(peak_amps), vmax=np.max(peak_amps))
+    colors = cmap_obj(norm(peak_amps))
+    
+    # Plot as bar chart in polar coordinates
+    width = np.radians(result.azimuths[1] - result.azimuths[0]) if len(result.azimuths) > 1 else np.radians(10)
+    bars = ax.bar(azimuths_rad, peak_amps, width=width * 0.8, color=colors, edgecolor='black', linewidth=0.5)
+    
+    # Also plot a line connecting the peaks
+    # Close the polygon by appending the first point
+    azimuths_closed = np.append(azimuths_rad, azimuths_rad[0])
+    peak_amps_closed = np.append(peak_amps, peak_amps[0])
+    ax.plot(azimuths_closed, peak_amps_closed, 'k-', linewidth=1.5, alpha=0.7)
+    
+    # Set theta direction and zero location (0 = North, clockwise)
+    ax.set_theta_zero_location('N')
+    ax.set_theta_direction(-1)
+    
+    # Set radial limits
+    ax.set_ylim(0, np.max(peak_amps) * 1.1)
+    
+    # Customize grid and labels
+    ax.tick_params(labelsize=tick_fontsize)
+    ax.set_title("HVSR Peak Amplitude by Azimuth", fontsize=title_fontsize, fontweight='bold', pad=20)
+    
+    # Add colorbar
+    if ax_was_none:
+        sm = cm.ScalarMappable(cmap=cmap_obj, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, orientation='vertical', shrink=0.7, pad=0.1)
+        cbar.set_label('Peak Amplitude', fontsize=axis_fontsize)
+        cbar.ax.tick_params(labelsize=tick_fontsize)
+    
+    if ax_was_none:
+        fig.tight_layout()
+    
+    return (fig, ax)
+
+
+def plot_azimuthal_curves(result: AzimuthalHVSRResult,
+                          distribution_mc: str = "lognormal",
+                          fig: plt.Figure = None,
+                          ax: plt.Axes = None,
+                          cmap: str = "viridis",
+                          show_mean: bool = True,
+                          show_std: bool = True,
+                          title_fontsize: int = 14,
+                          axis_fontsize: int = 10,
+                          tick_fontsize: int = 8,
+                          legend_fontsize: int = 8) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Plot individual HVSR curves for each azimuth.
+    
+    Args:
+        result: AzimuthalHVSRResult object
+        distribution_mc: Distribution for mean curve
+        fig: Existing figure (optional)
+        ax: Existing axes (optional)
+        cmap: Colormap for individual curves
+        show_mean: Whether to show mean curve
+        show_std: Whether to show standard deviation
+        title_fontsize: Font size for title
+        axis_fontsize: Font size for axis labels
+        tick_fontsize: Font size for tick labels
+        legend_fontsize: Font size for legend
+        
+    Returns:
+        (figure, axes)
+    """
+    ax_was_none = ax is None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
+    
+    # Get colormap
+    cmap_obj = cm.get_cmap(cmap)
+    n_azimuths = len(result.azimuths)
+    
+    # Plot individual curves for each azimuth
+    for i, azimuth in enumerate(result.azimuths):
+        color = cmap_obj(i / n_azimuths)
+        label = f'{azimuth:.0f} deg' if i % max(1, n_azimuths // 6) == 0 else None
+        ax.plot(result.frequencies, result.mean_curves_per_azimuth[i],
+               color=color, linewidth=0.8, alpha=0.7, label=label)
+    
+    # Plot mean curve
+    if show_mean:
+        mean_curve = result.mean_curve(distribution_mc)
+        ax.plot(result.frequencies, mean_curve, 'k-', linewidth=2.5, 
+               label='Mean (all azimuths)', zorder=10)
+        
+        if show_std:
+            std_curve = result.std_curve(distribution_mc)
+            if distribution_mc == "lognormal":
+                std_plus = mean_curve * np.exp(std_curve)
+                std_minus = mean_curve * np.exp(-std_curve)
+            else:
+                std_plus = mean_curve + std_curve
+                std_minus = mean_curve - std_curve
+            
+            ax.fill_between(result.frequencies, std_minus, std_plus,
+                           color='gray', alpha=0.2, label='+/- 1 Std')
+    
+    # Mark overall peak
+    peak_freq, peak_amp = result.mean_curve_peak(distribution_mc)
+    ax.plot(peak_freq, peak_amp, 'D', markersize=10, markerfacecolor='red',
+           markeredgecolor='black', markeredgewidth=1.5,
+           label=f'Peak: {peak_freq:.2f} Hz', zorder=11)
+    
+    ax.set_xscale('log')
+    ax.set_xlabel('Frequency (Hz)', fontsize=axis_fontsize)
+    ax.set_ylabel('HVSR Amplitude', fontsize=axis_fontsize)
+    ax.tick_params(axis='both', labelsize=tick_fontsize)
+    ax.grid(True, alpha=0.3)
+    ax.set_title('HVSR Curves by Azimuth', fontsize=title_fontsize, fontweight='bold')
+    
+    # Add legend
+    ax.legend(loc='upper right', fontsize=legend_fontsize, ncol=2, framealpha=0.9)
+    
+    if ax_was_none:
+        fig.tight_layout()
+    
+    return (fig, ax)
 
 
 def save_azimuthal_plot(fig: plt.Figure, 

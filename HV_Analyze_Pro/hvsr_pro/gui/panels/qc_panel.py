@@ -225,11 +225,12 @@ if HAS_PYQT5:
             
             cox_params_layout.addWidget(QLabel("n-value:"), 0, 0)
             self.cox_n_spin = QDoubleSpinBox()
-            self.cox_n_spin.setRange(1.0, 5.0)
+            self.cox_n_spin.setRange(0.5, 10.0)
             self.cox_n_spin.setValue(2.0)
             self.cox_n_spin.setDecimals(1)
+            self.cox_n_spin.setSingleStep(0.5)
             self.cox_n_spin.setEnabled(False)
-            self.cox_n_spin.setToolTip("Standard deviation multiplier (1-5)")
+            self.cox_n_spin.setToolTip("Standard deviation multiplier (lower = stricter rejection)")
             cox_params_layout.addWidget(self.cox_n_spin, 0, 1)
             
             cox_params_layout.addWidget(QLabel("Max Iter:"), 1, 0)

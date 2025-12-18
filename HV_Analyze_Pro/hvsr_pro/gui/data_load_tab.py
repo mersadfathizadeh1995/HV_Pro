@@ -17,7 +17,8 @@ from typing import Optional
 try:
     from PyQt5.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-        QGroupBox, QPushButton, QLabel, QComboBox
+        QGroupBox, QPushButton, QLabel, QComboBox,
+        QLineEdit, QFileDialog
     )
     from PyQt5.QtCore import Qt, pyqtSignal
     HAS_PYQT5 = True
@@ -65,7 +66,29 @@ if HAS_PYQT5:
             """Initialize user interface."""
             layout = QVBoxLayout(self)
 
-            # === TOP: File Loading Controls ===
+            # === TOP: Work Directory ===
+            work_dir_group = QGroupBox("Work Directory")
+            work_dir_layout = QHBoxLayout()
+            
+            self.work_dir_edit = QLineEdit()
+            self.work_dir_edit.setPlaceholderText("Set working directory for temp files and default browse location...")
+            self.work_dir_edit.setToolTip(
+                "Working directory for:\n"
+                "- Temporary files\n"
+                "- Default browse location for open/save dialogs\n"
+                "- Session save location"
+            )
+            work_dir_layout.addWidget(self.work_dir_edit)
+            
+            self.browse_work_dir_btn = QPushButton("Browse...")
+            self.browse_work_dir_btn.clicked.connect(self.on_browse_work_directory)
+            self.browse_work_dir_btn.setMaximumWidth(80)
+            work_dir_layout.addWidget(self.browse_work_dir_btn)
+            
+            work_dir_group.setLayout(work_dir_layout)
+            layout.addWidget(work_dir_group)
+
+            # === File Loading Controls ===
             controls_group = QGroupBox("Data Import")
             controls_layout = QVBoxLayout()
 
@@ -160,6 +183,40 @@ if HAS_PYQT5:
         def on_load_file(self):
             """Handle load file button click."""
             self.load_file_requested.emit()
+
+        def on_browse_work_directory(self):
+            """Handle browse work directory button click."""
+            current_dir = self.work_dir_edit.text() or str(Path.home())
+            
+            directory = QFileDialog.getExistingDirectory(
+                self,
+                "Select Work Directory",
+                current_dir,
+                QFileDialog.ShowDirsOnly
+            )
+            
+            if directory:
+                self.set_work_directory(directory)
+        
+        def set_work_directory(self, directory: str):
+            """Set the work directory.
+            
+            Args:
+                directory: Path to work directory
+            """
+            self.work_dir_edit.setText(directory)
+            
+            # Notify parent window
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, '_work_directory'):
+                    parent._work_directory = directory
+                    break
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+        
+        def get_work_directory(self) -> str:
+            """Get the current work directory."""
+            return self.work_dir_edit.text()
 
         def on_export_data(self):
             """Handle export data button click."""

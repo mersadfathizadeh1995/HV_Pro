@@ -47,6 +47,16 @@ if HAS_PYQT5:
             super().__init__("Azimuthal Properties", parent)
             self.setObjectName("AzimuthalPropertiesDock")
             
+            # Set dock features for proper resizing
+            self.setFeatures(
+                QDockWidget.DockWidgetMovable | 
+                QDockWidget.DockWidgetFloatable |
+                QDockWidget.DockWidgetClosable
+            )
+            # Allow dock to be resized smaller
+            self.setMinimumWidth(180)
+            self.setMaximumWidth(400)
+            
             # Result reference
             self.result = None
             self.figure = None
@@ -85,6 +95,33 @@ if HAS_PYQT5:
             # === EXPORT SECTION ===
             export_section = self._create_export_section()
             main_layout.addWidget(export_section)
+            
+            # === APPLY BUTTON ===
+            apply_container = QWidget()
+            apply_layout = QHBoxLayout(apply_container)
+            apply_layout.setContentsMargins(5, 10, 5, 5)
+            
+            self.apply_btn = QPushButton("Apply Changes")
+            self.apply_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    font-weight: bold;
+                    padding: 8px 16px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:pressed {
+                    background-color: #3d8b40;
+                }
+            """)
+            self.apply_btn.clicked.connect(self._on_apply_clicked)
+            apply_layout.addWidget(self.apply_btn)
+            
+            main_layout.addWidget(apply_container)
             
             main_layout.addStretch()
             
@@ -294,6 +331,11 @@ if HAS_PYQT5:
         
         def _emit_options_changed(self):
             """Emit signal with current options."""
+            options = self.get_options()
+            self.plot_options_changed.emit(options)
+        
+        def _on_apply_clicked(self):
+            """Handle Apply button click - emit signal to update plot."""
             options = self.get_options()
             self.plot_options_changed.emit(options)
         

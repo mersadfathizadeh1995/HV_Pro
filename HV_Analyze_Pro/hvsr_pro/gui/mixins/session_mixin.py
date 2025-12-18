@@ -1,222 +1,298 @@
 """
-Session Mixin
-=============
+Session Management Mixin for HVSR Pro GUI
+==========================================
 
-Mixin providing session management functionality for the main window.
+Provides save/load session functionality for the main window.
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 
 try:
-    from PyQt5.QtWidgets import QMessageBox, QFileDialog
+    from PyQt5.QtWidgets import QFileDialog, QMessageBox
     HAS_PYQT5 = True
 except ImportError:
     HAS_PYQT5 = False
 
+from hvsr_pro.config.session import (
+    SessionManager, SessionState, 
+    ProcessingSettings, QCSettings, FileInfo, WindowState
+)
 
-class SessionMixin:
-    """
-    Mixin providing session management functionality.
+
+if HAS_PYQT5:
     
-    This mixin should be used with HVSRMainWindow and provides:
-    - save_session(): Save current session to file
-    - load_session(): Load session from file
-    - export_results(): Export HVSR results to files
-    - generate_report_plots(): Open export dialog for visualizations
-    
-    Expected attributes on the main class:
-    - hvsr_result: HVSRResult
-    - windows: WindowCollection
-    - data: SeismicData
-    """
-    
-    def save_session(self):
-        """Save current session to JSON file."""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Session", "", "JSON Files (*.json)"
-        )
+    class SessionMixin:
+        """
+        Mixin class providing session save/load functionality.
         
-        if file_path and self.hvsr_result:
-            try:
-                self.hvsr_result.save(file_path, include_windows=False)
-                self.add_info(f"Session saved: {file_path}")
-                QMessageBox.information(self, "Saved", "Session saved successfully")
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", str(e))
-                self.add_info(f"ERROR - Save session: {str(e)}")
-    
-    def load_session(self):
-        """Load session from JSON file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Session", "", "JSON Files (*.json)"
-        )
+        Requires the main window to have:
+        - Processing settings widgets
+        - QC settings widgets
+        - Window collection (self.windows)
+        - HVSR result (self.hvsr_result)
+        - File info (self.current_file, self.load_mode)
+        - Work directory (self.work_directory)
+        """
         
-        if file_path:
-            try:
-                from hvsr_pro.processing.hvsr import HVSRResult
-                
-                result = HVSRResult.load(file_path)
-                self.hvsr_result = result
-                self.add_info(f"Session loaded: {file_path}")
-                
+        def __init__(self):
+            """Initialize session manager."""
+            self._session_manager = SessionManager()
+            self._current_session_path: Optional[str] = None
+            self._work_directory: str = ''
+        
+        def save_session(self):
+            """Save current session to file."""
+            # Get default directory
+            default_dir = self._work_directory or str(Path.home())
+            default_name = self._session_manager.get_default_filename()
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Session",
+                str(Path(default_dir) / default_name),
+                self._session_manager.FILE_FILTER
+            )
+            
+            if not filepath:
+                return
+            
+            # Build session state from current GUI state
+            state = self._build_session_state()
+            
+            if self._session_manager.save_session(filepath, state):
+                self._current_session_path = filepath
+                self.add_info(f"Session saved: {Path(filepath).name}")
                 QMessageBox.information(
-                    self, "Loaded",
-                    "Session loaded successfully\n"
-                    "(Note: Window states not restored)"
+                    self, "Session Saved",
+                    f"Session saved successfully to:\n{filepath}"
                 )
-            except Exception as e:
-                QMessageBox.critical(self, "Load Error", str(e))
-                self.add_info(f"ERROR - Load session: {str(e)}")
-    
-    def export_results(self):
-        """Export HVSR results (curve data, peaks, metadata)."""
-        if self.hvsr_result is None:
-            QMessageBox.warning(self, "No Results", "No results to export.")
-            return
+            else:
+                QMessageBox.critical(
+                    self, "Save Failed",
+                    "Failed to save session. Check the log for details."
+                )
         
-        # Select output directory
-        output_dir = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory"
-        )
-        
-        if not output_dir:
-            return
-        
-        try:
-            from hvsr_pro.utils.export_utils import export_complete_dataset
+        def load_session(self):
+            """Load session from file."""
+            # Get default directory
+            default_dir = self._work_directory or str(Path.home())
             
-            # Export complete dataset
-            created_files = export_complete_dataset(
-                self.hvsr_result,
-                output_dir,
-                base_filename="hvsr"
+            filepath, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load Session",
+                default_dir,
+                self._session_manager.FILE_FILTER
             )
             
-            self.add_info(f"Exported to: {output_dir}")
-            for file_type, filepath in created_files.items():
-                filename = Path(filepath).name
-                self.add_info(f"   - {filename} ({file_type})")
+            if not filepath:
+                return
             
-            QMessageBox.information(
-                self, "Export Complete",
-                f"Results exported to:\n{output_dir}\n\n"
-                f"Files created:\n" +
-                "\n".join([f"- {Path(f).name}" for f in created_files.values()])
+            state = self._session_manager.load_session(filepath)
+            
+            if state:
+                self._apply_session_state(state)
+                self._current_session_path = filepath
+                self.add_info(f"Session loaded: {Path(filepath).name}")
+                QMessageBox.information(
+                    self, "Session Loaded",
+                    f"Session loaded successfully.\n\n"
+                    f"File: {state.file_info.path}\n"
+                    f"Windows: {state.n_total_windows} total, {state.n_active_windows} active"
+                )
+            else:
+                QMessageBox.critical(
+                    self, "Load Failed",
+                    "Failed to load session. The file may be corrupted or invalid."
+                )
+        
+        def _build_session_state(self) -> SessionState:
+            """Build session state from current GUI state."""
+            state = SessionState()
+            
+            # Work directory
+            state.work_directory = getattr(self, '_work_directory', '')
+            
+            # File info
+            current_file = getattr(self, 'current_file', '')
+            if isinstance(current_file, list):
+                current_file = str(current_file)
+            state.file_info = FileInfo(
+                path=str(current_file) if current_file else '',
+                load_mode=getattr(self, 'load_mode', 'single'),
+                time_range_start=None,
+                time_range_end=None,
+                timezone='UTC'
             )
             
-        except Exception as e:
-            import traceback
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            QMessageBox.critical(self, "Export Error", error_msg)
-            self.add_info(f"ERROR - Export: {str(e)}")
-    
-    def generate_report_plots(self):
-        """Open advanced export dialog for comprehensive visualizations."""
-        if self.hvsr_result is None:
-            QMessageBox.warning(self, "No Results", "No results to export.")
-            return
-        
-        from hvsr_pro.gui.export_dialog import ExportDialog
-        
-        dialog = ExportDialog(self, self.hvsr_result, self.windows, self.data)
-        dialog.exec_()
-    
-    def get_session_state(self) -> Dict[str, Any]:
-        """
-        Get current session state as dictionary.
-        
-        Returns:
-            Dictionary containing current session state
-        """
-        state = {
-            'has_result': self.hvsr_result is not None,
-            'has_windows': self.windows is not None,
-            'has_data': self.data is not None,
-            'current_file': str(self.current_file) if self.current_file else None,
-            'load_mode': getattr(self, 'load_mode', 'single'),
-        }
-        
-        if self.hvsr_result:
-            state['result_info'] = {
-                'n_frequencies': len(self.hvsr_result.frequencies),
-                'has_primary_peak': self.hvsr_result.primary_peak is not None,
-            }
-            if self.hvsr_result.primary_peak:
-                state['result_info']['f0'] = self.hvsr_result.primary_peak.frequency
-        
-        if self.windows:
-            state['windows_info'] = {
-                'total': self.windows.n_windows,
-                'active': self.windows.n_active,
-                'rejected': self.windows.n_rejected,
-                'acceptance_rate': self.windows.acceptance_rate,
-            }
-        
-        return state
-    
-    def restore_session_state(self, state: Dict[str, Any]) -> bool:
-        """
-        Restore session state from dictionary.
-        
-        Args:
-            state: Session state dictionary
+            # Time range if available
+            if hasattr(self, 'current_time_range') and self.current_time_range:
+                tr = self.current_time_range
+                if isinstance(tr, dict):
+                    state.file_info.time_range_start = tr.get('start')
+                    state.file_info.time_range_end = tr.get('end')
+                    state.file_info.timezone = tr.get('timezone', 'UTC')
             
-        Returns:
-            True if restoration successful, False otherwise
-        """
-        # This is a placeholder for more complete session restoration
-        # Full restoration would require saving/loading window states
-        if 'current_file' in state and state['current_file']:
-            self.current_file = state['current_file']
-        
-        if 'load_mode' in state:
-            self.load_mode = state['load_mode']
-        
-        return True
-    
-    def export_session_summary(self, output_path: str) -> bool:
-        """
-        Export a text summary of the current session.
-        
-        Args:
-            output_path: Path for output file
+            # Processing settings
+            state.processing = ProcessingSettings(
+                window_length=self._get_widget_value('window_length_spin', 60.0),
+                overlap=self._get_widget_value('overlap_spin', 50) / 100.0,
+                smoothing_bandwidth=self._get_widget_value('smoothing_spin', 40.0),
+                f_min=self._get_widget_value('freq_min_spin', 0.2),
+                f_max=self._get_widget_value('freq_max_spin', 20.0),
+                n_frequencies=self._get_widget_value('freq_points_spin', 100)
+            )
             
-        Returns:
-            True if export successful
-        """
-        if self.hvsr_result is None:
-            return False
-        
-        try:
-            state = self.get_session_state()
+            # QC settings
+            state.qc = QCSettings(
+                enabled=self._get_widget_checked('qc_enable_check', True),
+                mode=self._get_combo_data('qc_combo', 'balanced'),
+                cox_fdwra_enabled=self._get_widget_checked('cox_fdwra_check', False),
+                cox_n=self._get_widget_value('cox_n_spin', 2.0),
+                cox_max_iterations=self._get_widget_value('cox_iterations_spin', 50),
+                cox_min_iterations=self._get_widget_value('cox_min_iterations_spin', 1),
+                cox_distribution=self._get_combo_text('cox_dist_combo', 'lognormal')
+            )
             
-            with open(output_path, 'w') as f:
-                f.write("HVSR Pro Session Summary\n")
-                f.write("=" * 50 + "\n\n")
+            # Window states
+            windows = getattr(self, 'windows', None)
+            if windows and hasattr(windows, 'windows'):
+                state.window_states = [
+                    WindowState(
+                        index=i,
+                        active=w.is_active(),
+                        rejection_reason=getattr(w, 'rejection_reason', None)
+                    )
+                    for i, w in enumerate(windows.windows)
+                ]
+                state.n_total_windows = len(windows.windows)
+                state.n_active_windows = windows.n_active
+            
+            # Results summary
+            result = getattr(self, 'hvsr_result', None)
+            if result:
+                state.has_results = True
+                if hasattr(result, 'peak_frequency'):
+                    state.peak_frequency = float(result.peak_frequency)
+                if hasattr(result, 'peak_amplitude'):
+                    state.peak_amplitude = float(result.peak_amplitude)
+            
+            return state
+        
+        def _apply_session_state(self, state: SessionState):
+            """Apply loaded session state to GUI."""
+            # Work directory
+            self._work_directory = state.work_directory
+            if hasattr(self, 'work_dir_edit'):
+                self.work_dir_edit.setText(state.work_directory)
+            
+            # Processing settings
+            self._set_widget_value('window_length_spin', state.processing.window_length)
+            self._set_widget_value('overlap_spin', int(state.processing.overlap * 100))
+            self._set_widget_value('smoothing_spin', state.processing.smoothing_bandwidth)
+            self._set_widget_value('freq_min_spin', state.processing.f_min)
+            self._set_widget_value('freq_max_spin', state.processing.f_max)
+            self._set_widget_value('freq_points_spin', state.processing.n_frequencies)
+            
+            # QC settings
+            self._set_widget_checked('qc_enable_check', state.qc.enabled)
+            self._set_combo_data('qc_combo', state.qc.mode)
+            self._set_widget_checked('cox_fdwra_check', state.qc.cox_fdwra_enabled)
+            self._set_widget_value('cox_n_spin', state.qc.cox_n)
+            self._set_widget_value('cox_iterations_spin', state.qc.cox_max_iterations)
+            self._set_widget_value('cox_min_iterations_spin', state.qc.cox_min_iterations)
+            self._set_combo_text('cox_dist_combo', state.qc.cox_distribution)
+            
+            # Note: Window states would need to be reloaded when data is loaded
+            # Store them for later application
+            self._pending_window_states = state.window_states
+            
+            # File info - prompt user to load the file
+            if state.file_info.path and Path(state.file_info.path).exists():
+                reply = QMessageBox.question(
+                    self, "Load Data File",
+                    f"Session references data file:\n{state.file_info.path}\n\n"
+                    "Would you like to load this file now?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
                 
-                if state.get('current_file'):
-                    f.write(f"Data File: {state['current_file']}\n")
-                
-                if state.get('windows_info'):
-                    wi = state['windows_info']
-                    f.write(f"\nWindow Statistics:\n")
-                    f.write(f"  Total windows: {wi['total']}\n")
-                    f.write(f"  Active windows: {wi['active']}\n")
-                    f.write(f"  Rejected windows: {wi['rejected']}\n")
-                    f.write(f"  Acceptance rate: {wi['acceptance_rate']*100:.1f}%\n")
-                
-                if state.get('result_info'):
-                    ri = state['result_info']
-                    f.write(f"\nHVSR Results:\n")
-                    f.write(f"  Frequency points: {ri['n_frequencies']}\n")
-                    if ri.get('f0'):
-                        f.write(f"  Fundamental frequency: {ri['f0']:.2f} Hz\n")
-            
-            self.add_info(f"Session summary exported to: {output_path}")
-            return True
-            
-        except Exception as e:
-            self.add_info(f"ERROR - Export summary: {str(e)}")
-            return False
+                if reply == QMessageBox.Yes:
+                    self._load_file_from_session(state.file_info)
+        
+        def _load_file_from_session(self, file_info: FileInfo):
+            """Load file referenced in session."""
+            # This should trigger the normal file loading process
+            # Subclass needs to implement this based on its file loading mechanism
+            if hasattr(self, 'load_file_directly'):
+                self.load_file_directly(file_info.path, file_info.load_mode)
+        
+        def _get_widget_value(self, widget_name: str, default):
+            """Get value from a spin box widget."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'value'):
+                return widget.value()
+            return default
+        
+        def _set_widget_value(self, widget_name: str, value):
+            """Set value on a spin box widget."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'setValue'):
+                widget.setValue(value)
+        
+        def _get_widget_checked(self, widget_name: str, default: bool) -> bool:
+            """Get checked state from a checkbox."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'isChecked'):
+                return widget.isChecked()
+            return default
+        
+        def _set_widget_checked(self, widget_name: str, checked: bool):
+            """Set checked state on a checkbox."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'setChecked'):
+                widget.setChecked(checked)
+        
+        def _get_combo_text(self, widget_name: str, default: str) -> str:
+            """Get current text from a combo box."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'currentText'):
+                return widget.currentText()
+            return default
+        
+        def _set_combo_text(self, widget_name: str, text: str):
+            """Set current text on a combo box."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'setCurrentText'):
+                widget.setCurrentText(text)
+        
+        def _get_combo_data(self, widget_name: str, default: str) -> str:
+            """Get current data from a combo box."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'currentData'):
+                data = widget.currentData()
+                return data if data else default
+            return default
+        
+        def _set_combo_data(self, widget_name: str, data):
+            """Set current item by data on a combo box."""
+            widget = getattr(self, widget_name, None)
+            if widget and hasattr(widget, 'findData'):
+                index = widget.findData(data)
+                if index >= 0:
+                    widget.setCurrentIndex(index)
+        
+        def set_work_directory(self, directory: str):
+            """Set the work directory."""
+            self._work_directory = directory
+            self._session_manager.work_directory = Path(directory)
+        
+        def get_work_directory(self) -> str:
+            """Get the work directory."""
+            return self._work_directory
 
+
+else:
+    class SessionMixin:
+        """Dummy mixin when PyQt5 not available."""
+        pass

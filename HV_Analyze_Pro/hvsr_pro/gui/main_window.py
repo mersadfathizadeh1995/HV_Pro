@@ -74,6 +74,10 @@ class HVSRMainWindow(QMainWindow):
 
         # Custom QC settings storage
         self.custom_qc_settings = None  # Will be set if user opens Advanced QC dialog
+        
+        # Work directory for file dialogs and temp files
+        self._work_directory = ''
+        self._pending_window_states = []  # For session loading
 
         # Plot window manager (separate window by default)
         self.plot_manager = PlotWindowManager(self)
@@ -101,11 +105,32 @@ class HVSRMainWindow(QMainWindow):
         
         self.init_ui()
         self.connect_signals()
+        
+        # Install event filter on menu bar to fix Windows click issues
+        self.menuBar().installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        """Event filter to ensure menu bar receives clicks on Windows."""
+        from PyQt5.QtCore import QEvent
+        
+        # If mouse enters menu bar area, activate the window
+        if obj == self.menuBar():
+            if event.type() == QEvent.Enter:
+                self.activateWindow()
+            elif event.type() == QEvent.MouseButtonPress:
+                # Ensure window is active on click
+                self.activateWindow()
+                self.raise_()
+        
+        return super().eventFilter(obj, event)
     
     def create_menu_bar(self):
         """Create menu bar with common actions."""
         menubar = self.menuBar()
         menubar.setNativeMenuBar(False)  # Fix for Windows menu bar click issues
+        
+        # Ensure menu bar is visible and can receive events
+        menubar.setVisible(True)
 
         # File menu
         file_menu = menubar.addMenu('&File')
@@ -119,6 +144,19 @@ class HVSRMainWindow(QMainWindow):
         save_action = file_menu.addAction('&Save Results...')
         save_action.setShortcut('Ctrl+S')
         save_action.triggered.connect(self.export_results)
+        
+        file_menu.addSeparator()
+        
+        # Session menu items
+        save_session_action = file_menu.addAction('Save &Session...')
+        save_session_action.setShortcut('Ctrl+Shift+S')
+        save_session_action.triggered.connect(self.save_session)
+        save_session_action.setToolTip("Save current settings and state to resume later")
+        
+        load_session_action = file_menu.addAction('&Load Session...')
+        load_session_action.setShortcut('Ctrl+Shift+O')
+        load_session_action.triggered.connect(self.load_session)
+        load_session_action.setToolTip("Load a saved session file")
         
         file_menu.addSeparator()
         
@@ -363,9 +401,6 @@ class HVSRMainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Add menu bar
-        self.create_menu_bar()
-        
         # Main layout
         main_layout = QHBoxLayout(central_widget)
         
@@ -483,6 +518,13 @@ class HVSRMainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
+        
+        # Add menu bar LAST to ensure it receives mouse events properly on Windows
+        self.create_menu_bar()
+        
+        # Force window to raise and activate to ensure menu bar is interactive
+        self.raise_()
+        self.activateWindow()
 
     def on_tab_changed(self, index):
         """
@@ -905,11 +947,12 @@ class HVSRMainWindow(QMainWindow):
 
         cox_params_layout.addWidget(QLabel("n-value:"), 0, 0)
         self.cox_n_spin = QDoubleSpinBox()
-        self.cox_n_spin.setRange(1.0, 5.0)
+        self.cox_n_spin.setRange(0.5, 10.0)
         self.cox_n_spin.setValue(2.0)
         self.cox_n_spin.setDecimals(1)
+        self.cox_n_spin.setSingleStep(0.5)
         self.cox_n_spin.setEnabled(False)
-        self.cox_n_spin.setToolTip("Standard deviation multiplier (1-5)")
+        self.cox_n_spin.setToolTip("Standard deviation multiplier (lower = stricter rejection)")
         cox_params_layout.addWidget(self.cox_n_spin, 0, 1)
 
         cox_params_layout.addWidget(QLabel("Max Iter:"), 1, 0)
@@ -2019,39 +2062,405 @@ class HVSRMainWindow(QMainWindow):
                 self.add_info(f"ERROR - Export: {str(e)}")
     
     def save_session(self):
-        """Save current session."""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Session", "", "JSON Files (*.json)"
+        """Save current session state including all settings and computed data."""
+        from hvsr_pro.config.session import (
+            SessionManager, SessionState, 
+            ProcessingSettings as SessionProcessingSettings,
+            QCSettings as SessionQCSettings,
+            FileInfo, WindowState
         )
         
-        if file_path and self.hvsr_result:
-            try:
-                self.hvsr_result.save(file_path, include_windows=False)
-                self.add_info(f"Session saved: {file_path}")
-                QMessageBox.information(self, "Saved", "Session saved successfully")
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", str(e))
+        # Get work directory for default save location
+        work_dir = getattr(self, '_work_directory', '')
+        
+        if not work_dir:
+            # Ask user to set work directory first
+            reply = QMessageBox.question(
+                self, "Work Directory Required",
+                "Please set a work directory first to save sessions.\n\n"
+                "Would you like to select a work directory now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                work_dir = QFileDialog.getExistingDirectory(
+                    self, "Select Work Directory"
+                )
+                if work_dir:
+                    self._work_directory = work_dir
+                    if hasattr(self, 'data_load_tab') and hasattr(self.data_load_tab, 'work_dir_edit'):
+                        self.data_load_tab.work_dir_edit.setText(work_dir)
+                else:
+                    return
+            else:
+                return
+        
+        manager = SessionManager(work_directory=work_dir)
+        
+        # Build session state
+        state = SessionState()
+        state.work_directory = work_dir
+        
+        # File info
+        current_file = getattr(self, 'current_file', '')
+        if isinstance(current_file, list):
+            current_file = ';'.join(str(f) for f in current_file)
+        state.file_info = FileInfo(
+            path=str(current_file) if current_file else '',
+            load_mode=getattr(self, 'load_mode', 'single')
+        )
+        
+        # Processing settings
+        state.processing = SessionProcessingSettings(
+            window_length=self.window_length_spin.value() if hasattr(self, 'window_length_spin') else 60.0,
+            overlap=self.overlap_spin.value() / 100.0 if hasattr(self, 'overlap_spin') else 0.5,
+            smoothing_bandwidth=self.smoothing_spin.value() if hasattr(self, 'smoothing_spin') else 40.0,
+            f_min=self.freq_min_spin.value() if hasattr(self, 'freq_min_spin') else 0.2,
+            f_max=self.freq_max_spin.value() if hasattr(self, 'freq_max_spin') else 20.0,
+            n_frequencies=self.freq_points_spin.value() if hasattr(self, 'freq_points_spin') else 100
+        )
+        
+        # QC settings
+        state.qc = SessionQCSettings(
+            enabled=self.qc_enable_check.isChecked() if hasattr(self, 'qc_enable_check') else True,
+            mode=self.qc_combo.currentData() if hasattr(self, 'qc_combo') else 'balanced',
+            cox_fdwra_enabled=self.cox_fdwra_check.isChecked() if hasattr(self, 'cox_fdwra_check') else False,
+            cox_n=self.cox_n_spin.value() if hasattr(self, 'cox_n_spin') else 2.0,
+            cox_max_iterations=self.cox_iterations_spin.value() if hasattr(self, 'cox_iterations_spin') else 50,
+            cox_min_iterations=self.cox_min_iterations_spin.value() if hasattr(self, 'cox_min_iterations_spin') else 1,
+            cox_distribution=self.cox_dist_combo.currentText() if hasattr(self, 'cox_dist_combo') else 'lognormal'
+        )
+        
+        # Window states
+        if self.windows and hasattr(self.windows, 'windows'):
+            state.window_states = [
+                WindowState(
+                    index=i,
+                    active=w.is_active(),
+                    rejection_reason=getattr(w, 'rejection_reason', None)
+                )
+                for i, w in enumerate(self.windows.windows)
+            ]
+            state.n_total_windows = len(self.windows.windows)
+            state.n_active_windows = self.windows.n_active
+        
+        # Results summary
+        if self.hvsr_result:
+            state.has_results = True
+            # Try to get peak_frequency from various possible attributes
+            peak_freq = None
+            if hasattr(self.hvsr_result, 'peak_frequency') and self.hvsr_result.peak_frequency is not None:
+                peak_freq = float(self.hvsr_result.peak_frequency)
+            elif hasattr(self.hvsr_result, 'f0') and self.hvsr_result.f0 is not None:
+                peak_freq = float(self.hvsr_result.f0)
+            elif hasattr(self.hvsr_result, 'peaks') and self.hvsr_result.peaks:
+                # Try to get from peaks list
+                if isinstance(self.hvsr_result.peaks, list) and len(self.hvsr_result.peaks) > 0:
+                    first_peak = self.hvsr_result.peaks[0]
+                    if isinstance(first_peak, dict) and 'frequency' in first_peak:
+                        peak_freq = float(first_peak['frequency'])
+                    elif hasattr(first_peak, 'frequency'):
+                        peak_freq = float(first_peak.frequency)
+            state.peak_frequency = peak_freq
+            
+            # Try to get peak_amplitude
+            peak_amp = None
+            if hasattr(self.hvsr_result, 'peak_amplitude') and self.hvsr_result.peak_amplitude is not None:
+                peak_amp = float(self.hvsr_result.peak_amplitude)
+            elif hasattr(self.hvsr_result, 'a0') and self.hvsr_result.a0 is not None:
+                peak_amp = float(self.hvsr_result.a0)
+            state.peak_amplitude = peak_amp
+        
+        # Get seismic data if available
+        seismic_data = getattr(self, 'seismic_data', None)
+        
+        # Get azimuthal result if available (from azimuthal tab)
+        azimuthal_result = None
+        if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'result'):
+            azimuthal_result = self.azimuthal_tab.result
+        
+        # Save full session with pickled data
+        session_folder = manager.save_full_session(
+            state=state,
+            windows=self.windows,
+            hvsr_result=self.hvsr_result,
+            seismic_data=seismic_data,
+            azimuthal_result=azimuthal_result
+        )
+        
+        if session_folder:
+            self.add_info(f"Session saved: {Path(session_folder).name}")
+            
+            # Build info message
+            info_msg = f"Session saved successfully to:\n{session_folder}\n\n"
+            info_msg += "Saved data:\n"
+            info_msg += f"  - Settings and metadata\n"
+            if self.windows:
+                info_msg += f"  - Window collection ({state.n_total_windows} windows)\n"
+            if self.hvsr_result:
+                if state.peak_frequency is not None:
+                    info_msg += f"  - HVSR results (f0 = {state.peak_frequency:.3f} Hz)\n"
+                else:
+                    info_msg += f"  - HVSR results\n"
+            if seismic_data:
+                info_msg += f"  - Original seismic data\n"
+            if azimuthal_result:
+                info_msg += f"  - Azimuthal processing results\n"
+            
+            QMessageBox.information(self, "Session Saved", info_msg)
+        else:
+            QMessageBox.critical(
+                self, "Save Failed",
+                "Failed to save session. Check the log for details."
+            )
     
     def load_session(self):
-        """Load saved session."""
+        """Load saved session state including computed data."""
+        from hvsr_pro.config.session import SessionManager
+        
+        # Get work directory for default location
+        work_dir = getattr(self, '_work_directory', '')
+        default_dir = work_dir if work_dir else str(Path.home())
+        
+        # Check for sessions folder
+        sessions_dir = Path(default_dir) / 'sessions' if default_dir else None
+        if sessions_dir and sessions_dir.exists():
+            default_dir = str(sessions_dir)
+        
+        manager = SessionManager(work_directory=work_dir)
+        
+        # Allow user to select session.json or session folder
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Session", "", "JSON Files (*.json)"
+            self, "Load Session",
+            default_dir,
+            "Session Files (session.json);;All Files (*)"
         )
         
-        if file_path:
+        if not file_path:
+            return
+        
+        # Load full session with pickled data
+        state, windows, hvsr_result, seismic_data, azimuthal_result = manager.load_full_session(file_path)
+        
+        if not state:
+            QMessageBox.critical(
+                self, "Load Failed",
+                "Failed to load session. The file may be corrupted or invalid."
+            )
+            return
+        
+        # Apply settings to GUI
+        # Work directory
+        self._work_directory = state.work_directory
+        if hasattr(self, 'data_load_tab') and hasattr(self.data_load_tab, 'work_dir_edit'):
+            self.data_load_tab.work_dir_edit.setText(state.work_directory)
+        
+        # Processing settings
+        if hasattr(self, 'window_length_spin'):
+            self.window_length_spin.setValue(state.processing.window_length)
+        if hasattr(self, 'overlap_spin'):
+            self.overlap_spin.setValue(int(state.processing.overlap * 100))
+        if hasattr(self, 'smoothing_spin'):
+            self.smoothing_spin.setValue(state.processing.smoothing_bandwidth)
+        if hasattr(self, 'freq_min_spin'):
+            self.freq_min_spin.setValue(state.processing.f_min)
+        if hasattr(self, 'freq_max_spin'):
+            self.freq_max_spin.setValue(state.processing.f_max)
+        if hasattr(self, 'freq_points_spin'):
+            self.freq_points_spin.setValue(state.processing.n_frequencies)
+        
+        # QC settings
+        if hasattr(self, 'qc_enable_check'):
+            self.qc_enable_check.setChecked(state.qc.enabled)
+        if hasattr(self, 'qc_combo'):
+            idx = self.qc_combo.findData(state.qc.mode)
+            if idx >= 0:
+                self.qc_combo.setCurrentIndex(idx)
+        if hasattr(self, 'cox_fdwra_check'):
+            self.cox_fdwra_check.setChecked(state.qc.cox_fdwra_enabled)
+        if hasattr(self, 'cox_n_spin'):
+            self.cox_n_spin.setValue(state.qc.cox_n)
+        if hasattr(self, 'cox_iterations_spin'):
+            self.cox_iterations_spin.setValue(state.qc.cox_max_iterations)
+        if hasattr(self, 'cox_min_iterations_spin'):
+            self.cox_min_iterations_spin.setValue(state.qc.cox_min_iterations)
+        if hasattr(self, 'cox_dist_combo'):
+            self.cox_dist_combo.setCurrentText(state.qc.cox_distribution)
+        
+        # Store file info and restore to data load tab
+        if state.file_info.path:
+            self.current_file = state.file_info.path
+            self.load_mode = state.file_info.load_mode
+            
+            # Restore file path to data load tab UI
+            if hasattr(self, 'data_load_tab'):
+                # Try to find the file path display widget
+                if hasattr(self.data_load_tab, 'file_path_edit'):
+                    self.data_load_tab.file_path_edit.setText(state.file_info.path)
+                elif hasattr(self.data_load_tab, 'file_label'):
+                    self.data_load_tab.file_label.setText(f"File: {state.file_info.path}")
+                
+                # Check if file exists and show warning if not
+                from pathlib import Path as PathLib
+                if not PathLib(state.file_info.path).exists():
+                    self.add_info(f"Warning: Original file not found: {state.file_info.path}")
+                else:
+                    self.add_info(f"Original file path restored: {state.file_info.path}")
+        
+        # Also store seismic_data attribute
+        if seismic_data is not None:
+            self.seismic_data = seismic_data
+        
+        # Build info message for user
+        restored_data = []
+        if windows is not None:
+            restored_data.append(f"Window collection ({state.n_total_windows} windows, {state.n_active_windows} active)")
+        if hvsr_result is not None:
+            if state.peak_frequency is not None:
+                restored_data.append(f"HVSR results (f0 = {state.peak_frequency:.3f} Hz)")
+            else:
+                restored_data.append("HVSR results")
+        if seismic_data is not None:
+            restored_data.append("Original seismic data")
+        if azimuthal_result is not None:
+            restored_data.append("Azimuthal processing results")
+        
+        self.add_info(f"Session loaded: {Path(state.session_folder).name}")
+        
+        # Restore full GUI state if we have complete data
+        if hvsr_result is not None and windows is not None:
+            self.add_info("Restoring GUI with HVSR results and windows...")
             try:
-                from hvsr_pro.processing.hvsr import HVSRResult
-                result = HVSRResult.load(file_path)
-                self.hvsr_result = result
-                self.add_info(f"Session loaded: {file_path}")
-                # Note: Full reconstruction would need window data
-                QMessageBox.information(
-                    self, "Loaded",
-                    "Session loaded successfully\n"
-                    "(Note: Window states not restored)"
+                # Use the proper restore method that mirrors on_processing_finished()
+                self.restore_session_gui(hvsr_result, windows, seismic_data)
+                self.add_info("GUI fully restored - plot, layers, and docks updated")
+            except Exception as e:
+                self.add_info(f"Warning: Partial restore - {str(e)}")
+        
+        # Restore azimuthal results if available
+        if azimuthal_result is not None and hasattr(self, 'azimuthal_tab'):
+            try:
+                self.azimuthal_tab.result = azimuthal_result
+                self.azimuthal_tab.update_plot()
+                self.add_info("Azimuthal results restored")
+            except Exception as e:
+                self.add_info(f"Warning: Could not restore azimuthal results - {str(e)}")
+        
+        # Build info message
+        info_msg = f"Session loaded successfully!\n\n"
+        info_msg += f"Session: {Path(state.session_folder).name}\n\n"
+        
+        if restored_data:
+            info_msg += "Restored data:\n"
+            for item in restored_data:
+                info_msg += f"  - {item}\n"
+            info_msg += "\nAll data restored - no re-processing needed!"
+        else:
+            info_msg += "Settings restored. Data will need to be re-processed.\n"
+            if state.file_info.path:
+                info_msg += f"\nOriginal file: {state.file_info.path}"
+        
+        QMessageBox.information(self, "Session Loaded", info_msg)
+    
+    def restore_session_gui(self, hvsr_result, windows, seismic_data):
+        """
+        Restore GUI state after loading a session.
+        Mirrors on_processing_finished() behavior to fully restore the UI.
+        
+        Args:
+            hvsr_result: HVSRResult object (can be None)
+            windows: WindowCollection object (can be None)
+            seismic_data: SeismicData object (can be None)
+        """
+        # 1. Store data in instance variables
+        self.hvsr_result = hvsr_result
+        self.windows = windows
+        self.data = seismic_data
+        
+        # 2. Update interactive canvas
+        if hasattr(self, 'canvas') and hvsr_result is not None:
+            try:
+                self.canvas.set_data(hvsr_result, windows, seismic_data)
+            except Exception as e:
+                self.add_info(f"Warning: Could not update canvas: {str(e)}")
+        
+        # 3. Update layers dock (CRITICAL for window layers to work)
+        if hasattr(self, 'layers_dock') and windows is not None:
+            try:
+                self.layers_dock.set_references(self.plot_manager, windows)
+            except Exception as e:
+                self.add_info(f"Warning: Could not update layers dock: {str(e)}")
+        
+        # 4. Update peak picker dock
+        if hasattr(self, 'peak_picker_dock') and hvsr_result is not None:
+            try:
+                self.peak_picker_dock.set_hvsr_data(
+                    hvsr_result,
+                    hvsr_result.frequencies,
+                    hvsr_result.mean_hvsr
                 )
             except Exception as e:
-                QMessageBox.critical(self, "Load Error", str(e))
+                self.add_info(f"Warning: Could not update peak picker: {str(e)}")
+        
+        # 5. Update export dock
+        if hasattr(self, 'export_dock'):
+            try:
+                self.export_dock.set_references(
+                    hvsr_result, windows, self.plot_manager, seismic_data
+                )
+            except Exception as e:
+                self.add_info(f"Warning: Could not update export dock: {str(e)}")
+        
+        # 6. Update collapsible data panel in Processing tab
+        if hasattr(self, 'processing_data_panel') and hasattr(self, 'data_load_tab'):
+            try:
+                self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
+            except Exception as e:
+                self.add_info(f"Warning: Could not update data panel: {str(e)}")
+        
+        # 7. Update azimuthal tab with windows and data
+        if hasattr(self, 'azimuthal_tab') and windows is not None:
+            try:
+                self.azimuthal_tab.set_windows(windows, seismic_data)
+                if hasattr(self.azimuthal_tab, 'data_panel') and hasattr(self, 'data_load_tab'):
+                    self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
+            except Exception as e:
+                self.add_info(f"Warning: Could not update azimuthal tab: {str(e)}")
+        
+        # 8. Enable action buttons
+        self._enable_buttons_after_restore()
+        
+        # 9. Update window info display
+        self.update_window_info()
+        
+        # 10. Plot in separate window (the main HVSR plot)
+        if hvsr_result is not None and windows is not None:
+            try:
+                self.plot_results_separate_window(hvsr_result, windows, seismic_data)
+            except Exception as e:
+                self.add_info(f"Warning: Could not open plot window: {str(e)}")
+        
+        # 11. Switch to Processing tab
+        self.mode_tabs.setCurrentIndex(1)
+        
+        # 12. Update status
+        self.status_bar.showMessage("Session restored - Use layer dock to toggle visibility")
+    
+    def _enable_buttons_after_restore(self):
+        """Enable action buttons after session restore."""
+        # Enable export/action buttons
+        button_names = ['export_plot_btn', 'report_btn', 'export_btn', 'save_btn']
+        for btn_name in button_names:
+            if hasattr(self, btn_name):
+                getattr(self, btn_name).setEnabled(True)
+        
+        # Enable window manipulation buttons
+        if hasattr(self, 'reject_all_btn'):
+            self.reject_all_btn.setEnabled(True)
+        if hasattr(self, 'accept_all_btn'):
+            self.accept_all_btn.setEnabled(True)
+        if hasattr(self, 'recompute_btn'):
+            self.recompute_btn.setEnabled(True)
     
     def on_peaks_changed(self, peaks: list):
         """Handle peak list changes from dock."""

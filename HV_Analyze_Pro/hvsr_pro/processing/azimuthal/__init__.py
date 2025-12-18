@@ -16,7 +16,9 @@ from .azimuthal_result import AzimuthalHVSRResult
 from .azimuthal_plotting import (
     plot_azimuthal_contour_2d,
     plot_azimuthal_contour_3d,
-    plot_azimuthal_summary
+    plot_azimuthal_summary,
+    plot_azimuthal_polar,
+    plot_azimuthal_curves
 )
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     'AzimuthalHVSRResult',
     'plot_azimuthal_contour_2d',
     'plot_azimuthal_contour_3d',
-    'plot_azimuthal_summary'
+    'plot_azimuthal_summary',
+    'plot_azimuthal_polar',
+    'plot_azimuthal_curves'
 ]
 

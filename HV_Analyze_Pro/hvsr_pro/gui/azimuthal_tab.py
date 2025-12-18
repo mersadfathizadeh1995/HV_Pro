@@ -484,8 +484,13 @@ if HAS_PYQT5:
             """Update the plot based on current view selection.
             
             Args:
-                options: Optional dictionary with plot options from properties dock
+                options: Optional dictionary with plot options from properties dock.
+                        Note: Can also receive int when called from combo box signal.
             """
+            # Handle signal from combo box which passes int (index) instead of dict
+            if isinstance(options, int):
+                options = None
+            
             if not self.result:
                 return
             
@@ -503,6 +508,10 @@ if HAS_PYQT5:
                 show_peaks = True
                 show_individual = True
                 show_labels = True
+                title_fontsize = 14
+                axis_fontsize = 10
+                tick_fontsize = 8
+                legend_fontsize = 8
             else:
                 view = options.get('figure_type', self.view_combo.currentData())
                 cmap = options.get('cmap', self.cmap_combo.currentText())
@@ -510,6 +519,10 @@ if HAS_PYQT5:
                 show_peaks = options.get('show_peaks', True)
                 show_individual = options.get('show_individual_curves', True)
                 show_labels = options.get('show_panel_labels', True)
+                title_fontsize = options.get('title_fontsize', 14)
+                axis_fontsize = options.get('axis_fontsize', 10)
+                tick_fontsize = options.get('tick_fontsize', 8)
+                legend_fontsize = options.get('legend_fontsize', 8)
             
             self.figure.clear()
             
@@ -523,7 +536,11 @@ if HAS_PYQT5:
                         legend_loc=legend_loc,
                         plot_mean_curve_peak_by_azimuth=show_peaks,
                         plot_individual_curves=show_individual,
-                        show_panel_labels=show_labels
+                        show_panel_labels=show_labels,
+                        title_fontsize=title_fontsize,
+                        axis_fontsize=axis_fontsize,
+                        tick_fontsize=tick_fontsize,
+                        legend_fontsize=legend_fontsize
                     )
                     # Replace figure
                     self.figure = fig
@@ -537,6 +554,12 @@ if HAS_PYQT5:
                         cmap=cmap,
                         plot_mean_curve_peak_by_azimuth=show_peaks
                     )
+                    # Apply font sizes to 3D plot
+                    ax.set_xlabel("Frequency (Hz)", fontsize=axis_fontsize)
+                    ax.set_ylabel("Azimuth (deg)", fontsize=axis_fontsize)
+                    ax.set_zlabel("HVSR Amplitude", fontsize=axis_fontsize)
+                    ax.tick_params(axis='both', labelsize=tick_fontsize)
+                    self.figure.suptitle("3D Azimuthal HVSR", fontsize=title_fontsize, fontweight='bold')
                     
                 elif view == "2d":
                     ax = self.figure.add_subplot(111)
@@ -545,6 +568,36 @@ if HAS_PYQT5:
                         ax=ax,
                         cmap=cmap,
                         plot_mean_curve_peak_by_azimuth=show_peaks
+                    )
+                    # Apply font sizes to 2D plot
+                    ax.set_xlabel("Frequency (Hz)", fontsize=axis_fontsize)
+                    ax.set_ylabel("Azimuth (deg)", fontsize=axis_fontsize)
+                    ax.tick_params(axis='both', labelsize=tick_fontsize)
+                    self.figure.suptitle("2D Azimuthal HVSR Contour", fontsize=title_fontsize, fontweight='bold')
+                
+                elif view == "polar":
+                    from hvsr_pro.processing.azimuthal import plot_azimuthal_polar
+                    ax = self.figure.add_subplot(111, projection='polar')
+                    plot_azimuthal_polar(
+                        self.result,
+                        ax=ax,
+                        cmap=cmap,
+                        title_fontsize=title_fontsize,
+                        axis_fontsize=axis_fontsize,
+                        tick_fontsize=tick_fontsize
+                    )
+                
+                elif view == "curves":
+                    from hvsr_pro.processing.azimuthal import plot_azimuthal_curves
+                    ax = self.figure.add_subplot(111)
+                    plot_azimuthal_curves(
+                        self.result,
+                        ax=ax,
+                        cmap=cmap,
+                        title_fontsize=title_fontsize,
+                        axis_fontsize=axis_fontsize,
+                        tick_fontsize=tick_fontsize,
+                        legend_fontsize=legend_fontsize
                     )
                 
                 self.canvas.draw()

@@ -7,6 +7,7 @@ Default settings, presets, and validation schemas.
 Components:
     - settings: Default settings and presets
     - schemas: Validation schemas for configuration
+    - session: Session save/load management
 """
 
 from hvsr_pro.config.settings import (
@@ -24,6 +25,12 @@ from hvsr_pro.config.schemas import (
     validate_processing_params,
     validate_qc_params,
 )
+from hvsr_pro.config.session import (
+    SessionManager,
+    SessionState,
+    save_session,
+    load_session,
+)
 
 __all__ = [
     # Settings
@@ -39,5 +46,10 @@ __all__ = [
     'validate_settings',
     'validate_processing_params',
     'validate_qc_params',
+    # Session
+    'SessionManager',
+    'SessionState',
+    'save_session',
+    'load_session',
 ]
 
