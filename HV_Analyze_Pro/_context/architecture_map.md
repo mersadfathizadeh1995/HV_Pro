@@ -52,12 +52,53 @@ processing/windows/           ├── window_plots.py
 
 ## GUI Architecture
 
-### Main Window Composition
+### Main Window Tab Structure
+
 ```
-gui/main_window.py (HVSRMainWindow)
+HVSRMainWindow (main_window.py - 2886 lines)
+└── mode_tabs (QTabWidget)
+    │
+    ├── Tab 0: "Data Load" ─────────────────────────────────────────────────────
+    │   └── DataLoadTab (gui/tabs/data_load_tab.py - 765 lines)
+    │       ├── Work directory controls
+    │       ├── LoadedDataTree (left panel)
+    │       ├── PreviewCanvas (right panel)
+    │       └── File loading controls
+    │
+    ├── Tab 1: "Processing" ────────────────────────────────────────────────────
+    │   └── INLINE IN main_window.py (NOT a separate class!)
+    │       ├── CollapsibleDataPanel (self.processing_data_panel)
+    │       ├── Control Panel (from create_control_panel())
+    │       │   ├── Processing Settings (window length, overlap, smoothing)
+    │       │   ├── QC Settings (from create_qc_settings_group())
+    │       │   ├── Actions (Process HVSR button)
+    │       │   └── Progress/Log
+    │       └── Uses PlotWindowManager (separate window for HVSR plot)
+    │
+    │   Associated Docks (visible when on Processing tab):
+    │       ├── layers_dock (WindowLayersDock)
+    │       ├── peak_picker_dock (PeakPickerDock)
+    │       ├── properties_dock (PropertiesDock)
+    │       └── export_dock (ExportDock)
+    │
+    └── Tab 2: "Azimuthal" ─────────────────────────────────────────────────────
+        └── AzimuthalTab (gui/tabs/azimuthal_tab.py - 720 lines)
+            ├── CollapsibleDataPanel
+            ├── Settings panel (azimuth range, step, windowing)
+            ├── Embedded FigureCanvas (not PlotWindowManager)
+            └── Processing controls
+
+        Associated Dock:
+            └── azimuthal_properties_dock (AzimuthalDock)
+```
+
+### Main Window Composition (Detail)
+```
+gui/main_window.py (HVSRMainWindow - 2886 lines) ← LARGE, CONTAINS PROCESSING TAB INLINE
+│
 ├── USES: gui/main_window_modules/
 │         ├── menu_bar.py (MenuBarHelper)
-│         ├── control_panel.py (settings groups)
+│         ├── control_panel.py (settings group helpers)
 │         ├── controllers/ (DataController, ProcessingController, etc.)
 │         └── panels/ (ProcessingSettingsPanel, QCSettingsPanel)
 │
@@ -67,23 +108,32 @@ gui/main_window.py (HVSRMainWindow)
 │         └── session_mixin.py
 │
 ├── CONTAINS: gui/tabs/
-│             ├── data_load_tab.py (DataLoadTab)
-│             └── azimuthal_tab.py (AzimuthalTab)
+│             ├── data_load_tab.py (DataLoadTab) ← Tab 0
+│             └── azimuthal_tab.py (AzimuthalTab) ← Tab 2
+│             NOTE: Processing Tab (Tab 1) is NOT here - it's inline in main_window.py
 │
 ├── CONTAINS: gui/docks/
 │             ├── export/ (ExportDock + sections/, exporters/)
-│             │   ├── sections/ (PlotExportSection, DataExportSection, StatsExportSection,
-│             │   │              ComparisonFiguresSection, ReportSection, SessionSection)
-│             │   └── exporters/ (data_exporter, stats_exporter, figure_exporter)
 │             ├── properties/ (PropertiesDock + sections/)
 │             ├── azimuthal/ (AzimuthalDock + sections/, dialogs/, exporters/)
 │             ├── layers/ (WindowLayersDock)
 │             └── peak_picker/ (PeakPickerDock)
 │
 └── USES: gui/canvas/
-          ├── interactive_canvas.py
-          ├── preview_canvas.py
-          └── plot_window_manager.py
+          ├── interactive_canvas.py (InteractiveHVSRCanvas)
+          ├── preview_canvas.py (PreviewCanvas - for Data Load tab)
+          └── plot_window_manager.py (PlotWindowManager - for Processing tab)
+```
+
+### Dock Visibility by Tab
+```
+                          | Data Load | Processing | Azimuthal |
+--------------------------|-----------|------------|-----------|
+layers_dock               |  hidden   |  visible   |  hidden   |
+peak_picker_dock          |  hidden   |  visible   |  hidden   |
+properties_dock           |  hidden   |  visible   |  hidden   |
+export_dock               |  hidden   |  visible   |  hidden   |
+azimuthal_properties_dock |  hidden   |  hidden    |  visible  |
 ```
 
 ### Dialog Structure
@@ -103,9 +153,9 @@ gui/dialogs/
     └── advanced_qc_dialog.py
 ```
 
-### Dock Pattern (Established in properties/ and azimuthal/)
+### Dock Package Pattern (Established in properties/, azimuthal/, export/)
 ```
-dock_package/
+docks/dock_name/
 ├── __init__.py                 → Exports main dock + components
 ├── dock_name.py                → Main dock widget (~150-300 lines)
 ├── sections/                   → CollapsibleSection subclasses
@@ -153,6 +203,33 @@ gui/workers/
 └── PlotExportWorker           → Plot export
 ```
 
+## Processing Tab Content (Currently in main_window.py)
+
+The Processing tab UI is built inline in main_window.py. Key methods:
+
+```
+main_window.py methods for Processing Tab:
+├── init_ui()                  → Lines 440-560: Creates tabs, adds Processing tab content
+├── create_control_panel()     → Lines 627-739: Left panel with settings
+├── create_settings_group()    → Lines 740-900: Window/smoothing/frequency settings
+├── create_qc_settings_group() → Lines 900-1100: QC and rejection settings
+├── create_actions_group()     → Lines 1100-1200: Process button, progress bar
+└── Many processing callbacks  → Lines 1200-2886: Processing logic, plotting, session
+```
+
+## Refactoring Candidates
+
+1. **main_window.py (2886 lines)** - PRIORITY: HIGH
+   - Processing tab should be extracted to `gui/tabs/processing_tab.py`
+   - Control panel creation should move to `main_window_modules/`
+   - Processing callbacks already partially in mixins
+
+2. **data_load_tab.py (765 lines)** - PRIORITY: MEDIUM
+   - Could benefit from extracting panels to submodules
+
+3. **azimuthal_tab.py (720 lines)** - PRIORITY: MEDIUM
+   - Could benefit from extracting settings panel
+
 ## Cross-Package Dependencies
 
 ```
@@ -192,4 +269,6 @@ config/plot_properties.py → Used by: gui/docks/properties/
 | AzimuthalHVSRProcessor | processing/azimuthal/ | Azimuthal processing |
 | HVSRPlotter | visualization/plotter.py | High-level plotting |
 | HVSRMainWindow | gui/main_window.py | Main application window |
+| DataLoadTab | gui/tabs/data_load_tab.py | Tab 0: Data loading |
+| AzimuthalTab | gui/tabs/azimuthal_tab.py | Tab 2: Azimuthal processing |
 | HVSRAnalysis | api/analysis.py | High-level API |
