@@ -555,9 +555,12 @@ if HAS_PYQT5:
                         tick_fontsize=tick_fontsize,
                         legend_fontsize=legend_fontsize
                     )
-                    # Replace figure
+                    # Replace figure and update canvas properly
+                    import matplotlib.pyplot as plt
+                    plt.close(self.figure)  # Close old figure to free memory
                     self.figure = fig
                     self.canvas.figure = fig
+                    self.canvas.draw_idle()  # Schedule redraw
                     
                 elif view == "3d":
                     ax = self.figure.add_subplot(111, projection='3d')
@@ -613,7 +616,13 @@ if HAS_PYQT5:
                         legend_fontsize=legend_fontsize
                     )
                 
-                self.canvas.draw()
+                # Draw canvas - handle both new figure (summary) and existing figure cases
+                try:
+                    self.canvas.draw()
+                except Exception as draw_err:
+                    # If draw fails, try draw_idle as fallback
+                    print(f"Warning: canvas.draw() failed, using draw_idle: {draw_err}")
+                    self.canvas.draw_idle()
                 
                 # Update properties dock with figure reference
                 # This ensures the export function has access to the current figure
@@ -621,8 +630,13 @@ if HAS_PYQT5:
                 if parent and hasattr(parent, 'azimuthal_properties_dock'):
                     parent.azimuthal_properties_dock.set_result(self.result, self.figure)
                 
+                self.status_label.setText("Plot updated successfully")
+                
             except Exception as e:
-                self.status_label.setText(f"Plot error: {str(e)}")
+                import traceback
+                error_msg = f"Plot error: {str(e)}"
+                print(f"Azimuthal plot error:\n{traceback.format_exc()}")
+                self.status_label.setText(error_msg)
         
         def update_plot_with_options(self, options: dict):
             """Update plot with options from properties dock.
