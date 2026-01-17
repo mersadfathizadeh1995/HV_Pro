@@ -39,7 +39,7 @@ if HAS_PYQT5:
         WindowLayersDock, PeakPickerDock, ExportDock, AzimuthalPropertiesDock
     )
     from hvsr_pro.gui.dialogs import DataInputDialog
-    from hvsr_pro.gui.tabs import DataLoadTab, AzimuthalTab
+    from hvsr_pro.gui.tabs import DataLoadTab, AzimuthalTab, ProcessingTab
     from hvsr_pro.gui.workers import ProcessingThread
     
     # Import modular controllers and panels for future use
@@ -376,66 +376,29 @@ class HVSRMainWindow(QMainWindow):
         except:
             return 4  # Default fallback
 
-    def _on_parallel_toggled(self, state):
-        """Handle parallel processing checkbox toggle."""
-        enabled = (state == Qt.Checked)
-        self.cores_spin.setEnabled(enabled)
-
-    def _on_qc_enable_toggled(self, checked: bool):
-        """Handle QC enable checkbox toggle."""
-        self.preset_radio.setEnabled(checked)
-        self.custom_radio.setEnabled(checked)
-        self.preset_widget.setEnabled(checked)
-        self.custom_widget.setEnabled(checked)
-        self.qc_combo.setEnabled(checked)
-        self.advanced_qc_btn.setEnabled(checked)
-    
-    def _on_qc_mode_changed(self, checked: bool):
-        """Handle Preset/Custom radio button toggle."""
-        if self.preset_radio.isChecked():
-            self.preset_widget.show()
-            self.custom_widget.hide()
-        else:
-            self.preset_widget.hide()
-            self.custom_widget.show()
-    
-    def _update_preset_description(self):
-        """Update the preset description based on selected preset."""
-        descriptions = {
-            "conservative": "Only rejects obvious problems (dead channels, clipping). Best for noisy data.",
-            "balanced": "Amplitude checks only. Recommended for most datasets.",
-            "aggressive": "Strict QC with STA/LTA, frequency, and statistical checks. For clean data.",
-            "sesame": "SESAME-compliant processing with Cox FDWRA for publication-quality results.",
-            "publication": "4-condition rejection: HVSR amplitude, peak consistency, flat peaks."
-        }
-        current_mode = self.qc_combo.currentData()
-        self.preset_desc_label.setText(descriptions.get(current_mode, ""))
+    # === REMOVED: Toggle handlers ===
+    # _on_parallel_toggled, _on_qc_enable_toggled, _on_qc_mode_changed, _update_preset_description
+    # These are now handled internally by ProcessingTab and its panels
+    # See gui/tabs/processing_tab.py and gui/main_window_modules/panels/
     
     def _get_custom_qc_settings_from_ui(self):
-        """Get custom QC settings from the UI checkboxes."""
-        return {
-            'enabled': self.qc_enable_check.isChecked(),
-            'mode': 'custom',
-            'algorithms': {
-                'amplitude': {'enabled': self.custom_amplitude_check.isChecked(), 'params': {}},
-                'quality_threshold': {'enabled': self.custom_quality_check.isChecked(), 'params': {'threshold': 0.5}},
-                'sta_lta': {'enabled': self.custom_stalta_check.isChecked(), 'params': {
-                    'sta_length': 1.0, 'lta_length': 30.0, 'min_ratio': 0.15, 'max_ratio': 2.5
-                }},
-                'frequency_domain': {'enabled': self.custom_freq_check.isChecked(), 'params': {'spike_threshold': 3.0}},
-                'statistical_outlier': {'enabled': self.custom_stats_check.isChecked(), 'params': {'method': 'iqr', 'threshold': 2.0}},
-                'hvsr_amplitude': {'enabled': self.custom_hvsr_amp_check.isChecked(), 'params': {'min_amplitude': 1.0}},
-                'flat_peak': {'enabled': self.custom_flat_peak_check.isChecked(), 'params': {'flatness_threshold': 0.15}},
-                'cox_fdwra': {'enabled': self.custom_cox_fdwra_check.isChecked(), 'params': {'n': 2.0, 'max_iterations': 20}}
+        """Get custom QC settings from the UI (via ProcessingTab's QCSettingsPanel)."""
+        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'qc_panel'):
+            qc_settings = self.processing_tab.qc_panel.get_settings()
+            return {
+                'enabled': qc_settings.enabled,
+                'mode': qc_settings.mode,
+                'algorithms': qc_settings.custom_algorithms
             }
+        # Fallback for direct access (shouldn't happen after refactor)
+        return {
+            'enabled': True,
+            'mode': 'preset',
+            'algorithms': {}
         }
 
-    def _on_cox_enable_toggled(self, checked: bool):
-        """Handle Cox FDWRA enable checkbox toggle."""
-        self.cox_n_spin.setEnabled(checked)
-        self.cox_iterations_spin.setEnabled(checked)
-        self.cox_min_iterations_spin.setEnabled(checked)
-        self.cox_dist_combo.setEnabled(checked)
+    # === REMOVED: _on_cox_enable_toggled ===
+    # Now handled internally by CoxSettingsPanel
 
     def init_ui(self):
         """Initialize user interface."""
@@ -455,38 +418,16 @@ class HVSRMainWindow(QMainWindow):
         self.data_load_tab.file_selected.connect(self.on_data_file_selected_for_preview)
         self.mode_tabs.addTab(self.data_load_tab, "Data Load")
 
-        # === Tab 2: Processing (renamed from Single File) ===
-        processing_tab = QWidget()
-        processing_outer_layout = QVBoxLayout(processing_tab)
-        processing_outer_layout.setContentsMargins(5, 5, 5, 5)
-        processing_outer_layout.setSpacing(5)
-
-        # Collapsible data panel at top
-        from hvsr_pro.gui.components import CollapsibleDataPanel
-        self.processing_data_panel = CollapsibleDataPanel(title="Loaded Data")
-        # Starts collapsed by default
-        processing_outer_layout.addWidget(self.processing_data_panel)
-
-        # Main processing content
-        processing_layout = QHBoxLayout()
-        processing_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Left panel - processing controls with scroll area
-        left_panel = self.create_control_panel()
-
-        # Wrap control panel in scroll area
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(left_panel)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setMinimumWidth(300)
-
-        processing_layout.addWidget(scroll_area, stretch=1)
-        processing_outer_layout.addLayout(processing_layout, 1)  # stretch
-
-        # Add processing tab
-        self.mode_tabs.addTab(processing_tab, "Processing")
+        # === Tab 2: Processing ===
+        self.processing_tab = ProcessingTab(self)
+        self.processing_tab.process_requested.connect(self._on_process_requested)
+        self.processing_tab.recompute_requested.connect(self.recompute_hvsr)
+        self.processing_tab.reject_all_btn.clicked.connect(self.reject_all_windows)
+        self.processing_tab.accept_all_btn.clicked.connect(self.accept_all_windows)
+        self.mode_tabs.addTab(self.processing_tab, "Processing")
+        
+        # Alias for backward compatibility
+        self.processing_data_panel = self.processing_tab.data_panel
 
         # === Tab 3: Azimuthal Processing ===
         self.azimuthal_tab = AzimuthalTab(self)
@@ -624,536 +565,16 @@ class HVSRMainWindow(QMainWindow):
             # Need to load - this shouldn't happen normally
             self.add_info(f"Loading for preview: {Path(file_path).name}")
     
-    def create_control_panel(self) -> QWidget:
-        """Create left control panel."""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        
-        # Title with version
-        title = QLabel("HVSR Pro v2.0")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("""
-            QLabel {
-                color: #2C3E50;
-                padding: 10px;
-                background-color: #ECF0F1;
-                border-radius: 5px;
-            }
-        """)
-        layout.addWidget(title)
-
-        # Info label
-        info_label = QLabel("Configure processing parameters below.\nLoad data in the 'Data Load' tab first.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("QLabel { color: #666; padding: 5px; }")
-        layout.addWidget(info_label)
-
-        # Processing settings group
-        settings_group = self.create_settings_group()
-        layout.addWidget(settings_group)
-
-        # Note: View mode selector has been moved to Properties panel
-        # (see properties_dock.py - Visualization Mode section)
-
-        # Plot window toggle button
-        self.plot_mode_button = QPushButton("Show Plot Window")
-        self.plot_mode_button.clicked.connect(self.toggle_plot_window)
-        self.plot_mode_button.setToolTip("Open plot in separate window")
-        layout.addWidget(self.plot_mode_button)
-        
-        # Window management group (for quick accept/reject all)
-        window_group = self.create_window_group()
-        layout.addWidget(window_group)
-        
-        # Note: Actions (Export, Save, etc.) have been moved to the Export dock
-        # to reduce clutter in the main control panel.
-        # Uncomment below if you want to restore inline actions:
-        # actions_group = self.create_actions_group()
-        # layout.addWidget(actions_group)
-        
-        # Info display
-        self.info_text = QTextEdit()
-        self.info_text.setReadOnly(True)
-        self.info_text.setMaximumHeight(200)
-        self.info_text.setPlaceholderText("Processing information will appear here...")
-        layout.addWidget(self.info_text)
-        
-        # Progress bar with text
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid grey;
-                border-radius: 5px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 3px;
-            }
-        """)
-        layout.addWidget(self.progress_bar)
-        
-        layout.addStretch()
-        return panel
+    # === REMOVED: create_control_panel, create_file_group ===
+    # These methods are now replaced by ProcessingTab
+    # See gui/tabs/processing_tab.py
     
-    def create_file_group(self) -> QGroupBox:
-        """Create file import group."""
-        group = QGroupBox("Data Import")
-        layout = QVBoxLayout()
-        
-        # File path display
-        self.file_label = QLabel("No file loaded")
-        self.file_label.setWordWrap(True)
-        layout.addWidget(self.file_label)
-        
-        # Load button with shortcut and tooltip
-        load_btn = QPushButton("Load Data File")
-        load_btn.clicked.connect(self.load_data_file)
-        load_btn.setShortcut("Ctrl+O")
-        load_btn.setToolTip("Load seismic data file (Ctrl+O)\nSupported formats: .txt, .csv, .mseed")
-        load_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 4px;
-                padding: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        layout.addWidget(load_btn)
-        
-        # Recent files combo (placeholder)
-        self.recent_combo = QComboBox()
-        self.recent_combo.addItem("Recent files...")
-        self.recent_combo.setEnabled(False)
-        layout.addWidget(self.recent_combo)
-        
-        group.setLayout(layout)
-        return group
+    # === REMOVED: create_file_group ===
+    # File loading is now handled by DataLoadTab
     
-    def create_settings_group(self) -> QGroupBox:
-        """Create processing settings group."""
-        group = QGroupBox("Processing Settings")
-        layout = QVBoxLayout()
-        
-        # Window length
-        wl_layout = QHBoxLayout()
-        wl_layout.addWidget(QLabel("Window Length (s):"))
-        self.window_length_spin = QDoubleSpinBox()
-        self.window_length_spin.setRange(10, 300)
-        self.window_length_spin.setValue(30)
-        self.window_length_spin.setSingleStep(5)
-        wl_layout.addWidget(self.window_length_spin)
-        layout.addLayout(wl_layout)
-        
-        # Overlap
-        ov_layout = QHBoxLayout()
-        ov_layout.addWidget(QLabel("Overlap (%):"))
-        self.overlap_spin = QSpinBox()
-        self.overlap_spin.setRange(0, 90)
-        self.overlap_spin.setValue(50)
-        self.overlap_spin.setSingleStep(10)
-        ov_layout.addWidget(self.overlap_spin)
-        layout.addLayout(ov_layout)
-        
-        # Smoothing bandwidth
-        sb_layout = QHBoxLayout()
-        sb_layout.addWidget(QLabel("Konno-Ohmachi (b):"))
-        self.smoothing_spin = QDoubleSpinBox()
-        self.smoothing_spin.setRange(10, 100)
-        self.smoothing_spin.setValue(40)
-        self.smoothing_spin.setSingleStep(5)
-        self.smoothing_spin.setToolTip("Konno-Ohmachi smoothing bandwidth parameter (b)\n"
-                                       "Higher values = more smoothing\n"
-                                       "Standard: b=40 (recommended)")
-        sb_layout.addWidget(self.smoothing_spin)
-        layout.addLayout(sb_layout)
-        
-        # === FREQUENCY RANGE SECTION ===
-        freq_label = QLabel("<b>Frequency Range (HVSR Computation):</b>")
-        layout.addWidget(freq_label)
-        
-        # Min frequency
-        fmin_layout = QHBoxLayout()
-        fmin_layout.addWidget(QLabel("Min Freq (Hz):"))
-        self.freq_min_spin = QDoubleSpinBox()
-        self.freq_min_spin.setRange(0.1, 100.0)
-        self.freq_min_spin.setValue(0.2)
-        self.freq_min_spin.setDecimals(2)
-        self.freq_min_spin.setSingleStep(0.1)
-        self.freq_min_spin.setToolTip("Minimum frequency for HVSR computation")
-        fmin_layout.addWidget(self.freq_min_spin)
-        layout.addLayout(fmin_layout)
-        
-        # Max frequency
-        fmax_layout = QHBoxLayout()
-        fmax_layout.addWidget(QLabel("Max Freq (Hz):"))
-        self.freq_max_spin = QDoubleSpinBox()
-        self.freq_max_spin.setRange(0.1, 100.0)
-        self.freq_max_spin.setValue(20.0)
-        self.freq_max_spin.setDecimals(1)
-        self.freq_max_spin.setSingleStep(1.0)
-        self.freq_max_spin.setToolTip("Maximum frequency for HVSR computation")
-        fmax_layout.addWidget(self.freq_max_spin)
-        layout.addLayout(fmax_layout)
-        
-        # Number of frequency points
-        nfreq_layout = QHBoxLayout()
-        nfreq_layout.addWidget(QLabel("Freq Points:"))
-        self.n_freq_spin = QSpinBox()
-        self.n_freq_spin.setRange(50, 500)
-        self.n_freq_spin.setValue(100)
-        self.n_freq_spin.setSingleStep(10)
-        self.n_freq_spin.setToolTip("Number of frequency points (log-spaced)")
-        nfreq_layout.addWidget(self.n_freq_spin)
-        layout.addLayout(nfreq_layout)
-
-        # === SAMPLING RATE OVERRIDE SECTION ===
-        sampling_label = QLabel("<b>Sampling Rate Override:</b>")
-        layout.addWidget(sampling_label)
-
-        # Override checkbox
-        self.override_sampling_check = QCheckBox("Override Sampling Rate")
-        self.override_sampling_check.setChecked(False)
-        self.override_sampling_check.setToolTip("Manually specify sampling rate instead of auto-detection")
-        self.override_sampling_check.toggled.connect(self._on_override_sampling_toggled)
-        layout.addWidget(self.override_sampling_check)
-
-        # Manual sampling rate input
-        sampling_layout = QHBoxLayout()
-        sampling_layout.addWidget(QLabel("Sampling Rate (Hz):"))
-        self.sampling_rate_spin = QDoubleSpinBox()
-        self.sampling_rate_spin.setRange(0.1, 10000.0)
-        self.sampling_rate_spin.setValue(100.0)
-        self.sampling_rate_spin.setDecimals(4)
-        self.sampling_rate_spin.setSingleStep(0.1)
-        self.sampling_rate_spin.setEnabled(False)  # Disabled by default
-        self.sampling_rate_spin.setToolTip("Manual sampling rate (Hz)")
-        sampling_layout.addWidget(self.sampling_rate_spin)
-        layout.addLayout(sampling_layout)
-
-        # === WINDOW REJECTION SECTION ===
-        rejection_label = QLabel("<b>Window Rejection:</b>")
-        layout.addWidget(rejection_label)
-
-        # Quality Control (QC) group with Preset/Custom modes
-        qc_group = QGroupBox("Quality Control Settings")
-        qc_group_layout = QVBoxLayout(qc_group)
-
-        # Top row: Enable checkbox
-        self.qc_enable_check = QCheckBox("Enable QC Rejection")
-        self.qc_enable_check.setChecked(True)
-        self.qc_enable_check.setToolTip("Apply quality control to reject noisy windows")
-        self.qc_enable_check.toggled.connect(self._on_qc_enable_toggled)
-        qc_group_layout.addWidget(self.qc_enable_check)
-
-        # Mode selector: Preset vs Custom
-        from PyQt5.QtWidgets import QRadioButton, QButtonGroup, QFrame
-        mode_frame = QFrame()
-        mode_layout = QHBoxLayout(mode_frame)
-        mode_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.qc_mode_group = QButtonGroup()
-        self.preset_radio = QRadioButton("Preset")
-        self.preset_radio.setChecked(True)
-        self.custom_radio = QRadioButton("Custom")
-        self.qc_mode_group.addButton(self.preset_radio, 0)
-        self.qc_mode_group.addButton(self.custom_radio, 1)
-        
-        mode_layout.addWidget(QLabel("Mode:"))
-        mode_layout.addWidget(self.preset_radio)
-        mode_layout.addWidget(self.custom_radio)
-        mode_layout.addStretch()
-        qc_group_layout.addWidget(mode_frame)
-        
-        self.preset_radio.toggled.connect(self._on_qc_mode_changed)
-        self.custom_radio.toggled.connect(self._on_qc_mode_changed)
-
-        # === PRESET MODE WIDGETS ===
-        self.preset_widget = QWidget()
-        preset_layout = QVBoxLayout(self.preset_widget)
-        preset_layout.setContentsMargins(0, 5, 0, 0)
-        
-        preset_combo_layout = QHBoxLayout()
-        preset_combo_layout.addWidget(QLabel("Preset:"))
-        self.qc_combo = QComboBox()
-        self.qc_combo.addItem("Conservative - Only obvious problems", "conservative")
-        self.qc_combo.addItem("Balanced - Moderate QC (recommended)", "balanced")
-        self.qc_combo.addItem("Aggressive - Strict quality control", "aggressive")
-        self.qc_combo.addItem("SESAME - SESAME-compliant", "sesame")
-        self.qc_combo.addItem("Publication - 4-condition rejection", "publication")
-        self.qc_combo.setCurrentIndex(1)  # Default to balanced
-        self.qc_combo.setToolTip(
-            "Conservative: Amplitude + quality threshold (lenient)\n"
-            "Balanced: Amplitude check only (recommended for most data)\n"
-            "Aggressive: + STA/LTA + frequency + statistical checks\n"
-            "SESAME: Pre-HVSR QC + Cox FDWRA for peak consistency\n"
-            "Publication: HVSR amplitude, peak consistency, flat peak detection"
-        )
-        preset_combo_layout.addWidget(self.qc_combo)
-        preset_layout.addLayout(preset_combo_layout)
-        
-        # Preset description label
-        self.preset_desc_label = QLabel()
-        self.preset_desc_label.setWordWrap(True)
-        self.preset_desc_label.setStyleSheet("color: #666; font-style: italic; padding: 3px;")
-        self._update_preset_description()
-        self.qc_combo.currentIndexChanged.connect(self._update_preset_description)
-        preset_layout.addWidget(self.preset_desc_label)
-        
-        qc_group_layout.addWidget(self.preset_widget)
-
-        # === CUSTOM MODE WIDGETS ===
-        self.custom_widget = QWidget()
-        custom_layout = QVBoxLayout(self.custom_widget)
-        custom_layout.setContentsMargins(0, 5, 0, 0)
-        
-        # Pre-HVSR algorithms section
-        pre_hvsr_label = QLabel("<i>Time-Domain (Pre-HVSR):</i>")
-        custom_layout.addWidget(pre_hvsr_label)
-        
-        # Checkboxes for each algorithm
-        self.custom_amplitude_check = QCheckBox("Amplitude Rejection")
-        self.custom_amplitude_check.setChecked(True)
-        self.custom_amplitude_check.setToolTip("Reject clipping, dead channels, extreme amplitudes")
-        custom_layout.addWidget(self.custom_amplitude_check)
-        
-        self.custom_quality_check = QCheckBox("Quality Threshold")
-        self.custom_quality_check.setToolTip("Reject windows below SNR/stationarity threshold")
-        custom_layout.addWidget(self.custom_quality_check)
-        
-        self.custom_stalta_check = QCheckBox("STA/LTA Rejection")
-        self.custom_stalta_check.setToolTip("Reject transients using short/long-term average ratio")
-        custom_layout.addWidget(self.custom_stalta_check)
-        
-        self.custom_freq_check = QCheckBox("Frequency Domain")
-        self.custom_freq_check.setToolTip("Reject windows with spectral spikes")
-        custom_layout.addWidget(self.custom_freq_check)
-        
-        self.custom_stats_check = QCheckBox("Statistical Outliers")
-        self.custom_stats_check.setToolTip("Reject windows that are statistical outliers")
-        custom_layout.addWidget(self.custom_stats_check)
-        
-        # Post-HVSR algorithms section
-        post_hvsr_label = QLabel("<i>Frequency-Domain (Post-HVSR):</i>")
-        custom_layout.addWidget(post_hvsr_label)
-        
-        self.custom_hvsr_amp_check = QCheckBox("HVSR Peak Amplitude < 1")
-        self.custom_hvsr_amp_check.setToolTip("Reject windows where HVSR peak amplitude < 1.0")
-        custom_layout.addWidget(self.custom_hvsr_amp_check)
-        
-        self.custom_flat_peak_check = QCheckBox("Flat Peak Detection")
-        self.custom_flat_peak_check.setToolTip("Reject windows with flat/wide peaks or multiple peaks")
-        custom_layout.addWidget(self.custom_flat_peak_check)
-        
-        self.custom_cox_fdwra_check = QCheckBox("Cox FDWRA (Peak Consistency)")
-        self.custom_cox_fdwra_check.setToolTip("Cox et al. (2020) Frequency-Domain Window Rejection\nEnsures peak frequency consistency across windows")
-        custom_layout.addWidget(self.custom_cox_fdwra_check)
-        
-        # Advanced settings button for custom mode
-        self.advanced_qc_btn = QPushButton("Advanced Settings...")
-        self.advanced_qc_btn.clicked.connect(self.open_advanced_qc_settings)
-        self.advanced_qc_btn.setToolTip("Fine-tune individual algorithm thresholds")
-        custom_layout.addWidget(self.advanced_qc_btn)
-        
-        qc_group_layout.addWidget(self.custom_widget)
-        self.custom_widget.hide()  # Hidden by default (preset mode active)
-
-        layout.addWidget(qc_group)
-
-        # Cox FDWRA group (Frequency-Domain)
-        cox_group = QGroupBox("Cox FDWRA (Frequency-Domain)")
-        cox_group_layout = QVBoxLayout(cox_group)
-
-        # Cox Enable checkbox
-        self.cox_fdwra_check = QCheckBox("Enable Cox FDWRA")
-        self.cox_fdwra_check.setChecked(False)
-        self.cox_fdwra_check.setToolTip(
-            "Apply Cox et al. (2020) Frequency-Domain Window Rejection\n"
-            "after HVSR computation to ensure peak frequency consistency.\n"
-            "Industry-standard for publication-quality HVSR analysis."
-        )
-        self.cox_fdwra_check.toggled.connect(self._on_cox_enable_toggled)
-        cox_group_layout.addWidget(self.cox_fdwra_check)
-
-        # Cox parameters
-        from PyQt5.QtWidgets import QGridLayout
-        cox_params_layout = QGridLayout()
-        cox_params_layout.setColumnStretch(1, 1)
-
-        cox_params_layout.addWidget(QLabel("n-value:"), 0, 0)
-        self.cox_n_spin = QDoubleSpinBox()
-        self.cox_n_spin.setRange(0.5, 10.0)
-        self.cox_n_spin.setValue(2.0)
-        self.cox_n_spin.setDecimals(1)
-        self.cox_n_spin.setSingleStep(0.5)
-        self.cox_n_spin.setEnabled(False)
-        self.cox_n_spin.setToolTip("Standard deviation multiplier (lower = stricter rejection)")
-        cox_params_layout.addWidget(self.cox_n_spin, 0, 1)
-
-        cox_params_layout.addWidget(QLabel("Max Iter:"), 1, 0)
-        self.cox_iterations_spin = QSpinBox()
-        self.cox_iterations_spin.setRange(1, 50)
-        self.cox_iterations_spin.setValue(20)
-        self.cox_iterations_spin.setEnabled(False)
-        self.cox_iterations_spin.setToolTip("Maximum iterations for convergence")
-        cox_params_layout.addWidget(self.cox_iterations_spin, 1, 1)
-
-        cox_params_layout.addWidget(QLabel("Min Iter:"), 2, 0)
-        self.cox_min_iterations_spin = QSpinBox()
-        self.cox_min_iterations_spin.setRange(1, 20)
-        self.cox_min_iterations_spin.setValue(1)
-        self.cox_min_iterations_spin.setEnabled(False)
-        self.cox_min_iterations_spin.setToolTip(
-            "Minimum iterations before checking convergence.\n"
-            "Set higher to force more rejection passes even if convergence is reached early."
-        )
-        cox_params_layout.addWidget(self.cox_min_iterations_spin, 2, 1)
-
-        cox_params_layout.addWidget(QLabel("Distribution:"), 3, 0)
-        self.cox_dist_combo = QComboBox()
-        self.cox_dist_combo.addItems(["lognormal", "normal"])
-        self.cox_dist_combo.setEnabled(False)
-        self.cox_dist_combo.setToolTip("Statistical distribution for peak modeling")
-        cox_params_layout.addWidget(self.cox_dist_combo, 3, 1)
-
-        cox_group_layout.addLayout(cox_params_layout)
-        layout.addWidget(cox_group)
-        
-        # Parallel processing checkbox
-        self.parallel_check = QCheckBox("Enable parallel processing (faster)")
-        self.parallel_check.setChecked(True)  # Enabled by default
-        cpu_count = self._get_cpu_count()
-        self.parallel_check.setToolTip("Use multiple CPU cores for faster HVSR computation.\n"
-                                      "Recommended for datasets with >100 windows.\n"
-                                      f"Your system has {cpu_count} CPU cores.\n"
-                                      "Speed improvement: ~1.5-3x faster for large datasets.")
-        self.parallel_check.stateChanged.connect(self._on_parallel_toggled)
-        layout.addWidget(self.parallel_check)
-
-        # CPU core count selector
-        cores_layout = QHBoxLayout()
-        cores_layout.addWidget(QLabel("   Number of cores to use:"))
-
-        self.cores_spin = QSpinBox()
-        self.cores_spin.setRange(1, max(1, cpu_count))
-        self.cores_spin.setValue(max(1, cpu_count - 1))  # Default: leave one core free
-        self.cores_spin.setToolTip(f"Select number of CPU cores to use (1-{cpu_count}).\n"
-                                   "Using all cores may make your system unresponsive.\n"
-                                   "Recommended: Leave at least 1 core free for system tasks.")
-        cores_layout.addWidget(self.cores_spin)
-        cores_layout.addStretch()
-
-        layout.addLayout(cores_layout)
-
-        # Process button - prominent and bold
-        self.process_btn = QPushButton("Process HVSR")
-        self.process_btn.clicked.connect(self.process_hvsr)
-        self.process_btn.setEnabled(False)
-        self.process_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 12px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #BDBDBD;
-                color: #757575;
-            }
-        """)
-        layout.addWidget(self.process_btn)
-        
-        group.setLayout(layout)
-        return group
-    
-    def create_window_group(self) -> QGroupBox:
-        """Create window management group."""
-        group = QGroupBox("Window Management")
-        layout = QVBoxLayout()
-        
-        # Window info
-        self.window_info_label = QLabel("No windows")
-        layout.addWidget(self.window_info_label)
-        
-        # Toggle buttons
-        btn_layout = QHBoxLayout()
-        
-        self.reject_all_btn = QPushButton("Reject All")
-        self.reject_all_btn.clicked.connect(self.reject_all_windows)
-        self.reject_all_btn.setEnabled(False)
-        btn_layout.addWidget(self.reject_all_btn)
-        
-        self.accept_all_btn = QPushButton("Accept All")
-        self.accept_all_btn.clicked.connect(self.accept_all_windows)
-        self.accept_all_btn.setEnabled(False)
-        btn_layout.addWidget(self.accept_all_btn)
-        
-        layout.addLayout(btn_layout)
-        
-        # Recompute button
-        self.recompute_btn = QPushButton("Recompute HVSR")
-        self.recompute_btn.clicked.connect(self.recompute_hvsr)
-        self.recompute_btn.setEnabled(False)
-        layout.addWidget(self.recompute_btn)
-        
-        group.setLayout(layout)
-        return group
-    
-    def create_actions_group(self) -> QGroupBox:
-        """Create actions group."""
-        group = QGroupBox("Actions")
-        layout = QVBoxLayout()
-        
-        # Export Plot as Image button (NEW - HIGH PRIORITY)
-        export_plot_btn = QPushButton("Export Plot as Image")
-        export_plot_btn.clicked.connect(self.export_plot_image)
-        export_plot_btn.setEnabled(False)
-        export_plot_btn.setStyleSheet("font-weight: bold; background-color: #2196F3; color: white; padding: 6px;")
-        export_plot_btn.setToolTip("Save current plot view as PNG/PDF (high DPI)")
-        self.export_plot_btn = export_plot_btn
-        layout.addWidget(export_plot_btn)
-        
-        # Generate Report Plots button
-        report_btn = QPushButton("Generate Report Plots")
-        report_btn.clicked.connect(self.generate_report_plots)
-        report_btn.setEnabled(False)
-        report_btn.setStyleSheet("font-weight: bold; background-color: #4CAF50; color: white; padding: 6px;")
-        self.report_btn = report_btn
-        layout.addWidget(report_btn)
-        
-        # Export button
-        export_btn = QPushButton("Export Results (CSV/JSON)")
-        export_btn.clicked.connect(self.export_results)
-        export_btn.setEnabled(False)
-        self.export_btn = export_btn
-        layout.addWidget(export_btn)
-        
-        # Save session
-        save_btn = QPushButton("Save Session")
-        save_btn.clicked.connect(self.save_session)
-        save_btn.setEnabled(False)
-        self.save_btn = save_btn
-        layout.addWidget(save_btn)
-        
-        # Load session
-        load_session_btn = QPushButton("Load Session")
-        load_session_btn.clicked.connect(self.load_session)
-        layout.addWidget(load_session_btn)
-        
-        group.setLayout(layout)
-        return group
+    # === REMOVED: create_settings_group, create_window_group, create_actions_group ===
+    # These methods are now replaced by ProcessingTab and its modular panels
+    # See gui/tabs/processing_tab.py
     
     def connect_signals(self):
         """Connect signals and slots."""
@@ -1251,13 +672,8 @@ class HVSRMainWindow(QMainWindow):
 
         self.add_info(f"Switched to {mode} view")
 
-    def _on_override_sampling_toggled(self, checked: bool):
-        """Handle sampling rate override checkbox toggle."""
-        self.sampling_rate_spin.setEnabled(checked)
-        if checked:
-            self.add_info("Sampling rate override enabled")
-        else:
-            self.add_info("Using auto-detected sampling rate")
+    # === REMOVED: _on_override_sampling_toggled ===
+    # Now handled internally by ProcessingSettingsPanel
 
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
@@ -1486,6 +902,100 @@ class HVSRMainWindow(QMainWindow):
         except Exception as e:
             print(f"Warning: Could not apply time range to preview: {e}")
     
+    def _on_process_requested(self, settings):
+        """
+        Handle process request from ProcessingTab.
+        
+        Args:
+            settings: FullProcessingSettings from ProcessingTab
+        """
+        # Add file info to settings
+        settings.current_file = self.current_file
+        settings.load_mode = self.load_mode
+        settings.time_range = self.current_time_range
+        
+        # Call process_hvsr with settings
+        self._process_with_settings(settings)
+    
+    def _process_with_settings(self, settings):
+        """Process HVSR with given settings object."""
+        if not settings.current_file:
+            QMessageBox.warning(self, "No File", "Please load a data file first.")
+            return
+        
+        # Disable controls
+        self.processing_tab.set_processing_enabled(False)
+        self.processing_tab.set_progress(0, visible=True)
+        
+        # Log settings
+        self.add_info(f"Frequency range: {settings.freq_min:.2f} - {settings.freq_max:.1f} Hz ({settings.n_frequencies} points)")
+        if settings.manual_sampling_rate:
+            self.add_info(f"Sampling rate: {settings.manual_sampling_rate:.4f} Hz (manual override)")
+        if settings.qc_mode == 'preset':
+            self.add_info(f"QC Mode: {settings.qc_preset}")
+        else:
+            self.add_info(f"QC Mode: Custom (manual settings)")
+        if settings.cox_enabled:
+            self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
+        if settings.use_parallel:
+            self.add_info(f"Parallel processing: Enabled (using {settings.n_cores} cores)")
+        
+        # Build custom QC settings dict if needed
+        custom_qc_settings = None
+        if settings.qc_mode == 'custom' and settings.custom_qc_settings:
+            custom_qc_settings = self._build_custom_qc_dict(settings.custom_qc_settings)
+        
+        # Build Cox FDWRA settings dict
+        cox_fdwra_settings = {
+            'n': settings.cox_n,
+            'max_iterations': settings.cox_max_iterations,
+            'min_iterations': settings.cox_min_iterations,
+            'distribution': settings.cox_distribution
+        }
+        
+        # Start processing thread
+        self.thread = ProcessingThread(
+            settings.current_file,
+            settings.window_length,
+            settings.overlap,
+            settings.smoothing_bandwidth,
+            settings.load_mode,
+            settings.time_range,
+            settings.freq_min,
+            settings.freq_max,
+            settings.n_frequencies,
+            settings.qc_preset if settings.qc_mode == 'preset' else 'custom',
+            settings.cox_enabled,
+            settings.use_parallel,
+            settings.n_cores,
+            settings.manual_sampling_rate,
+            custom_qc_settings,
+            cox_fdwra_settings
+        )
+        self.thread.progress.connect(self.on_progress)
+        self.thread.finished.connect(self.on_processing_finished)
+        self.thread.error.connect(self.on_processing_error)
+        self.thread.start()
+    
+    def _build_custom_qc_dict(self, custom_algorithms):
+        """Build custom QC settings dictionary from panel settings."""
+        return {
+            'enabled': True,
+            'mode': 'custom',
+            'algorithms': {
+                'amplitude': {'enabled': custom_algorithms.get('amplitude', {}).get('enabled', False), 'params': {}},
+                'quality_threshold': {'enabled': custom_algorithms.get('quality_threshold', {}).get('enabled', False), 'params': {'threshold': 0.5}},
+                'sta_lta': {'enabled': custom_algorithms.get('sta_lta', {}).get('enabled', False), 'params': {
+                    'sta_length': 1.0, 'lta_length': 30.0, 'min_ratio': 0.15, 'max_ratio': 2.5
+                }},
+                'frequency_domain': {'enabled': custom_algorithms.get('frequency_domain', {}).get('enabled', False), 'params': {'spike_threshold': 3.0}},
+                'statistical_outlier': {'enabled': custom_algorithms.get('statistical_outlier', {}).get('enabled', False), 'params': {'method': 'iqr', 'threshold': 2.0}},
+                'hvsr_amplitude': {'enabled': custom_algorithms.get('hvsr_amplitude', {}).get('enabled', False), 'params': {'min_amplitude': 1.0}},
+                'flat_peak': {'enabled': custom_algorithms.get('flat_peak', {}).get('enabled', False), 'params': {'flatness_threshold': 0.15}},
+                'cox_fdwra': {'enabled': custom_algorithms.get('cox_fdwra', {}).get('enabled', False), 'params': {'n': 2.0, 'max_iterations': 20}}
+            }
+        }
+    
     def process_hvsr(self):
         """Start HVSR processing in background thread."""
         if not self.current_file:
@@ -1566,7 +1076,12 @@ class HVSRMainWindow(QMainWindow):
     
     def on_progress(self, value: int, message: str):
         """Update progress bar."""
-        self.progress_bar.setValue(value)
+        # Update processing tab's progress bar
+        if hasattr(self, 'processing_tab'):
+            self.processing_tab.set_progress(value)
+        # Legacy progress bar (if exists)
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(value)
         self.status_bar.showMessage(message)
         self.add_info(message)
     
@@ -1579,18 +1094,21 @@ class HVSRMainWindow(QMainWindow):
             # Show QC failure dialog with diagnostic information
             self._show_qc_failure_dialog(windows, error_msg)
 
-            # Re-enable controls
-            self.progress_bar.setVisible(False)
-            self.process_btn.setEnabled(True)
+            # Re-enable controls via processing tab
+            if hasattr(self, 'processing_tab'):
+                self.processing_tab.set_progress(0, visible=False)
+                self.processing_tab.set_processing_enabled(True)
             return  # Don't proceed with plotting
 
         self.hvsr_result = result
         self.windows = windows
         self.data = data
         
-        # Update UI
-        self.progress_bar.setVisible(False)
-        self.process_btn.setEnabled(True)
+        # Update UI via processing tab
+        if hasattr(self, 'processing_tab'):
+            self.processing_tab.set_progress(0, visible=False)
+            self.processing_tab.set_processing_enabled(True)
+            self.processing_tab.set_window_buttons_enabled(True)
         
         # Enable action buttons if they exist (may be in Export dock instead)
         if hasattr(self, 'export_plot_btn'):
@@ -1601,10 +1119,6 @@ class HVSRMainWindow(QMainWindow):
             self.export_btn.setEnabled(True)
         if hasattr(self, 'save_btn'):
             self.save_btn.setEnabled(True)
-        
-        self.reject_all_btn.setEnabled(True)
-        self.accept_all_btn.setEnabled(True)
-        self.recompute_btn.setEnabled(True)
         
         # Update window info
         self.update_window_info()
@@ -1632,8 +1146,21 @@ class HVSRMainWindow(QMainWindow):
             if hasattr(self.azimuthal_tab, 'data_panel') and hasattr(self, 'data_load_tab'):
                 self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
 
-        # === NEW: Plot in separate window ===
-        self.plot_results_separate_window(result, windows, data)
+        # === Plot in separate window via controller ===
+        # Set data in plotting controller
+        self.plotting_ctrl.set_data(result, windows, data)
+        self.plotting_ctrl.set_plot_manager(self.plot_manager)
+        
+        # Plot using controller
+        lines = self.plotting_ctrl.plot_hvsr_results(result, windows, data)
+        self.window_lines = lines.get('window_lines', {})
+        self.stat_lines = lines.get('stat_lines', {})
+        
+        # Rebuild layer dock with lines
+        self.layers_dock.rebuild(self.window_lines, self.stat_lines)
+        
+        # Show plot window
+        self.plot_manager.show_separate()
         
         # Add info
         self.add_info(f"Processing complete!")
@@ -1770,8 +1297,8 @@ class HVSRMainWindow(QMainWindow):
         
         print(f"[Main] Refreshing plot (timeline={self.plot_manager.show_timeline}, stats={self.plot_manager.show_quality_stats})")
         
-        # Replot with current settings
-        self.plot_results_separate_window(self.hvsr_result, self.windows, self.data)
+        # Replot with current settings via controller
+        self.plotting_ctrl.refresh_plot()
         
         self.add_info(f"Plot refreshed")
     
@@ -1789,50 +1316,10 @@ class HVSRMainWindow(QMainWindow):
         Recalculate mean HVSR from currently visible windows in real-time.
         
         This provides instant visual feedback when user toggles window visibility.
+        Delegates to PlottingController.
         """
-        if not self.hvsr_result or not self.windows or not self.stat_lines:
-            return
-        
-        # Collect visible window HVSR curves
-        visible_hvsr_curves = []
-        
-        for i, window in enumerate(self.windows.windows):
-            # Include if: state==ACTIVE AND visible==True
-            if window.should_include_in_hvsr() and i < len(self.hvsr_result.window_spectra):
-                window_spectrum = self.hvsr_result.window_spectra[i]
-                visible_hvsr_curves.append(window_spectrum.hvsr)
-        
-        if not visible_hvsr_curves:
-            # No visible windows - hide mean lines
-            for line in self.stat_lines.values():
-                line.set_visible(False)
-            self.plot_manager.fig.canvas.draw_idle()
-            self.add_info("WARNING: No visible windows - mean hidden")
-            return
-        
-        # Compute new mean and std from visible curves
-        visible_hvsr_array = np.array(visible_hvsr_curves)
-        new_mean = np.mean(visible_hvsr_array, axis=0)
-        new_std = np.std(visible_hvsr_array, axis=0)
-        
-        # Update mean line
-        if 'mean' in self.stat_lines:
-            self.stat_lines['mean'].set_ydata(new_mean)
-        
-        # Update +1σ line
-        if 'std_plus' in self.stat_lines:
-            self.stat_lines['std_plus'].set_ydata(new_mean + new_std)
-        
-        # Update -1σ line
-        if 'std_minus' in self.stat_lines:
-            self.stat_lines['std_minus'].set_ydata(new_mean - new_std)
-        
-        # Redraw canvas
-        self.plot_manager.fig.canvas.draw_idle()
-        
-        # Log update
-        n_visible = len(visible_hvsr_curves)
-        self.add_info(f"Mean recalculated from {n_visible} visible windows")
+        # Delegate to plotting controller
+        self.plotting_ctrl.recalculate_mean_from_visible()
 
     def _validate_processing_results(self, result, windows):
         """
@@ -2612,11 +2099,13 @@ class HVSRMainWindow(QMainWindow):
         
         self.add_info(f"Properties applied: {properties.style_preset} style")
         
-        # Store data in plot manager
-        self.plot_manager.set_plot_data(self.hvsr_result, self.windows, self.data)
+        # Apply properties via plotting controller
+        self.plotting_ctrl.apply_properties(properties)
         
-        # Replot with properties
-        self.replot_with_properties(properties)
+        # Update layers dock
+        self.window_lines = self.plotting_ctrl.get_window_lines()
+        self.stat_lines = self.plotting_ctrl.get_stat_lines()
+        self.layers_dock.rebuild(self.window_lines, self.stat_lines)
     
     def _on_azimuthal_options_changed(self, options: dict):
         """
@@ -2873,10 +2362,146 @@ class HVSRMainWindow(QMainWindow):
     
     def add_info(self, message: str):
         """Add information message to log."""
-        self.info_text.append(message)
-        # Auto-scroll to bottom
-        scrollbar = self.info_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Use processing tab's info text if available
+        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'info_text'):
+            self.processing_tab.add_info(message)
+        elif hasattr(self, 'info_text'):
+            self.info_text.append(message)
+            scrollbar = self.info_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+    
+    # === Backward compatibility properties ===
+    # These proxy to processing_tab widgets for code that references them directly
+    
+    @property
+    def window_length_spin(self):
+        """Backward compatibility: access window length spin via processing_tab."""
+        return self.processing_tab.window_length_spin
+    
+    @property
+    def overlap_spin(self):
+        """Backward compatibility: access overlap spin via processing_tab."""
+        return self.processing_tab.overlap_spin
+    
+    @property
+    def smoothing_spin(self):
+        """Backward compatibility: access smoothing spin via processing_tab."""
+        return self.processing_tab.smoothing_spin
+    
+    @property
+    def freq_min_spin(self):
+        """Backward compatibility: access freq min spin via processing_tab."""
+        return self.processing_tab.freq_min_spin
+    
+    @property
+    def freq_max_spin(self):
+        """Backward compatibility: access freq max spin via processing_tab."""
+        return self.processing_tab.freq_max_spin
+    
+    @property
+    def n_freq_spin(self):
+        """Backward compatibility: access n freq spin via processing_tab."""
+        return self.processing_tab.n_freq_spin
+    
+    @property
+    def override_sampling_check(self):
+        """Backward compatibility: access override sampling check via processing_tab."""
+        return self.processing_tab.override_sampling_check
+    
+    @property
+    def sampling_rate_spin(self):
+        """Backward compatibility: access sampling rate spin via processing_tab."""
+        return self.processing_tab.sampling_rate_spin
+    
+    @property
+    def qc_enable_check(self):
+        """Backward compatibility: access QC enable check via processing_tab."""
+        return self.processing_tab.qc_enable_check
+    
+    @property
+    def preset_radio(self):
+        """Backward compatibility: access preset radio via processing_tab."""
+        return self.processing_tab.preset_radio
+    
+    @property
+    def custom_radio(self):
+        """Backward compatibility: access custom radio via processing_tab."""
+        return self.processing_tab.custom_radio
+    
+    @property
+    def qc_combo(self):
+        """Backward compatibility: access QC preset combo via processing_tab."""
+        return self.processing_tab.qc_combo
+    
+    @property
+    def cox_fdwra_check(self):
+        """Backward compatibility: access Cox enable check via processing_tab."""
+        return self.processing_tab.cox_fdwra_check
+    
+    @property
+    def cox_n_spin(self):
+        """Backward compatibility: access Cox n spin via processing_tab."""
+        return self.processing_tab.cox_n_spin
+    
+    @property
+    def cox_iterations_spin(self):
+        """Backward compatibility: access Cox max iterations spin via processing_tab."""
+        return self.processing_tab.cox_iterations_spin
+    
+    @property
+    def cox_min_iterations_spin(self):
+        """Backward compatibility: access Cox min iterations spin via processing_tab."""
+        return self.processing_tab.cox_min_iterations_spin
+    
+    @property
+    def cox_dist_combo(self):
+        """Backward compatibility: access Cox distribution combo via processing_tab."""
+        return self.processing_tab.cox_dist_combo
+    
+    @property
+    def parallel_check(self):
+        """Backward compatibility: access parallel check via processing_tab."""
+        return self.processing_tab.parallel_check
+    
+    @property
+    def cores_spin(self):
+        """Backward compatibility: access cores spin via processing_tab."""
+        return self.processing_tab.cores_spin
+    
+    @property
+    def process_btn(self):
+        """Backward compatibility: access process button via processing_tab."""
+        return self.processing_tab.process_btn
+    
+    @property
+    def progress_bar(self):
+        """Backward compatibility: access progress bar via processing_tab."""
+        return self.processing_tab.progress_bar
+    
+    @property
+    def info_text(self):
+        """Backward compatibility: access info text via processing_tab."""
+        return self.processing_tab.info_text
+    
+    @property
+    def window_info_label(self):
+        """Backward compatibility: access window info label via processing_tab."""
+        return self.processing_tab.window_info_label
+    
+    @property
+    def reject_all_btn(self):
+        """Backward compatibility: access reject all button via processing_tab."""
+        return self.processing_tab.reject_all_btn
+    
+    @property
+    def accept_all_btn(self):
+        """Backward compatibility: access accept all button via processing_tab."""
+        return self.processing_tab.accept_all_btn
+    
+    @property
+    def recompute_btn(self):
+        """Backward compatibility: access recompute button via processing_tab."""
+        return self.processing_tab.recompute_btn
 
 
 if not HAS_PYQT5:

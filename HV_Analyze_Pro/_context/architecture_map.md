@@ -55,7 +55,7 @@ processing/windows/           ├── window_plots.py
 ### Main Window Tab Structure
 
 ```
-HVSRMainWindow (main_window.py - 2886 lines)
+HVSRMainWindow (main_window.py - 2511 lines) ← REFACTORED from 2886 lines
 └── mode_tabs (QTabWidget)
     │
     ├── Tab 0: "Data Load" ─────────────────────────────────────────────────────
@@ -66,13 +66,15 @@ HVSRMainWindow (main_window.py - 2886 lines)
     │       └── File loading controls
     │
     ├── Tab 1: "Processing" ────────────────────────────────────────────────────
-    │   └── INLINE IN main_window.py (NOT a separate class!)
-    │       ├── CollapsibleDataPanel (self.processing_data_panel)
-    │       ├── Control Panel (from create_control_panel())
-    │       │   ├── Processing Settings (window length, overlap, smoothing)
-    │       │   ├── QC Settings (from create_qc_settings_group())
-    │       │   ├── Actions (Process HVSR button)
-    │       │   └── Progress/Log
+    │   └── ProcessingTab (gui/tabs/processing_tab.py - ~350 lines) ← NEW!
+    │       ├── CollapsibleDataPanel (self.data_panel)
+    │       ├── ProcessingSettingsPanel (from main_window_modules/panels/)
+    │       ├── QCSettingsPanel (from main_window_modules/panels/)
+    │       ├── CoxSettingsPanel (from main_window_modules/panels/)
+    │       ├── Parallel Processing controls
+    │       ├── Process HVSR button
+    │       ├── Window Management (reject/accept all, recompute)
+    │       └── Progress/Info display
     │       └── Uses PlotWindowManager (separate window for HVSR plot)
     │
     │   Associated Docks (visible when on Processing tab):
@@ -94,13 +96,12 @@ HVSRMainWindow (main_window.py - 2886 lines)
 
 ### Main Window Composition (Detail)
 ```
-gui/main_window.py (HVSRMainWindow - 2886 lines) ← LARGE, CONTAINS PROCESSING TAB INLINE
+gui/main_window.py (HVSRMainWindow - 2511 lines) ← REFACTORED from 2886
 │
 ├── USES: gui/main_window_modules/
 │         ├── menu_bar.py (MenuBarHelper)
-│         ├── control_panel.py (settings group helpers)
-│         ├── controllers/ (DataController, ProcessingController, etc.)
-│         └── panels/ (ProcessingSettingsPanel, QCSettingsPanel)
+│         ├── controllers/ (DataController, ProcessingController, PlottingController, SessionController)
+│         └── panels/ (ProcessingSettingsPanel, QCSettingsPanel, CoxSettingsPanel)
 │
 ├── USES: gui/mixins/
 │         ├── processing_mixin.py
@@ -109,8 +110,8 @@ gui/main_window.py (HVSRMainWindow - 2886 lines) ← LARGE, CONTAINS PROCESSING 
 │
 ├── CONTAINS: gui/tabs/
 │             ├── data_load_tab.py (DataLoadTab) ← Tab 0
+│             ├── processing_tab.py (ProcessingTab) ← Tab 1 (NEW!)
 │             └── azimuthal_tab.py (AzimuthalTab) ← Tab 2
-│             NOTE: Processing Tab (Tab 1) is NOT here - it's inline in main_window.py
 │
 ├── CONTAINS: gui/docks/
 │             ├── export/ (ExportDock + sections/, exporters/)
@@ -203,26 +204,35 @@ gui/workers/
 └── PlotExportWorker           → Plot export
 ```
 
-## Processing Tab Content (Currently in main_window.py)
+## Processing Tab Content (EXTRACTED to processing_tab.py)
 
-The Processing tab UI is built inline in main_window.py. Key methods:
+The Processing tab UI has been extracted to `gui/tabs/processing_tab.py`. Key changes:
 
 ```
-main_window.py methods for Processing Tab:
-├── init_ui()                  → Lines 440-560: Creates tabs, adds Processing tab content
-├── create_control_panel()     → Lines 627-739: Left panel with settings
-├── create_settings_group()    → Lines 740-900: Window/smoothing/frequency settings
-├── create_qc_settings_group() → Lines 900-1100: QC and rejection settings
-├── create_actions_group()     → Lines 1100-1200: Process button, progress bar
-└── Many processing callbacks  → Lines 1200-2886: Processing logic, plotting, session
+ProcessingTab (gui/tabs/processing_tab.py - ~350 lines):
+├── Uses modular panels from main_window_modules/panels/
+│   ├── ProcessingSettingsPanel (window, overlap, smoothing, frequency)
+│   ├── QCSettingsPanel (preset/custom modes)
+│   └── CoxSettingsPanel (Cox FDWRA parameters)
+├── Emits signals: process_requested, recompute_requested, settings_changed
+├── Provides backward compatibility properties (window_length_spin, etc.)
+└── FullProcessingSettings dataclass for bundling all settings
+
+main_window.py changes:
+├── Removed: create_control_panel(), create_settings_group(), create_window_group()
+├── Removed: toggle handlers (_on_qc_enable_toggled, etc.)
+├── Added: _on_process_requested() handler for ProcessingTab signal
+├── Added: backward compatibility properties (proxy to processing_tab)
+└── Uses PlottingController for plot operations
 ```
 
-## Refactoring Candidates
+## Refactoring Candidates (Updated)
 
-1. **main_window.py (2886 lines)** - PRIORITY: HIGH
-   - Processing tab should be extracted to `gui/tabs/processing_tab.py`
-   - Control panel creation should move to `main_window_modules/`
-   - Processing callbacks already partially in mixins
+1. **main_window.py (2511 lines)** - PRIORITY: MEDIUM (reduced from HIGH)
+   - ✅ Processing tab extracted to `gui/tabs/processing_tab.py`
+   - ✅ Plotting delegated to PlottingController
+   - Could still benefit from moving more callbacks to controllers
+   - Session save/load could be fully delegated to SessionController
 
 2. **data_load_tab.py (765 lines)** - PRIORITY: MEDIUM
    - Could benefit from extracting panels to submodules
@@ -270,5 +280,7 @@ config/plot_properties.py → Used by: gui/docks/properties/
 | HVSRPlotter | visualization/plotter.py | High-level plotting |
 | HVSRMainWindow | gui/main_window.py | Main application window |
 | DataLoadTab | gui/tabs/data_load_tab.py | Tab 0: Data loading |
+| ProcessingTab | gui/tabs/processing_tab.py | Tab 1: HVSR processing (NEW) |
 | AzimuthalTab | gui/tabs/azimuthal_tab.py | Tab 2: Azimuthal processing |
+| FullProcessingSettings | gui/tabs/processing_tab.py | Combined processing settings |
 | HVSRAnalysis | api/analysis.py | High-level API |
