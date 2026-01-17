@@ -11,8 +11,8 @@ echo Starting HVSR Pro...
 echo Working directory: %CD%
 echo.
 
-REM Run the GUI launcher
-python launch_gui.py
+REM Run the GUI launcher with faulthandler for crash debugging
+python -X faulthandler launch_gui.py
 
 echo.
 echo ========================================

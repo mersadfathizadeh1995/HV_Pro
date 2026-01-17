@@ -15,7 +15,7 @@ Structure:
 from .export.export_dock import ExportDock
 from .layers.layers_dock import WindowLayersDock
 from .peak_picker.peak_picker_dock import PeakPickerDock
-from .azimuthal.azimuthal_properties_dock import AzimuthalPropertiesDock
+from .azimuthal import AzimuthalPropertiesDock, AzimuthalDock
 from .properties.properties_dock import PropertiesDock, PlotProperties
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     'WindowLayersDock',
     'PeakPickerDock',
     'AzimuthalPropertiesDock',
+    'AzimuthalDock',
     'PropertiesDock',
     'PlotProperties',
 ]

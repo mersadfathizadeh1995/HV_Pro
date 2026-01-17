@@ -48,6 +48,9 @@ if HAS_PYQT5:
         def __init__(self, parent=None):
             super().__init__(parent)
             
+            # Store main window reference (parent is HVSRMainWindow before tab is added to QTabWidget)
+            self._main_window = parent
+            
             # State
             self.windows = None  # WindowCollection from processing
             self.result = None   # AzimuthalHVSRResult
@@ -481,9 +484,8 @@ if HAS_PYQT5:
             self.update_plot()
             
             # Update azimuthal properties dock if available
-            parent = self.parent()
-            if parent and hasattr(parent, 'azimuthal_properties_dock'):
-                parent.azimuthal_properties_dock.set_result(result, self.figure)
+            if self._main_window and hasattr(self._main_window, 'azimuthal_properties_dock'):
+                self._main_window.azimuthal_properties_dock.set_result(result, self.figure)
         
         def on_processing_error(self, error_msg: str):
             """Handle processing error."""
@@ -626,9 +628,8 @@ if HAS_PYQT5:
                 
                 # Update properties dock with figure reference
                 # This ensures the export function has access to the current figure
-                parent = self.parent()
-                if parent and hasattr(parent, 'azimuthal_properties_dock'):
-                    parent.azimuthal_properties_dock.set_result(self.result, self.figure)
+                if self._main_window and hasattr(self._main_window, 'azimuthal_properties_dock'):
+                    self._main_window.azimuthal_properties_dock.set_result(self.result, self.figure)
                 
                 self.status_label.setText("Plot updated successfully")
                 

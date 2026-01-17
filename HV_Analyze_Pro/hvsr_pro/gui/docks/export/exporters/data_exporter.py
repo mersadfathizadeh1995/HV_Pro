@@ -1,0 +1,175 @@
+"""
+Data Exporter
+=============
+
+Functions for exporting HVSR results to CSV and JSON formats.
+"""
+
+import csv
+import json
+from datetime import datetime
+from typing import Any, Optional, Tuple
+import numpy as np
+from scipy import interpolate as scipy_interpolate
+
+
+def interpolate_curve(
+    orig_frequencies: np.ndarray,
+    curve: Optional[np.ndarray],
+    n_points: int
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    Interpolate curve to new frequency points.
+    
+    Args:
+        orig_frequencies: Original frequency array
+        curve: Curve to interpolate (can be None)
+        n_points: Number of output points
+        
+    Returns:
+        Tuple of (new_frequencies, interpolated_curve)
+    """
+    # Create new frequency array (log-spaced for HVSR)
+    new_frequencies = np.logspace(
+        np.log10(orig_frequencies[0]),
+        np.log10(orig_frequencies[-1]),
+        n_points
+    )
+    
+    if curve is None or len(curve) == 0:
+        return new_frequencies, np.full(n_points, np.nan)
+    
+    f = scipy_interpolate.interp1d(
+        orig_frequencies, curve, kind='linear',
+        bounds_error=False, fill_value='extrapolate'
+    )
+    return new_frequencies, f(new_frequencies)
+
+
+def export_csv(filename: str, result: Any, options: dict) -> None:
+    """
+    Export HVSR results to CSV file.
+    
+    Args:
+        filename: Output file path
+        result: HVSRResult object
+        options: Export options (may contain 'n_points' for interpolation)
+    """
+    # Get original data - use explicit None checks to avoid numpy array truth value issues
+    orig_frequencies = result.frequencies if hasattr(result, 'frequencies') else getattr(result, 'frequency', None)
+    
+    mean_curve = getattr(result, 'mean_hvsr', None)
+    if mean_curve is None:
+        mean_curve = getattr(result, 'mean_curve', None)
+    
+    std_curve = getattr(result, 'std_hvsr', None)
+    if std_curve is None:
+        std_curve = getattr(result, 'std_curve', None)
+    
+    median_curve = getattr(result, 'median_hvsr', None)
+    if median_curve is None:
+        median_curve = getattr(result, 'median_curve', None)
+    
+    # Check if interpolation is needed
+    n_points = options.get('n_points')
+    if n_points and n_points != len(orig_frequencies):
+        frequencies, mean_curve = interpolate_curve(orig_frequencies, mean_curve, n_points)
+        _, std_curve = interpolate_curve(orig_frequencies, std_curve, n_points)
+        if median_curve is not None:
+            _, median_curve = interpolate_curve(orig_frequencies, median_curve, n_points)
+    else:
+        frequencies = orig_frequencies
+    
+    # Write CSV
+    with open(filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        
+        # Header
+        header = ['Frequency (Hz)', 'Mean H/V', 'Std H/V']
+        if median_curve is not None:
+            header.append('Median H/V')
+        writer.writerow(header)
+        
+        # Data rows
+        for i, freq in enumerate(frequencies):
+            row = [freq]
+            row.append(mean_curve[i] if mean_curve is not None else '')
+            row.append(std_curve[i] if std_curve is not None else '')
+            if median_curve is not None:
+                row.append(median_curve[i])
+            writer.writerow(row)
+
+
+def export_json(filename: str, result: Any, windows: Any, options: dict) -> None:
+    """
+    Export HVSR results to JSON file.
+    
+    Args:
+        filename: Output file path
+        result: HVSRResult object
+        windows: WindowCollection object (optional)
+        options: Export options (may contain 'n_points' for interpolation)
+    """
+    # Get original data - use explicit None checks
+    orig_frequencies = result.frequencies if hasattr(result, 'frequencies') else getattr(result, 'frequency', None)
+    
+    mean_curve = getattr(result, 'mean_hvsr', None)
+    if mean_curve is None:
+        mean_curve = getattr(result, 'mean_curve', None)
+    
+    std_curve = getattr(result, 'std_hvsr', None)
+    if std_curve is None:
+        std_curve = getattr(result, 'std_curve', None)
+    
+    median_curve = getattr(result, 'median_hvsr', None)
+    if median_curve is None:
+        median_curve = getattr(result, 'median_curve', None)
+    
+    # Check if interpolation is needed
+    n_points = options.get('n_points')
+    if n_points and n_points != len(orig_frequencies):
+        frequencies, mean_curve = interpolate_curve(orig_frequencies, mean_curve, n_points)
+        _, std_curve = interpolate_curve(orig_frequencies, std_curve, n_points)
+        if median_curve is not None:
+            _, median_curve = interpolate_curve(orig_frequencies, median_curve, n_points)
+    else:
+        frequencies = orig_frequencies
+    
+    # Build JSON data
+    data = {
+        'metadata': {
+            'export_date': datetime.now().isoformat(),
+            'n_points': len(frequencies),
+        },
+        'frequencies': frequencies.tolist() if hasattr(frequencies, 'tolist') else list(frequencies),
+        'mean_hvsr': mean_curve.tolist() if mean_curve is not None and hasattr(mean_curve, 'tolist') else (list(mean_curve) if mean_curve is not None else None),
+        'std_hvsr': std_curve.tolist() if std_curve is not None and hasattr(std_curve, 'tolist') else (list(std_curve) if std_curve is not None else None),
+    }
+    
+    if median_curve is not None:
+        data['median_hvsr'] = median_curve.tolist() if hasattr(median_curve, 'tolist') else list(median_curve)
+    
+    # Add peak info if available
+    if hasattr(result, 'primary_peak') and result.primary_peak:
+        data['primary_peak'] = {
+            'frequency': float(result.primary_peak.frequency),
+            'amplitude': float(result.primary_peak.amplitude)
+        }
+    elif hasattr(result, 'peak_frequency') and result.peak_frequency:
+        data['primary_peak'] = {
+            'frequency': float(result.peak_frequency),
+            'amplitude': float(getattr(result, 'peak_amplitude', 0))
+        }
+    
+    # Add window statistics if available
+    if windows:
+        data['window_stats'] = {
+            'total_windows': windows.n_windows,
+            'active_windows': windows.n_active,
+            'rejected_windows': windows.n_rejected,
+            'acceptance_rate': windows.acceptance_rate
+        }
+    
+    # Write JSON
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=2)
