@@ -6,12 +6,18 @@ PyQt5-based graphical user interface with interactive window rejection.
 
 Organized Structure:
 -------------------
-- main_window: Main application window
-- panels/: Embedded settings panels (ProcessingSettingsPanel, QCSettingsPanel)
-- mixins/: Behavior mixins (ProcessingMixin, PlottingMixin, SessionMixin)
-- dialogs/: Dialog windows (DataInputDialog, ExportDialog, etc.)
-- components/: Reusable UI components (CollapsibleBox, ColorPicker, CollapsibleDataPanel)
+- main_window.py: Main application window (HVSRMainWindow)
+- main_window_modules/: Modular helpers (menu_bar, control_panel, controllers)
+- tabs/: Tab widgets (DataLoadTab, AzimuthalTab)
+- canvas/: Matplotlib canvas widgets
+- docks/: Dockable panels organized by function
+- dialogs/: Dialog windows organized by function
+- panels/: Embedded settings panels
+- mixins/: Behavior mixins
+- components/: Reusable UI components
+- widgets/: Other widget components
 - workers/: Background thread workers
+- utils/: GUI utilities
 """
 
 HAS_GUI = False
@@ -20,22 +26,44 @@ try:
     # === Main Window ===
     from hvsr_pro.gui.main_window import HVSRMainWindow
     
-    # === Flat imports (direct file access) ===
-    from hvsr_pro.gui.interactive_canvas import InteractiveHVSRCanvas
-    from hvsr_pro.gui.plot_window_manager import PlotWindowManager
-    from hvsr_pro.gui.layers_dock import WindowLayersDock
-    from hvsr_pro.gui.view_mode_selector import ViewModeSelector
-    from hvsr_pro.gui.data_input_dialog import DataInputDialog
-    from hvsr_pro.gui.preview_canvas import PreviewCanvas
-    from hvsr_pro.gui.loaded_data_list import LoadedDataList
-    from hvsr_pro.gui.loaded_data_tree import LoadedDataTree
-    from hvsr_pro.gui.data_load_tab import DataLoadTab
-    from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
-    from hvsr_pro.gui.column_mapper_dialog import SeismicColumnMapperDialog
-    from hvsr_pro.gui.properties_dock import PropertiesDock
-    from hvsr_pro.gui.peak_picker_dock import PeakPickerDock
-    from hvsr_pro.gui.export_dock import ExportDock
-    from hvsr_pro.gui.azimuthal_tab import AzimuthalTab
+    # === Canvas ===
+    from hvsr_pro.gui.canvas import (
+        InteractiveHVSRCanvas,
+        PreviewCanvas,
+        PlotWindowManager,
+    )
+    
+    # === Tabs ===
+    from hvsr_pro.gui.tabs import (
+        DataLoadTab,
+        AzimuthalTab,
+    )
+    
+    # === Docks ===
+    from hvsr_pro.gui.docks import (
+        ExportDock,
+        WindowLayersDock,
+        PeakPickerDock,
+        AzimuthalPropertiesDock,
+        PropertiesDock,
+    )
+    
+    # === Dialogs ===
+    from hvsr_pro.gui.dialogs import (
+        DataInputDialog,
+        ExportDialog,
+        DataExportDialog,
+        ChannelMapperDialog,
+        SeismicColumnMapperDialog,
+        AdvancedQCDialog,
+    )
+    
+    # === Widgets ===
+    from hvsr_pro.gui.widgets import (
+        LoadedDataList,
+        LoadedDataTree,
+        ViewModeSelector,
+    )
     
     # === Workers ===
     from hvsr_pro.gui.workers import (
@@ -59,12 +87,20 @@ try:
         CollapsibleDataPanel,
     )
     
+    # === Main Window Modules ===
+    from hvsr_pro.gui import main_window_modules
+    
     # Submodule access
+    from hvsr_pro.gui import canvas
+    from hvsr_pro.gui import tabs
+    from hvsr_pro.gui import docks
+    from hvsr_pro.gui import dialogs
+    from hvsr_pro.gui import widgets
     from hvsr_pro.gui import components
     from hvsr_pro.gui import panels
     from hvsr_pro.gui import mixins
     from hvsr_pro.gui import workers
-    from hvsr_pro.gui import dialogs
+    from hvsr_pro.gui import utils
     
     HAS_GUI = True
     
@@ -78,22 +114,34 @@ __all__ = [
     # Main window
     'HVSRMainWindow',
     
-    # Direct file imports
+    # Canvas
     'InteractiveHVSRCanvas',
-    'PlotWindowManager',
-    'WindowLayersDock',
-    'ViewModeSelector',
-    'DataInputDialog',
     'PreviewCanvas',
-    'LoadedDataList',
-    'LoadedDataTree',
+    'PlotWindowManager',
+    
+    # Tabs
     'DataLoadTab',
+    'AzimuthalTab',
+    
+    # Docks
+    'ExportDock',
+    'WindowLayersDock',
+    'PeakPickerDock',
+    'AzimuthalPropertiesDock',
+    'PropertiesDock',
+    
+    # Dialogs
+    'DataInputDialog',
+    'ExportDialog',
+    'DataExportDialog',
     'ChannelMapperDialog',
     'SeismicColumnMapperDialog',
-    'PropertiesDock',
-    'PeakPickerDock',
-    'ExportDock',
-    'AzimuthalTab',
+    'AdvancedQCDialog',
+    
+    # Widgets
+    'LoadedDataList',
+    'LoadedDataTree',
+    'ViewModeSelector',
     
     # Workers
     'ProcessingThread',
@@ -117,11 +165,17 @@ __all__ = [
     'CollapsibleDataPanel',
     
     # Submodules
+    'canvas',
+    'tabs',
+    'docks',
+    'dialogs',
+    'widgets',
     'components',
     'panels',
     'mixins',
     'workers',
-    'dialogs',
+    'utils',
+    'main_window_modules',
     
     # Flag
     'HAS_GUI',

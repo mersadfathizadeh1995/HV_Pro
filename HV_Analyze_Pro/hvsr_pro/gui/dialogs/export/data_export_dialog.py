@@ -535,7 +535,7 @@ if HAS_PYQT5:
             self.browse_btn.setEnabled(False)
 
             # Import export function
-            from hvsr_pro.gui.data_exporters import export_seismic_data
+            from hvsr_pro.gui.utils import export_seismic_data
 
             # Create worker thread
             self.export_worker = ExportWorker(

@@ -34,16 +34,12 @@ from hvsr_pro.processing.hvsr import HVSRResult
 from hvsr_pro.visualization import HVSRPlotter
 
 if HAS_PYQT5:
-    from hvsr_pro.gui.interactive_canvas import InteractiveHVSRCanvas
-    from hvsr_pro.gui.plot_window_manager import PlotWindowManager
-    from hvsr_pro.gui.layers_dock import WindowLayersDock
-    from hvsr_pro.gui.peak_picker_dock import PeakPickerDock
-    from hvsr_pro.gui.export_dock import ExportDock
-    from hvsr_pro.gui.azimuthal_properties_dock import AzimuthalPropertiesDock
-    # from hvsr_pro.gui.view_mode_selector import ViewModeSelector  # Moved to Properties panel
-    from hvsr_pro.gui.data_input_dialog import DataInputDialog
-    from hvsr_pro.gui.data_load_tab import DataLoadTab
-    from hvsr_pro.gui.azimuthal_tab import AzimuthalTab
+    from hvsr_pro.gui.canvas import InteractiveHVSRCanvas, PlotWindowManager
+    from hvsr_pro.gui.docks import (
+        WindowLayersDock, PeakPickerDock, ExportDock, AzimuthalPropertiesDock
+    )
+    from hvsr_pro.gui.dialogs import DataInputDialog
+    from hvsr_pro.gui.tabs import DataLoadTab, AzimuthalTab
     from hvsr_pro.gui.workers import ProcessingThread
 
 
@@ -467,7 +463,7 @@ class HVSRMainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.peak_picker_dock)
         
         # Create properties dock
-        from hvsr_pro.gui.properties_dock import PropertiesDock
+        from hvsr_pro.gui.docks import PropertiesDock
         self.properties_dock = PropertiesDock(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
 
@@ -1219,7 +1215,7 @@ class HVSRMainWindow(QMainWindow):
 
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
-        from hvsr_pro.gui.advanced_qc_dialog import AdvancedQCDialog
+        from hvsr_pro.gui.dialogs import AdvancedQCDialog
         dialog = AdvancedQCDialog(self, self.custom_qc_settings)
         if dialog.exec_():
             self.custom_qc_settings = dialog.get_settings()
@@ -2016,7 +2012,7 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "No Results", "No results to export.")
             return
         
-        from hvsr_pro.gui.export_dialog import ExportDialog
+        from hvsr_pro.gui.dialogs import ExportDialog
         
         dialog = ExportDialog(self, self.hvsr_result, self.windows, self.data)
         dialog.exec_()

@@ -27,8 +27,8 @@ except ImportError:
 
 
 if HAS_PYQT5:
-    from hvsr_pro.gui.loaded_data_tree import LoadedDataTree
-    from hvsr_pro.gui.preview_canvas import PreviewCanvas
+    from hvsr_pro.gui.widgets import LoadedDataTree
+    from hvsr_pro.gui.canvas import PreviewCanvas
 
     class DataLoadTab(QWidget):
         """
@@ -220,7 +220,7 @@ if HAS_PYQT5:
 
         def on_export_data(self):
             """Handle export data button click."""
-            from hvsr_pro.gui.data_export_dialog import DataExportDialog
+            from hvsr_pro.gui.dialogs import DataExportDialog
 
             # Get selected item info
             selected_info = self.loaded_tree.get_selected_item_info()

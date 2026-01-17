@@ -654,7 +654,7 @@ class ExportDock(QDockWidget):
             return
 
         # Open comprehensive export dialog
-        from hvsr_pro.gui.export_dialog import ExportDialog
+        from hvsr_pro.gui.dialogs import ExportDialog
 
         dialog = ExportDialog(
             parent=self,

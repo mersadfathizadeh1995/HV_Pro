@@ -791,7 +791,7 @@ if HAS_PYQT5:
             try:
                 import numpy as np
                 from pathlib import Path
-                from hvsr_pro.gui.column_mapper_dialog import SeismicColumnMapperDialog
+                from hvsr_pro.gui.dialogs import SeismicColumnMapperDialog
 
                 # Read file and detect encoding
                 columns_data = []
@@ -1234,7 +1234,7 @@ if HAS_PYQT5:
         
         def map_channels_for_selected(self):
             """Show channel mapping dialog for selected files in table."""
-            from hvsr_pro.gui.channel_mapper_dialog import ChannelMapperDialog
+            from hvsr_pro.gui.dialogs import ChannelMapperDialog
             from PyQt5.QtWidgets import QDialog
             
             # Get selected rows from table

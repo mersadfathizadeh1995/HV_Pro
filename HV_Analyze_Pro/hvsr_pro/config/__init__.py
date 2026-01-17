@@ -31,6 +31,13 @@ from hvsr_pro.config.session import (
     save_session,
     load_session,
 )
+from hvsr_pro.config.plot_properties import (
+    PlotProperties,
+    DEFAULT_PLOT_PROPERTIES,
+    PUBLICATION_PRESET,
+    ANALYSIS_PRESET,
+    MINIMAL_PRESET,
+)
 
 __all__ = [
     # Settings
@@ -51,5 +58,11 @@ __all__ = [
     'SessionState',
     'save_session',
     'load_session',
+    # Plot Properties
+    'PlotProperties',
+    'DEFAULT_PLOT_PROPERTIES',
+    'PUBLICATION_PRESET',
+    'ANALYSIS_PRESET',
+    'MINIMAL_PRESET',
 ]
 
