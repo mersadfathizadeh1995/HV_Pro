@@ -205,6 +205,62 @@ if HAS_PYQT5:
                 for name, visible in state['tabs'].items():
                     if name == 'azimuthal':
                         self.toggle_azimuthal_tab(visible)
+        
+        def handle_view_mode_changed(self, mode: str) -> bool:
+            """
+            Handle view mode change (statistical, windows, both).
+            
+            Updates plot line visibility based on selected mode.
+            
+            Args:
+                mode: View mode ('statistical', 'windows', 'both')
+            
+            Returns:
+                True if handled successfully, False otherwise
+            """
+            # Get references from parent
+            window_lines = getattr(self.parent, 'window_lines', None)
+            stat_lines = getattr(self.parent, 'stat_lines', None)
+            windows = getattr(self.parent, 'windows', None)
+            plot_manager = getattr(self.parent, 'plot_manager', None)
+            
+            if not window_lines or not stat_lines:
+                return False
+            
+            # Update line visibility based on mode
+            if mode == 'statistical':
+                # Hide individual windows, show statistics
+                for line in window_lines.values():
+                    line.set_visible(False)
+                for line in stat_lines.values():
+                    line.set_visible(True)
+            
+            elif mode == 'windows':
+                # Show individual windows + stats, respect visibility flags
+                if windows:
+                    for idx, line in window_lines.items():
+                        window = windows.get_window(idx)
+                        if window:
+                            line.set_visible(window.is_active() and window.visible)
+                for line in stat_lines.values():
+                    line.set_visible(True)
+            
+            elif mode == 'both':
+                # Show everything
+                if windows:
+                    for idx, line in window_lines.items():
+                        window = windows.get_window(idx)
+                        if window:
+                            line.set_visible(window.is_active() and window.visible)
+                for line in stat_lines.values():
+                    line.set_visible(True)
+            
+            # Redraw
+            if plot_manager and hasattr(plot_manager, 'fig') and plot_manager.fig:
+                plot_manager.fig.canvas.draw_idle()
+            
+            self.state_changed.emit('view_mode', True)
+            return True
 
 else:
     class ViewStateManager:

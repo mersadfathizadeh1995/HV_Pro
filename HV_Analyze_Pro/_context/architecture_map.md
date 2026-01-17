@@ -55,7 +55,7 @@ processing/windows/           ├── window_plots.py
 ### Main Window Tab Structure
 
 ```
-HVSRMainWindow (main_window.py - 1616 lines) ← REFACTORED from 2886 lines (44% reduction)
+HVSRMainWindow (main_window.py - 1204 lines) ← REFACTORED from 2886 lines (58% reduction)
 └── mode_tabs (QTabWidget)
     │
     ├── Tab 0: "Data Load" ─────────────────────────────────────────────────────
@@ -96,11 +96,13 @@ HVSRMainWindow (main_window.py - 1616 lines) ← REFACTORED from 2886 lines (44%
 
 ### Main Window Composition (Detail)
 ```
-gui/main_window.py (HVSRMainWindow - 1616 lines) ← REFACTORED from 2886 (44% reduction)
+gui/main_window.py (HVSRMainWindow - 1204 lines) ← REFACTORED from 2886 (58% reduction)
 │
 ├── USES: gui/main_window_modules/
 │         ├── menu_bar.py (MenuBarHelper) ← Menu creation
-│         ├── view_state.py (ViewStateManager) ← View state management
+│         ├── view_state.py (ViewStateManager) ← View state + dock visibility
+│         ├── ui_coordinator.py (UIUpdateCoordinator) ← UI update orchestration
+│         ├── backward_compat.py (BackwardCompatMixin) ← Deprecated property proxies
 │         ├── controllers/
 │         │   ├── data_controller.py (DataController) ← Data loading
 │         │   ├── processing_controller.py (ProcessingController) ← Processing logic
@@ -308,7 +310,13 @@ Main window provides proxy properties to processing_tab widgets:
 main_window.py:
 ├── 2886 → 2248 lines (Phase 1: ProcessingTab extraction)
 ├── 2248 → 1616 lines (Phase 2: Controller delegation)
-└── Total reduction: 44% (1270 lines removed)
+├── 1616 → 1204 lines (Phase 3: UIUpdateCoordinator + BackwardCompatMixin)
+└── Total reduction: 58% (1682 lines removed)
+
+New modules created:
+├── ui_coordinator.py (UIUpdateCoordinator) - Consolidates on_processing_finished/restore_session_gui
+├── backward_compat.py (BackwardCompatMixin) - Holds 26 deprecated property proxies
+└── view_state.py enhanced with handle_view_mode_changed()
 
 Methods moved to controllers:
 ├── on_files_selected logic → DataController (~150 lines)
@@ -317,14 +325,17 @@ Methods moved to controllers:
 ├── Peak detection → PeakController (~80 lines)
 ├── Export operations → ExportController (~100 lines)
 ├── Menu creation → MenuBarHelper (~150 lines)
-└── View toggles → ViewStateManager (~50 lines)
+├── View toggles → ViewStateManager (~80 lines)
+├── Tab change handling → ViewStateManager.handle_tab_changed()
+├── View mode handling → ViewStateManager.handle_view_mode_changed()
+├── UI updates after processing → UIUpdateCoordinator (~200 lines)
+└── Backward compat properties → BackwardCompatMixin (~130 lines)
 ```
 
 ### Remaining Refactoring Candidates
 ```
-1. main_window.py (1616 lines) - PRIORITY: LOW (greatly reduced)
-   - on_processing_finished() still complex (could split further)
-   - restore_session_gui() still complex
+1. main_window.py (1204 lines) - PRIORITY: VERY LOW (significantly reduced)
+   - Now mostly thin wrappers and signal routing
    
 2. data_load_tab.py (765 lines) - PRIORITY: MEDIUM
    - Could benefit from extracting panels to submodules
@@ -371,7 +382,7 @@ config/plot_properties.py → Used by: gui/docks/properties/
 | RejectionEngine | processing/rejection/engine.py | Coordinate rejection algorithms |
 | AzimuthalHVSRProcessor | processing/azimuthal/ | Azimuthal processing |
 | HVSRPlotter | visualization/plotter.py | High-level plotting |
-| HVSRMainWindow | gui/main_window.py | Main application window (1616 lines) |
+| HVSRMainWindow | gui/main_window.py | Main application window (1204 lines) |
 | DataController | gui/main_window_modules/controllers/ | Data loading operations |
 | ProcessingController | gui/main_window_modules/controllers/ | Processing operations |
 | PlottingController | gui/main_window_modules/controllers/ | Plot operations |
@@ -380,7 +391,9 @@ config/plot_properties.py → Used by: gui/docks/properties/
 | PeakController | gui/main_window_modules/controllers/ | Peak detection |
 | ExportController | gui/main_window_modules/controllers/ | Export operations |
 | MenuBarHelper | gui/main_window_modules/menu_bar.py | Menu bar creation |
-| ViewStateManager | gui/main_window_modules/view_state.py | View state management |
+| ViewStateManager | gui/main_window_modules/view_state.py | View state + dock visibility |
+| UIUpdateCoordinator | gui/main_window_modules/ui_coordinator.py | UI update orchestration |
+| BackwardCompatMixin | gui/main_window_modules/backward_compat.py | Deprecated property proxies |
 | DataLoadTab | gui/tabs/data_load_tab.py | Tab 0: Data loading |
 | ProcessingTab | gui/tabs/processing_tab.py | Tab 1: HVSR processing |
 | AzimuthalTab | gui/tabs/azimuthal_tab.py | Tab 2: Azimuthal processing |

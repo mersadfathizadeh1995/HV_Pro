@@ -51,11 +51,13 @@ if HAS_PYQT5:
     from hvsr_pro.gui.main_window_modules.panels import (
         ProcessingSettings, QCSettings, CoxFDWRASettings
     )
+    from hvsr_pro.gui.main_window_modules.ui_coordinator import UIUpdateCoordinator
+    from hvsr_pro.gui.main_window_modules.backward_compat import BackwardCompatMixin
 
 
 
 
-class HVSRMainWindow(QMainWindow):
+class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
     """
     Main application window for HVSR analysis.
     
@@ -100,6 +102,10 @@ class HVSRMainWindow(QMainWindow):
         # Import ViewStateManager locally to avoid circular imports
         from hvsr_pro.gui.main_window_modules.view_state import ViewStateManager
         self.view_state = ViewStateManager(self)
+        
+        # UI Update Coordinator for shared processing/restore logic
+        self.ui_coordinator = UIUpdateCoordinator(self)
+        self.ui_coordinator.info_message.connect(self.add_info)
         
         # Connect controller signals
         self._connect_controller_signals()
@@ -243,15 +249,26 @@ class HVSRMainWindow(QMainWindow):
     # Now handled internally by CoxSettingsPanel
 
     def init_ui(self):
-        """Initialize user interface."""
-        # Central widget - just control panel (no embedded canvas by default)
+        """
+        Initialize user interface.
+        
+        Delegates to focused sub-methods for better maintainability.
+        """
+        # Central widget with main layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        # Main layout
         main_layout = QHBoxLayout(central_widget)
         
-        # Create tab widget for Data Load / Processing modes
+        # Create components in order
+        self._create_tabs()
+        main_layout.addWidget(self.mode_tabs)
+        
+        self._create_docks()
+        self._connect_dock_signals()
+        self._setup_canvas_and_status()
+    
+    def _create_tabs(self):
+        """Create mode tabs (Data Load, Processing, Azimuthal)."""
         self.mode_tabs = QTabWidget()
 
         # === Tab 1: Data Load ===
@@ -279,10 +296,9 @@ class HVSRMainWindow(QMainWindow):
 
         # Connect tab change signal
         self.mode_tabs.currentChanged.connect(self.on_tab_changed)
-        
-        main_layout.addWidget(self.mode_tabs)
-        
-        # Right side - docks
+    
+    def _create_docks(self):
+        """Create and configure all dock widgets."""
         # Create layers dock
         self.layers_dock = WindowLayersDock(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.layers_dock)
@@ -303,9 +319,6 @@ class HVSRMainWindow(QMainWindow):
         # Create azimuthal properties dock (for azimuthal tab)
         self.azimuthal_properties_dock = AzimuthalPropertiesDock(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.azimuthal_properties_dock)
-        
-        # Connect azimuthal properties dock signals
-        self.azimuthal_properties_dock.plot_options_changed.connect(self._on_azimuthal_options_changed)
 
         # Stack docks (layers, peak picker, properties, export as tabs)
         self.tabifyDockWidget(self.layers_dock, self.peak_picker_dock)
@@ -322,19 +335,26 @@ class HVSRMainWindow(QMainWindow):
         
         # Connect layer dock references
         self.layers_dock.set_references(self.plot_manager, None)  # Windows set later
+    
+    def _connect_dock_signals(self):
+        """Connect signals from all dock widgets."""
+        # Azimuthal properties dock signals
+        self.azimuthal_properties_dock.plot_options_changed.connect(self._on_azimuthal_options_changed)
         
-        # Connect layer dock signals
+        # Layer dock signals
         self.layers_dock.visibility_changed.connect(self.on_layer_visibility_changed)
         
-        # Connect peak picker dock signals
+        # Peak picker dock signals
         self.peak_picker_dock.peaks_changed.connect(self.on_peaks_changed)
         self.peak_picker_dock.detect_peaks_requested.connect(self.on_detect_peaks_requested)
         self.peak_picker_dock.manual_mode_requested.connect(self.on_manual_mode_requested)
         
-        # Connect properties dock signals
+        # Properties dock signals
         self.properties_dock.properties_changed.connect(self.on_properties_changed)
         self.properties_dock.visualization_mode_changed.connect(self.on_view_mode_changed)
-
+    
+    def _setup_canvas_and_status(self):
+        """Setup canvas, status bar, and menu bar."""
         # Interactive canvas (old - keep for compatibility)
         self.canvas = InteractiveHVSRCanvas(self)
         # Don't add to layout - will use plot_manager instead
@@ -354,41 +374,13 @@ class HVSRMainWindow(QMainWindow):
     def on_tab_changed(self, index):
         """
         Handle tab change - manage dock visibility.
+        
+        Delegates to ViewStateManager.handle_tab_changed().
 
         Args:
             index: Tab index (0 = Data Load, 1 = Processing, 2 = Azimuthal)
         """
-        if index == 0:  # Data Load tab
-            # Hide all docks
-            self.layers_dock.setVisible(False)
-            self.peak_picker_dock.setVisible(False)
-            self.properties_dock.setVisible(False)
-            self.export_dock.setVisible(False)
-            self.azimuthal_properties_dock.setVisible(False)
-            self.status_bar.showMessage("Data Load mode - Load and preview seismic data")
-
-        elif index == 1:  # Processing tab
-            # Show processing docks, hide azimuthal dock
-            self.layers_dock.setVisible(True)
-            self.peak_picker_dock.setVisible(True)
-            self.properties_dock.setVisible(True)
-            self.export_dock.setVisible(True)
-            self.azimuthal_properties_dock.setVisible(False)
-            self.status_bar.showMessage("Processing mode - Configure and run HVSR analysis")
-
-        elif index == 2:  # Azimuthal tab
-            # Hide processing docks, show azimuthal properties dock
-            self.layers_dock.setVisible(False)
-            self.peak_picker_dock.setVisible(False)
-            self.properties_dock.setVisible(False)
-            self.export_dock.setVisible(False)
-            self.azimuthal_properties_dock.setVisible(True)
-            self.azimuthal_properties_dock.raise_()  # Bring to front
-            self.status_bar.showMessage("Azimuthal mode - Analyze directional site response")
-            
-            # Pass windows to azimuthal tab if available
-            if self.windows and hasattr(self, 'azimuthal_tab'):
-                self.azimuthal_tab.set_windows(self.windows)
+        self.view_state.handle_tab_changed(index)
 
     def on_data_file_selected_for_preview(self, file_path: str):
         """
@@ -441,45 +433,18 @@ class HVSRMainWindow(QMainWindow):
         self.view_state.toggle_azimuthal_tab(checked)
     
     def on_view_mode_changed(self, mode: str):
-        """Handle view mode change."""
+        """
+        Handle view mode change.
+        
+        Delegates to ViewStateManager.handle_view_mode_changed().
+        
+        Args:
+            mode: View mode ('statistical', 'windows', 'both')
+        """
         self.add_info(f"View mode changed to: {mode}")
         
-        if not self.window_lines or not self.stat_lines:
-            return
-        
-        # Update line visibility based on mode
-        if mode == 'statistical':
-            # Hide individual windows, show statistics
-            for line in self.window_lines.values():
-                line.set_visible(False)
-            for line in self.stat_lines.values():
-                line.set_visible(True)
-        
-        elif mode == 'windows':
-            # Show individual windows + stats, respect visibility flags
-            if self.windows:
-                for idx, line in self.window_lines.items():
-                    window = self.windows.get_window(idx)
-                    if window:
-                        line.set_visible(window.is_active() and window.visible)
-            for line in self.stat_lines.values():
-                line.set_visible(True)
-        
-        elif mode == 'both':
-            # Show everything
-            if self.windows:
-                for idx, line in self.window_lines.items():
-                    window = self.windows.get_window(idx)
-                    if window:
-                        line.set_visible(window.is_active() and window.visible)
-            for line in self.stat_lines.values():
-                line.set_visible(True)
-        
-        # Redraw
-        if self.plot_manager:
-            self.plot_manager.fig.canvas.draw_idle()
-
-        self.add_info(f"Switched to {mode} view")
+        if self.view_state.handle_view_mode_changed(mode):
+            self.add_info(f"Switched to {mode} view")
 
     # === REMOVED: _on_override_sampling_toggled ===
     # Now handled internally by ProcessingSettingsPanel
@@ -726,86 +691,16 @@ class HVSRMainWindow(QMainWindow):
         """
         import warnings
         warnings.warn(
-            "process_hvsr() is deprecated. Use ProcessingTab.process_requested signal instead.",
+            "process_hvsr() is deprecated. Use ProcessingTab's Process HVSR button instead.",
             DeprecationWarning,
             stacklevel=2
         )
         
-        if not self.current_file:
-            QMessageBox.warning(self, "No File", "Please load a data file first.")
-            return
-        
-        # Disable controls
-        self.process_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        
-        # Get settings
-        window_length = self.window_length_spin.value()
-        overlap = self.overlap_spin.value() / 100.0
-        smoothing = self.smoothing_spin.value()
-        freq_min = self.freq_min_spin.value()
-        freq_max = self.freq_max_spin.value()
-        n_frequencies = self.n_freq_spin.value()
-        # Get QC mode (preset or custom)
-        if self.preset_radio.isChecked():
-            qc_mode = self.qc_combo.currentData()  # Preset mode
-            custom_qc_from_ui = None
+        # Delegate to the processing tab's process method
+        if hasattr(self, 'processing_tab'):
+            self.processing_tab._on_process_clicked()
         else:
-            qc_mode = 'custom'  # Custom mode
-            custom_qc_from_ui = self._get_custom_qc_settings_from_ui()
-        
-        apply_cox_fdwra = self.cox_fdwra_check.isChecked()  # Get Cox FDWRA setting
-        use_parallel = self.parallel_check.isChecked()  # Get parallel processing setting
-        n_cores = self.cores_spin.value() if use_parallel else 1  # Get number of cores to use
-
-        # Get sampling rate override
-        override_sampling = self.override_sampling_check.isChecked()
-        manual_sampling_rate = self.sampling_rate_spin.value() if override_sampling else None
-        
-        # Validate frequency range
-        if freq_min >= freq_max:
-            QMessageBox.warning(self, "Invalid Range", "Minimum frequency must be less than maximum frequency.")
-            self.process_btn.setEnabled(True)
-            self.progress_bar.setVisible(False)
-            return
-        
-        # Log settings
-        self.add_info(f"Frequency range: {freq_min:.2f} - {freq_max:.1f} Hz ({n_frequencies} points)")
-        if manual_sampling_rate:
-            self.add_info(f"Sampling rate: {manual_sampling_rate:.4f} Hz (manual override)")
-        if self.preset_radio.isChecked():
-            self.add_info(f"QC Mode: {self.qc_combo.currentText()}")
-        else:
-            self.add_info(f"QC Mode: Custom (manual settings)")
-        if apply_cox_fdwra or qc_mode in ('sesame', 'publication'):
-            self.add_info(f"Cox FDWRA: Enabled (peak frequency consistency)")
-        if use_parallel:
-            self.add_info(f"Parallel processing: Enabled (using {n_cores} of {self._get_cpu_count()} cores)")
-
-        # Determine which custom settings to use
-        final_custom_settings = custom_qc_from_ui if custom_qc_from_ui else self.custom_qc_settings
-        
-        # Get Cox FDWRA specific settings
-        cox_fdwra_settings = {
-            'n': self.cox_n_spin.value(),
-            'max_iterations': self.cox_iterations_spin.value(),
-            'min_iterations': self.cox_min_iterations_spin.value(),
-            'distribution': self.cox_dist_combo.currentText()
-        }
-        
-        # Start processing thread with load mode and time range
-        self.thread = ProcessingThread(
-            self.current_file, window_length, overlap, smoothing,
-            self.load_mode, self.current_time_range,
-            freq_min, freq_max, n_frequencies, qc_mode, apply_cox_fdwra, use_parallel,
-            n_cores, manual_sampling_rate, final_custom_settings,
-            cox_fdwra_settings
-        )
-        self.thread.progress.connect(self.on_progress)
-        self.thread.finished.connect(self.on_processing_finished)
-        self.thread.error.connect(self.on_processing_error)
-        self.thread.start()
+            QMessageBox.warning(self, "Error", "Processing tab not available.")
     
     def on_progress(self, value: int, message: str):
         """Update progress bar."""
@@ -819,7 +714,11 @@ class HVSRMainWindow(QMainWindow):
         self.add_info(message)
     
     def on_processing_finished(self, result, windows, data):
-        """Handle processing completion."""
+        """
+        Handle processing completion.
+        
+        Validates results and delegates UI updates to UIUpdateCoordinator.
+        """
         # CRITICAL: Validate results via ProcessingController
         is_valid, error_msg = self.processing_ctrl.validate_results(result, windows)
 
@@ -833,78 +732,8 @@ class HVSRMainWindow(QMainWindow):
                 self.processing_tab.set_processing_enabled(True)
             return  # Don't proceed with plotting
 
-        self.hvsr_result = result
-        self.windows = windows
-        self.data = data
-        
-        # Update WindowController with windows reference
-        self.window_ctrl.set_windows(windows)
-        
-        # Update UI via processing tab
-        if hasattr(self, 'processing_tab'):
-            self.processing_tab.set_progress(0, visible=False)
-            self.processing_tab.set_processing_enabled(True)
-            self.processing_tab.set_window_buttons_enabled(True)
-        
-        # Enable action buttons if they exist (may be in Export dock instead)
-        if hasattr(self, 'export_plot_btn'):
-            self.export_plot_btn.setEnabled(True)
-        if hasattr(self, 'report_btn'):
-            self.report_btn.setEnabled(True)
-        if hasattr(self, 'export_btn'):
-            self.export_btn.setEnabled(True)
-        if hasattr(self, 'save_btn'):
-            self.save_btn.setEnabled(True)
-        
-        # Update window info
-        self.update_window_info()
-        
-        # Update canvas (old method - keep for compatibility)
-        self.canvas.set_data(result, windows, data)
-        
-        # Update layers dock with windows reference BEFORE plotting
-        self.layers_dock.set_references(self.plot_manager, windows)
-
-        # Update peak picker dock with HVSR data
-        self.peak_picker_dock.set_hvsr_data(result, result.frequencies, result.mean_hvsr)
-
-        # Update export dock with results and seismic data
-        self.export_dock.set_references(result, windows, self.plot_manager, data)
-
-        # Update collapsible data panel in Processing tab with data from Data Load tab
-        if hasattr(self, 'processing_data_panel') and hasattr(self, 'data_load_tab'):
-            self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
-
-        # Update azimuthal tab with windows and data for potential azimuthal processing
-        if hasattr(self, 'azimuthal_tab'):
-            self.azimuthal_tab.set_windows(windows, data)
-            # Also update its data panel
-            if hasattr(self.azimuthal_tab, 'data_panel') and hasattr(self, 'data_load_tab'):
-                self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
-
-        # === Plot in separate window via controller ===
-        # Set data in plotting controller
-        self.plotting_ctrl.set_data(result, windows, data)
-        self.plotting_ctrl.set_plot_manager(self.plot_manager)
-        
-        # Plot using controller
-        lines = self.plotting_ctrl.plot_hvsr_results(result, windows, data)
-        self.window_lines = lines.get('window_lines', {})
-        self.stat_lines = lines.get('stat_lines', {})
-        
-        # Rebuild layer dock with lines
-        self.layers_dock.rebuild(self.window_lines, self.stat_lines)
-        
-        # Show plot window
-        self.plot_manager.show_separate()
-        
-        # Add info
-        self.add_info(f"Processing complete!")
-        self.add_info(f"   Windows: {windows.n_active}/{windows.n_windows}")
-        if result.primary_peak:
-            self.add_info(f"   Primary peak: f0 = {result.primary_peak.frequency:.2f} Hz")
-        
-        self.status_bar.showMessage("Ready - Use layer dock to toggle visibility")
+        # Delegate all UI updates to the coordinator
+        self.ui_coordinator.update_after_processing(result, windows, data)
     
     def plot_results_separate_window(self, result, windows, data):
         """
@@ -1205,117 +1034,16 @@ class HVSRMainWindow(QMainWindow):
     def restore_session_gui(self, hvsr_result, windows, seismic_data):
         """
         Restore GUI state after loading a session.
-        Mirrors on_processing_finished() behavior to fully restore the UI.
+        
+        Delegates to UIUpdateCoordinator for the actual UI updates.
         
         Args:
             hvsr_result: HVSRResult object (can be None)
             windows: WindowCollection object (can be None)
             seismic_data: SeismicData object (can be None)
         """
-        # 1. Store data in instance variables FIRST (before any dock updates)
-        self.hvsr_result = hvsr_result
-        self.windows = windows
-        self.data = seismic_data
-        
-        # Update WindowController with windows reference
-        if windows is not None:
-            self.window_ctrl.set_windows(windows)
-        
-        # Log data availability for debugging
-        self.add_info(f"Session data: HVSR={'Yes' if hvsr_result else 'No'}, "
-                     f"Windows={'Yes' if windows else 'No'}, "
-                     f"SeismicData={'Yes' if seismic_data else 'No'}")
-        
-        # 2. Update interactive canvas
-        if hasattr(self, 'canvas') and hvsr_result is not None:
-            try:
-                self.canvas.set_data(hvsr_result, windows, seismic_data)
-            except Exception as e:
-                self.add_info(f"Warning: Could not update canvas: {str(e)}")
-        
-        # 3. Update layers dock (CRITICAL for window layers to work)
-        if hasattr(self, 'layers_dock') and windows is not None:
-            try:
-                self.layers_dock.set_references(self.plot_manager, windows)
-            except Exception as e:
-                self.add_info(f"Warning: Could not update layers dock: {str(e)}")
-        
-        # 4. Update peak picker dock
-        if hasattr(self, 'peak_picker_dock') and hvsr_result is not None:
-            try:
-                self.peak_picker_dock.set_hvsr_data(
-                    hvsr_result,
-                    hvsr_result.frequencies,
-                    hvsr_result.mean_hvsr
-                )
-            except Exception as e:
-                self.add_info(f"Warning: Could not update peak picker: {str(e)}")
-        
-        # 5. Update export dock with all references including seismic data
-        if hasattr(self, 'export_dock'):
-            try:
-                self.export_dock.set_references(
-                    hvsr_result, windows, self.plot_manager, seismic_data
-                )
-                # Log whether waveform export will be available
-                if seismic_data is not None:
-                    self.add_info("Export dock: All figure types available (including waveform plots)")
-                else:
-                    self.add_info("Export dock: Waveform plots unavailable (no seismic data)")
-            except Exception as e:
-                self.add_info(f"Warning: Could not update export dock: {str(e)}")
-        
-        # 6. Update collapsible data panel in Processing tab
-        if hasattr(self, 'processing_data_panel') and hasattr(self, 'data_load_tab'):
-            try:
-                self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
-            except Exception as e:
-                self.add_info(f"Warning: Could not update data panel: {str(e)}")
-        
-        # 7. Update azimuthal tab with windows and data
-        if hasattr(self, 'azimuthal_tab') and windows is not None:
-            try:
-                self.azimuthal_tab.set_windows(windows, seismic_data)
-                if hasattr(self.azimuthal_tab, 'data_panel') and hasattr(self, 'data_load_tab'):
-                    self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
-            except Exception as e:
-                self.add_info(f"Warning: Could not update azimuthal tab: {str(e)}")
-        
-        # 8. Enable action buttons
-        self._enable_buttons_after_restore()
-        
-        # 9. Update window info display
-        self.update_window_info()
-        
-        # 10. Plot in separate window (the main HVSR plot) via PlottingController
-        if hvsr_result is not None and windows is not None:
-            try:
-                # Use the thin wrapper which delegates to PlottingController
-                self.plot_results_separate_window(hvsr_result, windows, seismic_data)
-            except Exception as e:
-                self.add_info(f"Warning: Could not open plot window: {str(e)}")
-        
-        # 11. Switch to Processing tab
-        self.mode_tabs.setCurrentIndex(1)
-        
-        # 12. Update status
-        self.status_bar.showMessage("Session restored - Use layer dock to toggle visibility")
-    
-    def _enable_buttons_after_restore(self):
-        """Enable action buttons after session restore."""
-        # Enable export/action buttons
-        button_names = ['export_plot_btn', 'report_btn', 'export_btn', 'save_btn']
-        for btn_name in button_names:
-            if hasattr(self, btn_name):
-                getattr(self, btn_name).setEnabled(True)
-        
-        # Enable window manipulation buttons
-        if hasattr(self, 'reject_all_btn'):
-            self.reject_all_btn.setEnabled(True)
-        if hasattr(self, 'accept_all_btn'):
-            self.accept_all_btn.setEnabled(True)
-        if hasattr(self, 'recompute_btn'):
-            self.recompute_btn.setEnabled(True)
+        # Delegate to the UI coordinator
+        self.ui_coordinator.update_after_session_restore(hvsr_result, windows, seismic_data)
     
     def on_peaks_changed(self, peaks: list):
         """Handle peak list changes from dock. Delegates to PeakController."""
@@ -1465,148 +1193,8 @@ class HVSRMainWindow(QMainWindow):
             scrollbar.setValue(scrollbar.maximum())
     
     # === Backward compatibility properties ===
-    # 
-    # These proxy to processing_tab widgets for code that references them directly.
-    # 
-    # .. deprecated::
-    #     These properties are maintained for backward compatibility only.
-    #     New code should access widgets directly via self.processing_tab:
-    #         main_window.processing_tab.window_length_spin
-    #     Or use the ProcessingTab's settings methods:
-    #         main_window.processing_tab.get_settings()
-    #
-    # These properties will be removed in a future version.
-    # 
-    
-    @property
-    def window_length_spin(self):
-        """Backward compatibility: access window length spin via processing_tab."""
-        return self.processing_tab.window_length_spin
-    
-    @property
-    def overlap_spin(self):
-        """Backward compatibility: access overlap spin via processing_tab."""
-        return self.processing_tab.overlap_spin
-    
-    @property
-    def smoothing_spin(self):
-        """Backward compatibility: access smoothing spin via processing_tab."""
-        return self.processing_tab.smoothing_spin
-    
-    @property
-    def freq_min_spin(self):
-        """Backward compatibility: access freq min spin via processing_tab."""
-        return self.processing_tab.freq_min_spin
-    
-    @property
-    def freq_max_spin(self):
-        """Backward compatibility: access freq max spin via processing_tab."""
-        return self.processing_tab.freq_max_spin
-    
-    @property
-    def n_freq_spin(self):
-        """Backward compatibility: access n freq spin via processing_tab."""
-        return self.processing_tab.n_freq_spin
-    
-    @property
-    def override_sampling_check(self):
-        """Backward compatibility: access override sampling check via processing_tab."""
-        return self.processing_tab.override_sampling_check
-    
-    @property
-    def sampling_rate_spin(self):
-        """Backward compatibility: access sampling rate spin via processing_tab."""
-        return self.processing_tab.sampling_rate_spin
-    
-    @property
-    def qc_enable_check(self):
-        """Backward compatibility: access QC enable check via processing_tab."""
-        return self.processing_tab.qc_enable_check
-    
-    @property
-    def preset_radio(self):
-        """Backward compatibility: access preset radio via processing_tab."""
-        return self.processing_tab.preset_radio
-    
-    @property
-    def custom_radio(self):
-        """Backward compatibility: access custom radio via processing_tab."""
-        return self.processing_tab.custom_radio
-    
-    @property
-    def qc_combo(self):
-        """Backward compatibility: access QC preset combo via processing_tab."""
-        return self.processing_tab.qc_combo
-    
-    @property
-    def cox_fdwra_check(self):
-        """Backward compatibility: access Cox enable check via processing_tab."""
-        return self.processing_tab.cox_fdwra_check
-    
-    @property
-    def cox_n_spin(self):
-        """Backward compatibility: access Cox n spin via processing_tab."""
-        return self.processing_tab.cox_n_spin
-    
-    @property
-    def cox_iterations_spin(self):
-        """Backward compatibility: access Cox max iterations spin via processing_tab."""
-        return self.processing_tab.cox_iterations_spin
-    
-    @property
-    def cox_min_iterations_spin(self):
-        """Backward compatibility: access Cox min iterations spin via processing_tab."""
-        return self.processing_tab.cox_min_iterations_spin
-    
-    @property
-    def cox_dist_combo(self):
-        """Backward compatibility: access Cox distribution combo via processing_tab."""
-        return self.processing_tab.cox_dist_combo
-    
-    @property
-    def parallel_check(self):
-        """Backward compatibility: access parallel check via processing_tab."""
-        return self.processing_tab.parallel_check
-    
-    @property
-    def cores_spin(self):
-        """Backward compatibility: access cores spin via processing_tab."""
-        return self.processing_tab.cores_spin
-    
-    @property
-    def process_btn(self):
-        """Backward compatibility: access process button via processing_tab."""
-        return self.processing_tab.process_btn
-    
-    @property
-    def progress_bar(self):
-        """Backward compatibility: access progress bar via processing_tab."""
-        return self.processing_tab.progress_bar
-    
-    @property
-    def info_text(self):
-        """Backward compatibility: access info text via processing_tab."""
-        return self.processing_tab.info_text
-    
-    @property
-    def window_info_label(self):
-        """Backward compatibility: access window info label via processing_tab."""
-        return self.processing_tab.window_info_label
-    
-    @property
-    def reject_all_btn(self):
-        """Backward compatibility: access reject all button via processing_tab."""
-        return self.processing_tab.reject_all_btn
-    
-    @property
-    def accept_all_btn(self):
-        """Backward compatibility: access accept all button via processing_tab."""
-        return self.processing_tab.accept_all_btn
-    
-    @property
-    def recompute_btn(self):
-        """Backward compatibility: access recompute button via processing_tab."""
-        return self.processing_tab.recompute_btn
+    # Moved to BackwardCompatMixin (backward_compat.py)
+    # HVSRMainWindow inherits from BackwardCompatMixin to provide these properties
 
 
 if not HAS_PYQT5:

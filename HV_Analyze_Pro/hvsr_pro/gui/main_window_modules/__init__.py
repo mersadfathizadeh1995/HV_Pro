@@ -20,6 +20,8 @@ from . import control_panel
 from . import controllers
 from . import panels
 from . import view_state
+from . import ui_coordinator
+from . import backward_compat
 
 # Re-export helpers for convenience
 from .menu_bar import MenuBarHelper, show_about_dialog, show_shortcuts_dialog
@@ -42,6 +44,8 @@ from .panels import (
     CoxSettingsPanel,
 )
 from .view_state import ViewStateManager
+from .ui_coordinator import UIUpdateCoordinator
+from .backward_compat import BackwardCompatMixin
 
 __all__ = [
     # Modules
@@ -50,6 +54,8 @@ __all__ = [
     'controllers',
     'panels',
     'view_state',
+    'ui_coordinator',
+    'backward_compat',
     # Menu bar
     'MenuBarHelper',
     'show_about_dialog',
@@ -65,6 +71,10 @@ __all__ = [
     'CoxSettingsPanel',
     # View state
     'ViewStateManager',
+    # UI update coordination
+    'UIUpdateCoordinator',
+    # Backward compatibility
+    'BackwardCompatMixin',
     # Controllers
     'DataController',
     'SessionController',
