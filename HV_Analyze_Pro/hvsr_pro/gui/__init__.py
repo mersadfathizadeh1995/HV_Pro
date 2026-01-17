@@ -76,8 +76,9 @@ try:
     # === Panels ===
     from hvsr_pro.gui.panels import ProcessingSettingsPanel, QCSettingsPanel
     
-    # === Mixins ===
-    from hvsr_pro.gui.mixins import ProcessingMixin, PlottingMixin, SessionMixin
+    # === Mixins === (deprecated - functionality moved to controllers)
+    # ProcessingMixin, PlottingMixin, SessionMixin have been removed
+    # See hvsr_pro.gui.main_window_modules.controllers instead
     
     # === Components ===
     from hvsr_pro.gui.components import (
@@ -152,11 +153,6 @@ __all__ = [
     # Panels
     'ProcessingSettingsPanel',
     'QCSettingsPanel',
-    
-    # Mixins
-    'ProcessingMixin',
-    'PlottingMixin',
-    'SessionMixin',
     
     # Components
     'CollapsibleGroupBox',

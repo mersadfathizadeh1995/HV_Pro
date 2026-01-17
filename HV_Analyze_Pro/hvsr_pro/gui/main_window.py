@@ -997,7 +997,21 @@ class HVSRMainWindow(QMainWindow):
         }
     
     def process_hvsr(self):
-        """Start HVSR processing in background thread."""
+        """
+        Start HVSR processing in background thread.
+        
+        .. deprecated::
+            This method is deprecated. Use ProcessingTab.process_requested signal
+            and the _process_with_settings() method instead.
+            This method is kept for backward compatibility with external code.
+        """
+        import warnings
+        warnings.warn(
+            "process_hvsr() is deprecated. Use ProcessingTab.process_requested signal instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
         if not self.current_file:
             QMessageBox.warning(self, "No File", "Please load a data file first.")
             return
@@ -1087,12 +1101,12 @@ class HVSRMainWindow(QMainWindow):
     
     def on_processing_finished(self, result, windows, data):
         """Handle processing completion."""
-        # CRITICAL: Validate results before attempting to use them
-        is_valid, error_msg = self._validate_processing_results(result, windows)
+        # CRITICAL: Validate results via ProcessingController
+        is_valid, error_msg = self.processing_ctrl.validate_results(result, windows)
 
         if not is_valid:
-            # Show QC failure dialog with diagnostic information
-            self._show_qc_failure_dialog(windows, error_msg)
+            # Show QC failure dialog via controller
+            self.processing_ctrl._show_qc_failure_dialog(windows, error_msg)
 
             # Re-enable controls via processing tab
             if hasattr(self, 'processing_tab'):
@@ -1171,116 +1185,27 @@ class HVSRMainWindow(QMainWindow):
         self.status_bar.showMessage("Ready - Use layer dock to toggle visibility")
     
     def plot_results_separate_window(self, result, windows, data):
-        """Plot results in separate plot window."""
+        """
+        Plot results in separate plot window.
+        
+        Delegates to PlottingController for actual implementation.
+        
+        Args:
+            result: HVSRResult object
+            windows: WindowCollection object
+            data: SeismicData object
+        """
         # Check if this is a QC failure result
         if hasattr(result, 'metadata') and result.metadata.get('qc_failure', False):
-            # Don't try to plot QC failure results in separate window
-            # The interactive canvas will show the error message
             return
         
-        # Recreate axes with current visibility settings
-        self.plot_manager._create_axes()
+        # Delegate to PlottingController
+        self.plotting_ctrl.set_data(result, windows, data)
+        self.plotting_ctrl.set_plot_manager(self.plot_manager)
         
-        # Get axes from plot manager (some may be None if hidden)
-        ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
-        
-        # Plot timeline (if visible)
-        if ax_timeline is not None:
-            ax_timeline.clear()
-            ax_timeline.set_title('Window Timeline (Click to Toggle State)')
-            ax_timeline.set_xlabel('Time (s)')
-            ax_timeline.set_ylabel('Window')
-            
-            # Simple timeline visualization
-            for i, window in enumerate(windows.windows):
-                color = 'green' if window.is_active() else 'gray'
-                ax_timeline.barh(i, window.duration, left=window.start_time, 
-                               height=0.8, color=color, alpha=0.7)
-            
-            ax_timeline.set_ylim(-1, len(windows.windows))
-            ax_timeline.invert_yaxis()
-        
-        # Plot HVSR curves - Individual Windows Mode
-        self.window_lines = {}
-        color_palette = self._get_color_palette()
-        
-        print(f"\n=== DEBUG: Plotting Window Lines ===")
-        print(f"Total windows: {len(windows.windows)}")
-        print(f"Window spectra available: {len(result.window_spectra)}")
-        
-        # Extract individual window HVSR from result
-        # IMPORTANT: Plot ALL windows (active AND rejected) so layers panel can manage them
-        for i, window in enumerate(windows.windows):
-            if i < len(result.window_spectra):
-                # Use gray color for rejected windows, normal color for active
-                if window.is_active():
-                    color = color_palette[i % len(color_palette)]
-                    alpha = 0.5
-                else:
-                    color = 'gray'
-                    alpha = 0.3  # More transparent for rejected
-                
-                # Get this window's HVSR curve
-                window_spectrum = result.window_spectra[i]
-                window_hvsr = window_spectrum.hvsr
-                
-                # Plot individual window curve
-                # visibility controlled by window.visible (layer panel manages this)
-                line, = ax_hvsr.plot(result.frequencies, window_hvsr,
-                                    color=color, linewidth=0.8, alpha=alpha,
-                                    visible=window.is_active() and window.visible,
-                                    label=f'W{i+1}' if i < 5 else '')
-                self.window_lines[i] = line
-                
-                if i < 3:  # Log first 3 windows
-                    print(f"  Window {i}: active={window.is_active()}, visible={window.visible}, plotted={line is not None}")
-        
-        print(f"Total window_lines created: {len(self.window_lines)}")
-        print(f"=================================\n")
-        
-        # Plot mean and std
-        mean_line, = ax_hvsr.plot(result.frequencies, result.mean_hvsr,
-                                 'k-', linewidth=2.5, label='Mean', zorder=100)
-        
-        std_plus, = ax_hvsr.plot(result.frequencies, 
-                                result.mean_hvsr + result.std_hvsr,
-                                'k--', linewidth=1.5, label='+1σ', zorder=99)
-        
-        std_minus, = ax_hvsr.plot(result.frequencies,
-                                 result.mean_hvsr - result.std_hvsr,
-                                 'k--', linewidth=1.5, label='-1σ', zorder=99)
-        
-        self.stat_lines = {
-            'mean': mean_line,
-            'std_plus': std_plus,
-            'std_minus': std_minus
-        }
-        
-        ax_hvsr.set_xscale('log')
-        ax_hvsr.set_xlabel('Frequency (Hz)')
-        ax_hvsr.set_ylabel('H/V Ratio')
-        ax_hvsr.set_title('HVSR Curve - Individual Windows Mode')
-        ax_hvsr.grid(True, which='both', alpha=0.3)
-        ax_hvsr.legend(loc='upper right', fontsize=8)
-        
-        # Plot quality statistics (if visible)
-        if ax_stats is not None:
-            ax_stats.clear()
-            ax_stats.set_title('Window Quality Statistics')
-            ax_stats.set_xlabel('Window Index')
-            ax_stats.set_ylabel('Quality Score')
-            
-            qualities = [w.quality_metrics.get('overall', 0.0) for w in windows.windows]
-            colors = ['green' if w.is_active() else 'gray' for w in windows.windows]
-            ax_stats.scatter(range(len(windows.windows)), qualities, 
-                            c=colors, alpha=0.7, s=50)
-            ax_stats.axhline(0.5, color='red', linestyle='--', alpha=0.5, label='Threshold')
-            ax_stats.legend()
-            ax_stats.grid(True, alpha=0.3)
-        
-        # Adjust layout
-        self.plot_manager.fig.tight_layout()
-        self.plot_manager.canvas.draw()
+        lines = self.plotting_ctrl.plot_hvsr_results(result, windows, data)
+        self.window_lines = lines.get('window_lines', {})
+        self.stat_lines = lines.get('stat_lines', {})
         
         # Rebuild layer dock with lines
         self.layers_dock.rebuild(self.window_lines, self.stat_lines)
@@ -1324,69 +1249,32 @@ class HVSRMainWindow(QMainWindow):
     def _validate_processing_results(self, result, windows):
         """
         Validate HVSR processing results before plotting.
+        
+        .. deprecated::
+            Use self.processing_ctrl.validate_results() instead.
 
         Returns:
             tuple: (is_valid: bool, error_message: str)
         """
-        # Check 1: Any windows passed QC?
-        if windows.n_active == 0:
-            return False, f"No windows passed QC (0/{windows.n_windows} rejected)"
-
-        # Check 2: Valid frequency data?
-        if result is None or len(result.frequencies) == 0:
-            return False, "No frequency data generated"
-
-        # Check 3: Valid HVSR values?
-        if result.mean_hvsr is None:
-            return False, "HVSR computation failed - no mean values"
-
-        if np.all(np.isnan(result.mean_hvsr)):
-            return False, "All HVSR values are NaN"
-
-        # All checks passed
-        return True, "OK"
+        # Delegate to ProcessingController
+        return self.processing_ctrl.validate_results(result, windows)
 
     def _show_qc_failure_dialog(self, windows, error_msg):
         """
         Show detailed QC failure dialog with diagnostic information.
+        
+        .. deprecated::
+            Use self.processing_ctrl._show_qc_failure_dialog() instead.
 
         Args:
             windows: WindowCollection object
             error_msg: Primary error message
         """
-        # Generate QC diagnostic report
-        report = self._generate_qc_diagnostic_report(windows)
-
-        # Create detailed message
-        message = f"<h3>QC Failure: Cannot Process Data</h3>"
-        message += f"<p><b>Error:</b> {error_msg}</p>"
-        message += f"<hr>"
-        message += f"<h4>QC Diagnostic Report:</h4>"
-        message += f"<pre>{report}</pre>"
-        message += f"<hr>"
-        message += f"<h4>Suggested Solutions:</h4>"
-        message += f"<ul>"
-        message += f"<li>Click <b>⚙️ Advanced QC Settings</b> and:"
-        message += f"<ul>"
-        message += f"<li>UNCHECK 'Enable Quality Control' to bypass QC entirely</li>"
-        message += f"<li>OR adjust individual algorithm thresholds</li>"
-        message += f"</ul>"
-        message += f"</li>"
-        message += f"<li>Check your input data quality</li>"
-        message += f"<li>Try different QC modes (Conservative, Balanced, Aggressive)</li>"
-        message += f"<li>Verify sampling rate is correct</li>"
-        message += f"</ul>"
-
-        # Show message box
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setWindowTitle("QC Failure")
-        msg_box.setTextFormat(Qt.RichText)
-        msg_box.setText(message)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        msg_box.exec_()
-
-        # Log to info panel
+        # Delegate to ProcessingController
+        self.processing_ctrl._show_qc_failure_dialog(windows, error_msg)
+        
+        # Also log to info panel (controller doesn't have access to this)
+        report = self.processing_ctrl._generate_qc_report(windows)
         self.add_info("=" * 60)
         self.add_info("QC FAILURE - No windows passed quality control")
         self.add_info("=" * 60)
@@ -1396,6 +1284,9 @@ class HVSRMainWindow(QMainWindow):
     def _generate_qc_diagnostic_report(self, windows):
         """
         Generate diagnostic report showing why windows failed QC.
+        
+        .. deprecated::
+            Use self.processing_ctrl._generate_qc_report() instead.
 
         Args:
             windows: WindowCollection object
@@ -1403,46 +1294,8 @@ class HVSRMainWindow(QMainWindow):
         Returns:
             str: Formatted diagnostic report
         """
-        total = windows.n_windows
-        active = windows.n_active
-        rejected = windows.n_rejected
-
-        report = f"Total Windows: {total}\n"
-        report += f"Passed: {active} ({active/total*100:.1f}%)\n"
-        report += f"Failed: {rejected} ({rejected/total*100:.1f}%)\n"
-        report += f"\n"
-
-        # Analyze rejection reasons
-        rejection_reasons = {}
-        for window in windows.windows:
-            if not window.is_active():
-                reason = window.rejection_reason if window.rejection_reason else "Unknown"
-                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-
-        if rejection_reasons:
-            report += f"Failure Breakdown:\n"
-            report += f"{'-' * 40}\n"
-            for reason, count in sorted(rejection_reasons.items(), key=lambda x: -x[1]):
-                pct = count / total * 100
-                report += f"{reason}: {count} ({pct:.1f}%)\n"
-        else:
-            report += f"No rejection reason data available\n"
-
-        report += f"\n"
-        report += f"Recommendations:\n"
-        if rejected == total:
-            report += f"  • ALL windows failed - QC may be too strict\n"
-            report += f"  • Consider disabling QC entirely for diagnosis\n"
-            report += f"  • Check if data has unusual characteristics\n"
-        elif rejected > total * 0.9:
-            report += f"  • >90% rejection rate - QC very strict\n"
-            report += f"  • Try relaxing QC thresholds\n"
-            report += f"  • Review individual algorithm settings\n"
-
-        report += f"  • Use Advanced QC Settings to customize\n"
-        report += f"  • Verify data quality and sensor response\n"
-
-        return report
+        # Delegate to ProcessingController
+        return self.processing_ctrl._generate_qc_report(windows)
 
     def on_processing_error(self, error_msg: str):
         """Handle processing error."""
@@ -1591,7 +1444,14 @@ class HVSRMainWindow(QMainWindow):
                 self.add_info(f"ERROR - Export: {str(e)}")
     
     def save_session(self):
-        """Save current session state including all settings and computed data."""
+        """
+        Save current session state including all settings and computed data.
+        
+        Note: This method contains inline session logic. Future refactoring
+        should delegate to SessionController for better separation of concerns.
+        The SessionController.save_session() provides a simplified interface
+        but this method handles the full state extraction for now.
+        """
         from hvsr_pro.config.session import (
             SessionManager, SessionState, 
             ProcessingSettings as SessionProcessingSettings,
@@ -1744,7 +1604,14 @@ class HVSRMainWindow(QMainWindow):
             )
     
     def load_session(self):
-        """Load saved session state including computed data."""
+        """
+        Load saved session state including computed data.
+        
+        Note: This method contains inline session logic. Future refactoring
+        should delegate to SessionController for better separation of concerns.
+        The SessionController.load_session() provides a simplified interface
+        but this method handles the full state restoration for now.
+        """
         from hvsr_pro.config.session import SessionManager
         
         # Get work directory for default location
@@ -1972,9 +1839,10 @@ class HVSRMainWindow(QMainWindow):
         # 9. Update window info display
         self.update_window_info()
         
-        # 10. Plot in separate window (the main HVSR plot)
+        # 10. Plot in separate window (the main HVSR plot) via PlottingController
         if hvsr_result is not None and windows is not None:
             try:
+                # Use the thin wrapper which delegates to PlottingController
                 self.plot_results_separate_window(hvsr_result, windows, seismic_data)
             except Exception as e:
                 self.add_info(f"Warning: Could not open plot window: {str(e)}")
@@ -2128,168 +1996,26 @@ class HVSRMainWindow(QMainWindow):
         """
         Replot with given properties.
         
+        Delegates to PlottingController for actual implementation.
+        This method is called by plot_window_manager and properties_dock.
+        
         Args:
             properties: PlotProperties object
         """
-        import numpy as np
+        if not self.hvsr_result or not self.windows:
+            return
         
-        # Recreate axes
-        self.plot_manager._create_axes()
+        # Delegate to PlottingController
+        self.plotting_ctrl.set_data(self.hvsr_result, self.windows, self.data)
+        self.plotting_ctrl.set_plot_manager(self.plot_manager)
+        self.plotting_ctrl.apply_properties(properties)
         
-        # Get axes
-        ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
-        
-        result = self.hvsr_result
-        windows = self.windows
-        
-        # Plot timeline (if visible)
-        if ax_timeline is not None:
-            ax_timeline.clear()
-            ax_timeline.set_title('Window Timeline')
-            ax_timeline.set_xlabel('Time (s)')
-            ax_timeline.set_ylabel('Window')
-            
-            for i, window in enumerate(windows.windows):
-                color = 'green' if window.is_active() else 'gray'
-                ax_timeline.barh(i, window.duration, left=window.start_time, 
-                               height=0.8, color=color, alpha=0.7)
-            
-            ax_timeline.set_ylim(-1, len(windows.windows))
-            ax_timeline.invert_yaxis()
-        
-        # === PLOT HVSR WITH PROPERTIES ===
-        self.window_lines = {}
-        color_palette = self._get_color_palette()
-        
-        # Set background color
-        bg_color = self.plot_manager.get_background_color(properties)
-        ax_hvsr.set_facecolor(bg_color)
-        
-        # Plot individual windows (if enabled)
-        if properties.show_windows:
-            for i, window in enumerate(windows.windows):
-                if i < len(result.window_spectra):
-                    if window.is_active():
-                        color = color_palette[i % len(color_palette)]
-                        alpha = properties.window_alpha
-                    else:
-                        color = 'gray'
-                        alpha = properties.window_alpha * 0.6
-                    
-                    window_spectrum = result.window_spectra[i]
-                    window_hvsr = window_spectrum.hvsr
-                    
-                    line, = ax_hvsr.plot(result.frequencies, window_hvsr,
-                                        color=color, linewidth=0.8, alpha=alpha,
-                                        visible=window.is_active() and window.visible)
-                    self.window_lines[i] = line
-        
-        # Plot percentile shading (if enabled)
-        if properties.show_percentile_shading and result.percentile_16 is not None:
-            perc_color = getattr(properties, 'percentile_color', '#9C27B0')
-            ax_hvsr.fill_between(result.frequencies,
-                                result.percentile_16,
-                                result.percentile_84,
-                                color=perc_color, alpha=0.2, zorder=50,
-                                label='16th-84th percentile')
-        
-        # Plot mean curve (if enabled)
-        if properties.show_mean:
-            mean_color = getattr(properties, 'mean_color', '#1976D2')
-            mean_line, = ax_hvsr.plot(result.frequencies, result.mean_hvsr,
-                                     color=mean_color, linewidth=properties.mean_linewidth,
-                                     label='Mean H/V', zorder=100)
-            self.stat_lines = {'mean': mean_line}
-        else:
-            self.stat_lines = {}
-        
-        # Plot std bands (if enabled)
-        if properties.show_std_bands and result.std_hvsr is not None:
-            std_color = getattr(properties, 'std_color', '#FF5722')
-            std_lw = getattr(properties, 'std_linewidth', 1.5)
-            std_plus, = ax_hvsr.plot(result.frequencies, 
-                                    result.mean_hvsr + result.std_hvsr,
-                                    color=std_color, linestyle='--', linewidth=std_lw, 
-                                    label='+1σ', zorder=99)
-            
-            std_minus, = ax_hvsr.plot(result.frequencies,
-                                     result.mean_hvsr - result.std_hvsr,
-                                     color=std_color, linestyle='--', linewidth=std_lw, 
-                                     label='-1σ', zorder=99)
-            
-            self.stat_lines['std_plus'] = std_plus
-            self.stat_lines['std_minus'] = std_minus
-        
-        # Plot median (if enabled)
-        if properties.show_median and result.median_hvsr is not None:
-            median_color = getattr(properties, 'median_color', '#D32F2F')
-            median_lw = getattr(properties, 'median_linewidth', 1.5)
-            median_line, = ax_hvsr.plot(result.frequencies, result.median_hvsr,
-                                        color=median_color, linewidth=median_lw, 
-                                        label='Median', zorder=98)
-            self.stat_lines['median'] = median_line
-        
-        # Set Y-axis limits based on properties
-        y_min, y_max = self.plot_manager.calculate_y_limits(properties, result)
-        ax_hvsr.set_ylim(y_min, y_max)
-        
-        # Axis properties
-        ax_hvsr.set_xscale('log')
-        ax_hvsr.set_xlabel('Frequency (Hz)')
-        ax_hvsr.set_ylabel('H/V Spectral Ratio')
-        ax_hvsr.set_title('HVSR Curve')
-        ax_hvsr.set_xlim(result.frequencies[0], result.frequencies[-1])
-        
-        # Grid (if enabled)
-        if properties.show_grid:
-            ax_hvsr.grid(True, which='both', alpha=0.3)
-        
-        # Legend (if enabled)
-        if properties.show_legend:
-            ax_hvsr.legend(loc='upper right', fontsize=9)
-        
-        # Acceptance badge (if enabled)
-        if properties.show_acceptance_badge:
-            acceptance_rate = windows.acceptance_rate * 100
-            badge_text = f'Acceptance: {acceptance_rate:.1f}%'
-            ax_hvsr.text(0.02, 0.98, badge_text,
-                        transform=ax_hvsr.transAxes,
-                        fontsize=10, verticalalignment='top',
-                        bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
-                                edgecolor='black', alpha=0.8))
-        
-        # Add peak markers (with property-controlled style)
-        if properties.show_peak_labels and hasattr(self, 'peak_picker_dock'):
-            peaks = self.peak_picker_dock.peaks
-            if peaks:
-                # Modify peak label style based on properties
-                self.plot_manager.add_peak_markers(peaks, label_style=properties.peak_label_style)
-        
-        # Plot stats panel (if visible)
-        if ax_stats is not None:
-            ax_stats.clear()
-            ax_stats.set_title('Window Quality Statistics')
-            ax_stats.set_xlabel('Window Index')
-            ax_stats.set_ylabel('Quality Score')
-            
-            qualities = [w.quality_metrics.get('overall', 0.0) for w in windows.windows]
-            colors = ['green' if w.is_active() else 'gray' for w in windows.windows]
-            ax_stats.scatter(range(len(windows.windows)), qualities, 
-                            c=colors, alpha=0.7, s=50)
-            ax_stats.axhline(0.5, color='red', linestyle='--', alpha=0.5, label='Threshold')
-            ax_stats.legend()
-            if properties.show_grid:
-                ax_stats.grid(True, alpha=0.3)
-        
-        # Adjust layout and redraw
-        self.plot_manager.fig.tight_layout()
-        self.plot_manager.canvas.draw()
+        # Update local line references from controller
+        self.window_lines = self.plotting_ctrl.get_window_lines()
+        self.stat_lines = self.plotting_ctrl.get_stat_lines()
         
         # Rebuild layer dock
         self.layers_dock.rebuild(self.window_lines, self.stat_lines)
-        
-        # Show plot window
-        self.plot_manager.show_separate()
     
     def export_figure(self):
         """Export current plot as image (alias for export_plot_image)."""
@@ -2371,7 +2097,18 @@ class HVSRMainWindow(QMainWindow):
             scrollbar.setValue(scrollbar.maximum())
     
     # === Backward compatibility properties ===
-    # These proxy to processing_tab widgets for code that references them directly
+    # 
+    # These proxy to processing_tab widgets for code that references them directly.
+    # 
+    # .. deprecated::
+    #     These properties are maintained for backward compatibility only.
+    #     New code should access widgets directly via self.processing_tab:
+    #         main_window.processing_tab.window_length_spin
+    #     Or use the ProcessingTab's settings methods:
+    #         main_window.processing_tab.get_settings()
+    #
+    # These properties will be removed in a future version.
+    # 
     
     @property
     def window_length_spin(self):

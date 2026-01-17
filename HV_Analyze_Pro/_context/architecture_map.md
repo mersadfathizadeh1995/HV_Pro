@@ -96,17 +96,18 @@ HVSRMainWindow (main_window.py - 2511 lines) ← REFACTORED from 2886 lines
 
 ### Main Window Composition (Detail)
 ```
-gui/main_window.py (HVSRMainWindow - 2511 lines) ← REFACTORED from 2886
+gui/main_window.py (HVSRMainWindow - 2248 lines) ← REFACTORED from 2886
 │
 ├── USES: gui/main_window_modules/
 │         ├── menu_bar.py (MenuBarHelper)
-│         ├── controllers/ (DataController, ProcessingController, PlottingController, SessionController)
+│         ├── controllers/
+│         │   ├── processing_controller.py (ProcessingController) ← processing logic
+│         │   ├── plotting_controller.py (PlottingController) ← plotting logic
+│         │   ├── session_controller.py (SessionController) ← session logic
+│         │   └── data_controller.py (DataController)
 │         └── panels/ (ProcessingSettingsPanel, QCSettingsPanel, CoxSettingsPanel)
 │
-├── USES: gui/mixins/
-│         ├── processing_mixin.py
-│         ├── plotting_mixin.py
-│         └── session_mixin.py
+├── DEPRECATED: gui/mixins/ (removed - functionality moved to controllers)
 │
 ├── CONTAINS: gui/tabs/
 │             ├── data_load_tab.py (DataLoadTab) ← Tab 0
@@ -226,6 +227,45 @@ main_window.py changes:
 └── Uses PlottingController for plot operations
 ```
 
+## Controller-Based Architecture (NEW)
+
+The main_window.py has been refactored to delegate functionality to controllers:
+
+```
+main_window.py ────────────────────→ controllers/
+                                      ├── ProcessingController
+                                      │   ├── start_processing()
+                                      │   ├── validate_results()
+                                      │   ├── _show_qc_failure_dialog()
+                                      │   └── recompute_hvsr()
+                                      │
+                                      ├── PlottingController  
+                                      │   ├── plot_hvsr_results()
+                                      │   ├── apply_properties()
+                                      │   ├── recalculate_mean_from_visible()
+                                      │   └── get_window_lines() / get_stat_lines()
+                                      │
+                                      └── SessionController
+                                          ├── save_session()
+                                          ├── load_session()
+                                          ├── extract_gui_state()
+                                          └── apply_gui_state()
+
+Deprecated Methods in main_window.py:
+├── process_hvsr() → Use ProcessingTab.process_requested signal
+├── _validate_processing_results() → Delegates to ProcessingController
+├── _show_qc_failure_dialog() → Delegates to ProcessingController
+├── _generate_qc_diagnostic_report() → Delegates to ProcessingController
+├── plot_results_separate_window() → Delegates to PlottingController
+└── replot_with_properties() → Delegates to PlottingController
+
+Backward Compatibility Properties (deprecated):
+├── window_length_spin → self.processing_tab.window_length_spin
+├── overlap_spin → self.processing_tab.overlap_spin
+├── ... (26 total property proxies)
+└── All marked for future removal
+```
+
 ## Refactoring Candidates (Updated)
 
 1. **main_window.py (2511 lines)** - PRIORITY: MEDIUM (reduced from HIGH)
@@ -260,7 +300,7 @@ cli/ ─────────────────────────
 ## Config Dependencies
 ```
 config/settings.py      → Used by: api/, gui/, cli/
-config/session.py       → Used by: gui/mixins/session_mixin.py
+config/session.py       → Used by: gui/main_window.py, gui/main_window_modules/controllers/session_controller.py
 config/schemas.py       → Used by: api/, config/settings.py
 config/plot_properties.py → Used by: gui/docks/properties/
 ```
