@@ -212,16 +212,7 @@ Key functions:
 - Configuration dataclass for batch processing
 - Includes: window parameters, QC mode, Cox FDWRA settings, parallel options
 
-#### BatchProcessor
-- Processes list of `DatasetFile` objects
-- Features:
-  - Pause/resume/stop control
-  - Progress callbacks
-  - Error handling with memory protection
-  - Results database integration
-  - Auto-export of results and figures
 
----
 
 ## Export Capabilities
 
