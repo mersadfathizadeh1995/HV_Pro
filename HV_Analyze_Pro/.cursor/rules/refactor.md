@@ -1,5 +1,56 @@
 # Refactoring Rules for HVSR Pro
 
+## CRITICAL: Proactive Modularity Rules
+
+### Rule 0: Detect Code That Needs Refactoring DURING Development
+
+**Check these thresholds when writing new code:**
+
+| Metric | Warning | Must Refactor |
+|--------|---------|---------------|
+| Single file lines | >200 lines | >300 lines |
+| Single function lines | >30 lines | >50 lines |
+| Single class methods | >10 methods | >15 methods |
+| Function parameters | >5 params | >7 params |
+| Nested conditionals | >2 levels | >3 levels |
+| Imports from same module | >5 imports | Consider splitting |
+
+**Red Flags (Stop and Refactor Immediately):**
+1. ❌ Method has `and` in name (e.g., `load_and_process`) → Split into two methods
+2. ❌ Class does more than one thing → Extract separate class
+3. ❌ Function returns multiple unrelated values → Create dataclass
+4. ❌ Copy-pasting code between files → Create shared utility
+5. ❌ UI code mixed with business logic → Extract controller/service
+6. ❌ Hard-coded values → Extract to config/constants
+7. ❌ Callback hell (>2 nested callbacks) → Use signals or composition
+
+**Modular Design Checklist (Before Adding New Feature):**
+```
+□ Is this a new file or adding to existing?
+  - New file: Does it belong in existing module or need new one?
+  - Existing: Will it push file over 300 lines? → Plan split first
+
+□ Does the feature need GUI?
+  - YES: Create processing logic in core/ FIRST, then GUI in gui/
+  - GUI should only call core functions, never contain processing logic
+
+□ Does feature have settings/configuration?
+  - Create dataclass in config/schemas.py
+  - Create GUI panel in gui/panels/ if needed
+
+□ Does feature produce output/export?
+  - Create exporter in appropriate exporters/ folder
+  - Keep export logic separate from UI
+
+□ Will this code be useful elsewhere (API, CLI)?
+  - Write core logic as standalone function
+  - GUI and CLI both call the same core function
+```
+
+**The Golden Rule:** If you're adding >100 lines to any single file, STOP and plan how to split it first.
+
+---
+
 ## Import Management
 
 ### Rule 1: Update All Import References
