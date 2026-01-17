@@ -7,6 +7,7 @@ Modular components for the main application window.
 This package provides:
 - Menu bar helpers
 - Control panel components  
+- Panel widgets (settings panels)
 - Controller modules for specific functionality
 
 The main HVSRMainWindow class remains in hvsr_pro.gui.main_window
@@ -17,6 +18,7 @@ for backward compatibility.
 from . import menu_bar
 from . import control_panel
 from . import controllers
+from . import panels
 
 # Re-export helpers for convenience
 from .menu_bar import MenuBarHelper, show_about_dialog, show_shortcuts_dialog
@@ -30,6 +32,13 @@ from .controllers import (
     DataController,
     SessionController,
     WindowController,
+    ProcessingController,
+    PlottingController,
+)
+from .panels import (
+    ProcessingSettingsPanel,
+    QCSettingsPanel,
+    CoxSettingsPanel,
 )
 
 __all__ = [
@@ -37,6 +46,7 @@ __all__ = [
     'menu_bar',
     'control_panel',
     'controllers',
+    'panels',
     # Menu bar
     'MenuBarHelper',
     'show_about_dialog',
@@ -46,8 +56,14 @@ __all__ = [
     'ProcessingSettingsGroup',
     'QCSettingsGroup',
     'ParallelSettingsGroup',
+    # Panels (new modular panels)
+    'ProcessingSettingsPanel',
+    'QCSettingsPanel',
+    'CoxSettingsPanel',
     # Controllers
     'DataController',
     'SessionController',
     'WindowController',
+    'ProcessingController',
+    'PlottingController',
 ]

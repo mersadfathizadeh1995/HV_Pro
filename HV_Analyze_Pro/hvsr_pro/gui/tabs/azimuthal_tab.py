@@ -200,15 +200,28 @@ if HAS_PYQT5:
             self.parallel_check.toggled.connect(self._on_parallel_toggled)
             proc_layout.addWidget(self.parallel_check)
             
-            # Number of workers
+            # Number of workers - with Windows memory warning
             workers_layout = QHBoxLayout()
             workers_layout.addWidget(QLabel("CPU Cores:"))
             self.n_workers_spin = QSpinBox()
+            
+            import sys
             from multiprocessing import cpu_count
             max_cores = cpu_count()
-            self.n_workers_spin.setRange(1, max_cores)
-            self.n_workers_spin.setValue(max(1, max_cores - 1))  # Leave one core free
-            self.n_workers_spin.setToolTip(f"Number of CPU cores to use (max: {max_cores})")
+            
+            # On Windows, limit default cores to prevent memory exhaustion
+            # Windows multiprocessing is very memory-heavy (spawns full processes)
+            is_windows = sys.platform == 'win32'
+            safe_max_cores = min(max_cores, 4) if is_windows else max_cores
+            default_cores = min(max(1, max_cores - 1), safe_max_cores)
+            
+            self.n_workers_spin.setRange(1, safe_max_cores)
+            self.n_workers_spin.setValue(default_cores)
+            
+            tooltip = f"Number of CPU cores to use (max: {safe_max_cores})"
+            if is_windows and max_cores > 4:
+                tooltip += f"\n\nNote: Limited to {safe_max_cores} cores on Windows to prevent memory issues.\nEach worker process requires ~200MB for obspy."
+            self.n_workers_spin.setToolTip(tooltip)
             workers_layout.addWidget(self.n_workers_spin)
             proc_layout.addLayout(workers_layout)
             

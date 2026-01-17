@@ -11,6 +11,12 @@ Usage:
 import sys
 from pathlib import Path
 
+# CRITICAL: For Windows multiprocessing support
+# This must be called before any other imports that might use multiprocessing
+if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()
+
 # Add package to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

@@ -41,6 +41,15 @@ if HAS_PYQT5:
     from hvsr_pro.gui.dialogs import DataInputDialog
     from hvsr_pro.gui.tabs import DataLoadTab, AzimuthalTab
     from hvsr_pro.gui.workers import ProcessingThread
+    
+    # Import modular controllers and panels for future use
+    from hvsr_pro.gui.main_window_modules.controllers import (
+        ProcessingController, PlottingController, 
+        SessionController, WindowController
+    )
+    from hvsr_pro.gui.main_window_modules.panels import (
+        ProcessingSettings, QCSettings, CoxFDWRASettings
+    )
 
 
 
@@ -78,6 +87,15 @@ class HVSRMainWindow(QMainWindow):
         # Plot window manager (separate window by default)
         self.plot_manager = PlotWindowManager(self)
         
+        # Initialize modular controllers
+        self.processing_ctrl = ProcessingController(self)
+        self.plotting_ctrl = PlottingController(self.plot_manager, self)
+        self.session_ctrl = SessionController(self)
+        self.window_ctrl = WindowController(self)
+        
+        # Connect controller signals
+        self._connect_controller_signals()
+        
         # Window lines storage for layer dock
         self.window_lines = {}  # {window_index: matplotlib_line}
         self.stat_lines = {}  # {'mean': line, 'std_plus': line, ...}
@@ -104,6 +122,34 @@ class HVSRMainWindow(QMainWindow):
         
         # Install event filter on menu bar to fix Windows click issues
         self.menuBar().installEventFilter(self)
+    
+    def _connect_controller_signals(self):
+        """Connect modular controller signals to main window handlers."""
+        # Processing controller signals
+        self.processing_ctrl.progress_updated.connect(self.on_progress)
+        self.processing_ctrl.processing_error.connect(self.on_processing_error)
+        
+        # Plotting controller signals  
+        self.plotting_ctrl.plot_updated.connect(self._on_plot_updated)
+        self.plotting_ctrl.mean_recalculated.connect(self._on_mean_recalculated)
+        
+        # Window controller signals
+        self.window_ctrl.statistics_updated.connect(self._on_window_stats_updated)
+    
+    def _on_plot_updated(self):
+        """Handle plot update from plotting controller."""
+        self.status_bar.showMessage("Plot updated")
+    
+    def _on_mean_recalculated(self, n_visible: int):
+        """Handle mean recalculation from plotting controller."""
+        if n_visible > 0:
+            self.add_info(f"Mean recalculated from {n_visible} visible windows")
+        else:
+            self.add_info("WARNING: No visible windows - mean hidden")
+    
+    def _on_window_stats_updated(self, stats: dict):
+        """Handle window statistics update from window controller."""
+        self.update_window_info()
     
     def eventFilter(self, obj, event):
         """Event filter to ensure menu bar receives clicks on Windows."""

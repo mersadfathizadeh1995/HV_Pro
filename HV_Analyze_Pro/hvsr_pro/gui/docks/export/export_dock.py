@@ -507,15 +507,15 @@ class ExportDock(QDockWidget):
 
         if filename:
             try:
-                # Get the figure from canvas manager
-                fig = self.canvas_manager.canvas.fig
+                # Get the figure from canvas manager (PlotWindowManager has fig directly)
+                fig = self.canvas_manager.fig
                 fig.savefig(filename, dpi=300, bbox_inches='tight')
                 QMessageBox.information(self, "Export Successful", f"Plot saved to:\n{filename}")
             except Exception as e:
                 QMessageBox.critical(self, "Export Failed", f"Failed to export plot:\n{str(e)}")
 
     def export_data(self, format_type: str):
-        """Export results data."""
+        """Export results data directly (CSV or JSON)."""
         if not self.result:
             QMessageBox.warning(self, "No Data", "No HVSR results available to export.")
             return
@@ -525,7 +525,170 @@ class ExportDock(QDockWidget):
         if not self.use_original_points_cb.isChecked():
             options['n_points'] = self.export_points_spin.value()
 
-        self.export_data_requested.emit(format_type, options)
+        # Get filename
+        ext = format_type
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Export HVSR Results as {format_type.upper()}",
+            f"hvsr_results.{ext}",
+            f"{format_type.upper()} Files (*.{ext});;All Files (*)"
+        )
+
+        if filename:
+            try:
+                if format_type == 'csv':
+                    self._export_csv(filename, options)
+                elif format_type == 'json':
+                    self._export_json(filename, options)
+                QMessageBox.information(self, "Export Successful", f"Data saved to:\n{filename}")
+            except Exception as e:
+                import traceback
+                QMessageBox.critical(self, "Export Failed", f"Failed to export:\n{str(e)}\n\n{traceback.format_exc()}")
+
+    def _export_csv(self, filename: str, options: dict):
+        """Export HVSR results to CSV file."""
+        import numpy as np
+        from scipy import interpolate
+
+        # Get original data - use explicit None checks to avoid numpy array truth value issues
+        orig_frequencies = self.result.frequencies if hasattr(self.result, 'frequencies') else getattr(self.result, 'frequency', None)
+        
+        mean_curve = getattr(self.result, 'mean_hvsr', None)
+        if mean_curve is None:
+            mean_curve = getattr(self.result, 'mean_curve', None)
+        
+        std_curve = getattr(self.result, 'std_hvsr', None)
+        if std_curve is None:
+            std_curve = getattr(self.result, 'std_curve', None)
+        
+        median_curve = getattr(self.result, 'median_hvsr', None)
+        if median_curve is None:
+            median_curve = getattr(self.result, 'median_curve', None)
+
+        # Check if interpolation is needed
+        n_points = options.get('n_points')
+        if n_points and n_points != len(orig_frequencies):
+            # Create new frequency array (log-spaced for HVSR)
+            new_frequencies = np.logspace(
+                np.log10(orig_frequencies[0]),
+                np.log10(orig_frequencies[-1]),
+                n_points
+            )
+
+            def interp_curve(curve):
+                if curve is None or len(curve) == 0:
+                    return np.full(n_points, np.nan)
+                f = interpolate.interp1d(orig_frequencies, curve, kind='linear',
+                                        bounds_error=False, fill_value='extrapolate')
+                return f(new_frequencies)
+
+            frequencies = new_frequencies
+            mean_curve = interp_curve(mean_curve)
+            std_curve = interp_curve(std_curve)
+            median_curve = interp_curve(median_curve) if median_curve is not None else None
+        else:
+            frequencies = orig_frequencies
+
+        # Write CSV
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+
+            # Header
+            header = ['Frequency (Hz)', 'Mean H/V', 'Std H/V']
+            if median_curve is not None:
+                header.append('Median H/V')
+            writer.writerow(header)
+
+            # Data rows
+            for i, freq in enumerate(frequencies):
+                row = [freq]
+                row.append(mean_curve[i] if mean_curve is not None else '')
+                row.append(std_curve[i] if std_curve is not None else '')
+                if median_curve is not None:
+                    row.append(median_curve[i])
+                writer.writerow(row)
+
+    def _export_json(self, filename: str, options: dict):
+        """Export HVSR results to JSON file."""
+        import numpy as np
+        from scipy import interpolate
+
+        # Get original data - use explicit None checks to avoid numpy array truth value issues
+        orig_frequencies = self.result.frequencies if hasattr(self.result, 'frequencies') else getattr(self.result, 'frequency', None)
+        
+        mean_curve = getattr(self.result, 'mean_hvsr', None)
+        if mean_curve is None:
+            mean_curve = getattr(self.result, 'mean_curve', None)
+        
+        std_curve = getattr(self.result, 'std_hvsr', None)
+        if std_curve is None:
+            std_curve = getattr(self.result, 'std_curve', None)
+        
+        median_curve = getattr(self.result, 'median_hvsr', None)
+        if median_curve is None:
+            median_curve = getattr(self.result, 'median_curve', None)
+
+        # Check if interpolation is needed
+        n_points = options.get('n_points')
+        if n_points and n_points != len(orig_frequencies):
+            new_frequencies = np.logspace(
+                np.log10(orig_frequencies[0]),
+                np.log10(orig_frequencies[-1]),
+                n_points
+            )
+
+            def interp_curve(curve):
+                if curve is None or len(curve) == 0:
+                    return np.full(n_points, np.nan)
+                f = interpolate.interp1d(orig_frequencies, curve, kind='linear',
+                                        bounds_error=False, fill_value='extrapolate')
+                return f(new_frequencies)
+
+            frequencies = new_frequencies
+            mean_curve = interp_curve(mean_curve)
+            std_curve = interp_curve(std_curve)
+            median_curve = interp_curve(median_curve) if median_curve is not None else None
+        else:
+            frequencies = orig_frequencies
+
+        # Build JSON data
+        data = {
+            'metadata': {
+                'export_date': datetime.now().isoformat(),
+                'n_points': len(frequencies),
+            },
+            'frequencies': frequencies.tolist() if hasattr(frequencies, 'tolist') else list(frequencies),
+            'mean_hvsr': mean_curve.tolist() if mean_curve is not None and hasattr(mean_curve, 'tolist') else (list(mean_curve) if mean_curve is not None else None),
+            'std_hvsr': std_curve.tolist() if std_curve is not None and hasattr(std_curve, 'tolist') else (list(std_curve) if std_curve is not None else None),
+        }
+
+        if median_curve is not None:
+            data['median_hvsr'] = median_curve.tolist() if hasattr(median_curve, 'tolist') else list(median_curve)
+
+        # Add peak info if available
+        if hasattr(self.result, 'primary_peak') and self.result.primary_peak:
+            data['primary_peak'] = {
+                'frequency': float(self.result.primary_peak.frequency),
+                'amplitude': float(self.result.primary_peak.amplitude)
+            }
+        elif hasattr(self.result, 'peak_frequency') and self.result.peak_frequency:
+            data['primary_peak'] = {
+                'frequency': float(self.result.peak_frequency),
+                'amplitude': float(getattr(self.result, 'peak_amplitude', 0))
+            }
+
+        # Add window statistics if available
+        if self.windows:
+            data['window_stats'] = {
+                'total_windows': self.windows.n_windows,
+                'active_windows': self.windows.n_active,
+                'rejected_windows': self.windows.n_rejected,
+                'acceptance_rate': self.windows.acceptance_rate
+            }
+
+        # Write JSON
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=2)
 
     def export_statistics(self):
         """Export statistics based on selected options."""
@@ -569,6 +732,22 @@ class ExportDock(QDockWidget):
         # Get original frequencies and data
         orig_frequencies = self.result.frequencies if hasattr(self.result, 'frequencies') else self.result.frequency
 
+        # Get base data - use explicit None checks to avoid numpy array truth value issues
+        mean_curve_raw = getattr(self.result, 'mean_hvsr', None)
+        if mean_curve_raw is None:
+            mean_curve_raw = getattr(self.result, 'mean_curve', None)
+        
+        median_curve_raw = getattr(self.result, 'median_hvsr', None)
+        if median_curve_raw is None:
+            median_curve_raw = getattr(self.result, 'median_curve', None)
+        
+        std_curve_raw = getattr(self.result, 'std_hvsr', None)
+        if std_curve_raw is None:
+            std_curve_raw = getattr(self.result, 'std_curve', None)
+        
+        perc_16_raw = getattr(self.result, 'percentile_16', None)
+        perc_84_raw = getattr(self.result, 'percentile_84', None)
+
         # Check if interpolation is needed
         n_points = options.get('n_points')
         if n_points and n_points != len(orig_frequencies):
@@ -581,25 +760,30 @@ class ExportDock(QDockWidget):
 
             # Interpolation function
             def interp_curve(curve):
-                if curve is None or len(curve) == 0:
-                    return np.full(n_points, np.nan)
+                if curve is None:
+                    return None
+                try:
+                    if len(curve) == 0:
+                        return np.full(n_points, np.nan)
+                except TypeError:
+                    return None
                 f = interpolate.interp1d(orig_frequencies, curve, kind='linear', 
                                         bounds_error=False, fill_value='extrapolate')
                 return f(new_frequencies)
 
             frequencies = new_frequencies
-            mean_curve = interp_curve(self.result.mean_hvsr if hasattr(self.result, 'mean_hvsr') else self.result.mean_curve)
-            median_curve = interp_curve(getattr(self.result, 'median_hvsr', None) or getattr(self.result, 'median_curve', None))
-            std_curve = interp_curve(self.result.std_hvsr if hasattr(self.result, 'std_hvsr') else self.result.std_curve)
-            perc_16 = interp_curve(getattr(self.result, 'percentile_16', None))
-            perc_84 = interp_curve(getattr(self.result, 'percentile_84', None))
+            mean_curve = interp_curve(mean_curve_raw)
+            median_curve = interp_curve(median_curve_raw)
+            std_curve = interp_curve(std_curve_raw)
+            perc_16 = interp_curve(perc_16_raw)
+            perc_84 = interp_curve(perc_84_raw)
         else:
             frequencies = orig_frequencies
-            mean_curve = self.result.mean_hvsr if hasattr(self.result, 'mean_hvsr') else self.result.mean_curve
-            median_curve = getattr(self.result, 'median_hvsr', None) or getattr(self.result, 'median_curve', None)
-            std_curve = self.result.std_hvsr if hasattr(self.result, 'std_hvsr') else self.result.std_curve
-            perc_16 = getattr(self.result, 'percentile_16', None)
-            perc_84 = getattr(self.result, 'percentile_84', None)
+            mean_curve = mean_curve_raw
+            median_curve = median_curve_raw
+            std_curve = std_curve_raw
+            perc_16 = perc_16_raw
+            perc_84 = perc_84_raw
 
         with open(filename, 'w', newline='') as f:
             writer = csv.writer(f)

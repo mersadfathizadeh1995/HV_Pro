@@ -520,6 +520,16 @@ if HAS_PYQT5:
                 start_dt_from_picker = self.datetime_start.dateTime().toPyDateTime()
                 end_dt_from_picker = self.datetime_end.dateTime().toPyDateTime()
 
+                # Validate time range BEFORE any conversion
+                if end_dt_from_picker <= start_dt_from_picker:
+                    self.time_filter_info.setText("ERROR: End time must be after start time!")
+                    self.time_filter_info.setStyleSheet("color: red; font-size: 9px; font-weight: bold;")
+                    # Reset to full data range to avoid negative values
+                    if self.seismic_data:
+                        self.time_start = 0.0
+                        self.time_end = self.seismic_data.duration
+                    return  # Don't apply invalid range
+
                 # Get timezone offset in hours
                 tz_offset_hours = self._parse_timezone_offset(self.selected_timezone)
 
@@ -561,21 +571,25 @@ if HAS_PYQT5:
                 self.time_start = (start_dt_utc - data_start).total_seconds()
                 self.time_end = (end_dt_utc - data_start).total_seconds()
 
-                # Debug output to verify conversion
-                print(f"DEBUG: User entered (in {self.selected_timezone}):")
-                print(f"  Start: {start_dt_from_picker}")
-                print(f"  End: {end_dt_from_picker}")
-                print(f"DEBUG: Converted to UTC:")
-                print(f"  Start: {start_dt_utc}")
-                print(f"  End: {end_dt_utc}")
-                print(f"DEBUG: Seconds from data start:")
-                print(f"  time_start: {self.time_start}s ({self.time_start/3600:.2f}h)")
-                print(f"  time_end: {self.time_end}s ({self.time_end/3600:.2f}h)")
-
-                # Ensure valid range
+                # Ensure valid range (clamp to data bounds)
                 if self.seismic_data:
                     self.time_start = max(0.0, self.time_start)
                     self.time_end = min(self.seismic_data.duration, self.time_end)
+                    
+                    # Additional validation: ensure we have a positive range after clamping
+                    if self.time_end <= self.time_start:
+                        self.time_filter_info.setText("ERROR: Time range outside data bounds!")
+                        self.time_filter_info.setStyleSheet("color: red; font-size: 9px; font-weight: bold;")
+                        self.time_start = 0.0
+                        self.time_end = self.seismic_data.duration
+                        return
+
+                # Calculate duration and update info label with success feedback
+                duration_seconds = self.time_end - self.time_start
+                duration_str = f"{duration_seconds:.1f}s" if duration_seconds < 60 else f"{duration_seconds/60:.1f}min"
+                tz_name = self.selected_timezone.split('(')[0].strip()
+                self.time_filter_info.setText(f"Applied: {start_dt_from_picker.strftime('%H:%M:%S')} to {end_dt_from_picker.strftime('%H:%M:%S')} ({tz_name}) - {duration_str}")
+                self.time_filter_info.setStyleSheet("color: green; font-size: 9px; font-weight: bold;")
 
             # Refresh current view
             if self.radio_e.isChecked():

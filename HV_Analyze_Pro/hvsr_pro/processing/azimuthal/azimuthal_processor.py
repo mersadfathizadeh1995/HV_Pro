@@ -7,10 +7,19 @@ Adapted from hvsrpy by Joseph P. Vantassel (joseph.p.vantassel@gmail.com).
 """
 
 import logging
-from typing import List, Optional, Tuple
+import sys
+import os
+from typing import List, Optional, Tuple, Callable
 import numpy as np
-from multiprocessing import Pool, cpu_count
-from functools import partial
+
+# Conditional multiprocessing import with safer defaults on Windows
+try:
+    from multiprocessing import Pool, cpu_count
+    HAS_MULTIPROCESSING = True
+except ImportError:
+    HAS_MULTIPROCESSING = False
+    def cpu_count():
+        return 4  # Fallback
 
 from hvsr_pro.processing.windows import WindowCollection, Window
 from hvsr_pro.processing.hvsr import (
@@ -24,6 +33,10 @@ from .azimuthal_result import AzimuthalHVSRResult
 logger = logging.getLogger(__name__)
 
 __all__ = ["AzimuthalHVSRProcessor"]
+
+# Windows-specific: limit default cores to prevent memory exhaustion
+IS_WINDOWS = sys.platform == 'win32'
+MAX_SAFE_WORKERS_WINDOWS = 4  # Windows multiprocessing is memory-heavy
 
 
 def _rotate_horizontals(east_data: np.ndarray, north_data: np.ndarray, 
@@ -117,7 +130,7 @@ class AzimuthalHVSRProcessor:
             f_max: Maximum frequency (Hz)
             n_frequencies: Number of frequency points
             parallel: Enable parallel processing
-            n_workers: Number of workers (default: cpu_count - 1)
+            n_workers: Number of workers (default: cpu_count - 1, max 4 on Windows)
             taper: Taper window type
         """
         self.azimuths = np.array(azimuths) if azimuths is not None else np.arange(0, 180, 5)
@@ -125,15 +138,31 @@ class AzimuthalHVSRProcessor:
         self.f_min = f_min
         self.f_max = f_max
         self.n_frequencies = n_frequencies
-        self.parallel = parallel
-        self.n_workers = n_workers or max(1, cpu_count() - 1)
         self.taper = taper
+        
+        # Determine safe number of workers
+        available_cores = cpu_count()
+        default_workers = max(1, available_cores - 1)
+        
+        # On Windows, limit workers to prevent memory exhaustion
+        # Windows multiprocessing uses 'spawn' which is very memory-heavy
+        if IS_WINDOWS:
+            default_workers = min(default_workers, MAX_SAFE_WORKERS_WINDOWS)
+            if n_workers and n_workers > MAX_SAFE_WORKERS_WINDOWS:
+                logger.warning(
+                    f"Reducing workers from {n_workers} to {MAX_SAFE_WORKERS_WINDOWS} on Windows "
+                    f"to prevent memory exhaustion. Each worker requires significant memory."
+                )
+                n_workers = MAX_SAFE_WORKERS_WINDOWS
+        
+        self.n_workers = n_workers if n_workers else default_workers
+        self.parallel = parallel and HAS_MULTIPROCESSING
         
         # Generate target frequencies
         self.target_frequencies = logspace_frequencies(f_min, f_max, n_frequencies)
         
         logger.info(f"AzimuthalHVSRProcessor initialized: {len(self.azimuths)} azimuths, "
-                   f"f=[{f_min}, {f_max}] Hz")
+                   f"f=[{f_min}, {f_max}] Hz, workers={self.n_workers}")
     
     def process(self, 
                 windows: WindowCollection,
@@ -174,40 +203,55 @@ class AzimuthalHVSRProcessor:
         # Process all combinations of windows and azimuths
         hvsr_results = np.zeros((n_azimuths, n_windows, self.n_frequencies))
         
-        if self.parallel and n_windows * n_azimuths > 50:
-            # Parallel processing
+        use_parallel = self.parallel and n_windows * n_azimuths > 50 and HAS_MULTIPROCESSING
+        
+        if use_parallel:
+            # Parallel processing with error handling for memory issues
             logger.info(f"Using parallel processing with {self.n_workers} workers")
             
-            # Prepare all argument combinations
-            all_args = []
-            for az_idx, azimuth in enumerate(self.azimuths):
-                for win_idx, win_data in enumerate(window_data_list):
-                    all_args.append((
-                        win_data, azimuth, self.target_frequencies,
-                        self.smoothing_bandwidth, self.taper, sampling_rate
-                    ))
+            if progress_callback:
+                progress_callback(8, f"Starting parallel processing ({self.n_workers} workers)...")
             
-            # Process in parallel
-            with Pool(processes=self.n_workers) as pool:
-                results = pool.map(_process_window_at_azimuth, all_args)
-            
-            # Collect results
-            idx = 0
-            for az_idx in range(n_azimuths):
-                for win_idx in range(n_windows):
-                    hvsr, error = results[idx]
-                    if hvsr is not None:
-                        hvsr_results[az_idx, win_idx, :] = hvsr
-                    else:
-                        hvsr_results[az_idx, win_idx, :] = np.nan
-                        logger.warning(f"Failed at azimuth {self.azimuths[az_idx]}, window {win_idx}: {error}")
-                    idx += 1
+            try:
+                # Prepare all argument combinations
+                all_args = []
+                for az_idx, azimuth in enumerate(self.azimuths):
+                    for win_idx, win_data in enumerate(window_data_list):
+                        all_args.append((
+                            win_data, azimuth, self.target_frequencies,
+                            self.smoothing_bandwidth, self.taper, sampling_rate
+                        ))
                 
+                # Process in parallel with chunking for better memory management
+                chunk_size = max(1, len(all_args) // (self.n_workers * 4))
+                
+                with Pool(processes=self.n_workers) as pool:
+                    results = pool.map(_process_window_at_azimuth, all_args, chunksize=chunk_size)
+                
+                # Collect results
+                idx = 0
+                for az_idx in range(n_azimuths):
+                    for win_idx in range(n_windows):
+                        hvsr, error = results[idx]
+                        if hvsr is not None:
+                            hvsr_results[az_idx, win_idx, :] = hvsr
+                        else:
+                            hvsr_results[az_idx, win_idx, :] = np.nan
+                            logger.warning(f"Failed at azimuth {self.azimuths[az_idx]}, window {win_idx}: {error}")
+                        idx += 1
+                    
+                    if progress_callback:
+                        progress = 10 + int(80 * (az_idx + 1) / n_azimuths)
+                        progress_callback(progress, f"Azimuth {self.azimuths[az_idx]:.0f} deg complete")
+                        
+            except (MemoryError, OSError) as e:
+                # Memory or resource error - fall back to sequential processing
+                logger.warning(f"Parallel processing failed ({type(e).__name__}), falling back to sequential...")
                 if progress_callback:
-                    progress = 10 + int(80 * (az_idx + 1) / n_azimuths)
-                    progress_callback(progress, f"Azimuth {self.azimuths[az_idx]:.0f} deg complete")
+                    progress_callback(10, "Memory issue detected, switching to sequential processing...")
+                use_parallel = False  # Fall through to sequential processing
         
-        else:
+        if not use_parallel:
             # Sequential processing
             for az_idx, azimuth in enumerate(self.azimuths):
                 for win_idx, win_data in enumerate(window_data_list):

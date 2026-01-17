@@ -19,35 +19,34 @@ except ImportError:
     HAS_PYQT5 = False
 
 
-# Common timezones
+# Common timezones - practical format with standard abbreviations
 TIMEZONES = [
-    ("UTC", 0),
-    ("UTC-12 (Baker Island)", -12),
-    ("UTC-11 (American Samoa)", -11),
-    ("UTC-10 (Hawaii)", -10),
-    ("UTC-9 (Alaska)", -9),
-    ("UTC-8 (Pacific Time)", -8),
-    ("UTC-7 (Mountain Time)", -7),
-    ("UTC-6 (Central Time/CDT)", -6),
-    ("UTC-5 (Eastern Time)", -5),
-    ("UTC-4 (Atlantic Time)", -4),
-    ("UTC-3 (Argentina)", -3),
-    ("UTC-2 (Mid-Atlantic)", -2),
-    ("UTC-1 (Azores)", -1),
-    ("UTC+1 (Central Europe)", 1),
-    ("UTC+2 (Eastern Europe)", 2),
-    ("UTC+3 (Moscow)", 3),
-    ("UTC+3:30 (Iran)", 3.5),
-    ("UTC+4 (Dubai)", 4),
-    ("UTC+5 (Pakistan)", 5),
-    ("UTC+5:30 (India)", 5.5),
-    ("UTC+6 (Bangladesh)", 6),
-    ("UTC+7 (Thailand)", 7),
-    ("UTC+8 (China, Singapore)", 8),
-    ("UTC+9 (Japan, Korea)", 9),
-    ("UTC+10 (Australia East)", 10),
-    ("UTC+11 (Solomon Islands)", 11),
-    ("UTC+12 (New Zealand)", 12),
+    ("UTC-12", -12),
+    ("UTC-11", -11),
+    ("UTC-10 (HST)", -10),
+    ("UTC-9 (AKST)", -9),
+    ("UTC-8 (PST)", -8),
+    ("UTC-7 (MST)", -7),
+    ("UTC-6 (CST)", -6),
+    ("UTC-5 (CDT/EST)", -5),
+    ("UTC-4 (EDT)", -4),
+    ("UTC-3", -3),
+    ("UTC-2", -2),
+    ("UTC-1", -1),
+    ("UTC+0 (GMT)", 0),
+    ("UTC+1 (CET)", 1),
+    ("UTC+2 (EET)", 2),
+    ("UTC+3 (MSK)", 3),
+    ("UTC+4", 4),
+    ("UTC+5", 5),
+    ("UTC+5:30 (IST)", 5.5),
+    ("UTC+6", 6),
+    ("UTC+7", 7),
+    ("UTC+8 (CST/SGT)", 8),
+    ("UTC+9 (JST/KST)", 9),
+    ("UTC+10 (AEST)", 10),
+    ("UTC+11", 11),
+    ("UTC+12 (NZST)", 12),
 ]
 
 
@@ -99,7 +98,15 @@ if HAS_PYQT5:
             self.tz_combo = QComboBox()
             for tz_name, _ in TIMEZONES:
                 self.tz_combo.addItem(tz_name)
-            self.tz_combo.setCurrentText("UTC")
+            # Default to CDT/EST which is common for US users
+            default_idx = self.tz_combo.findText("UTC-5 (CDT/EST)")
+            if default_idx >= 0:
+                self.tz_combo.setCurrentIndex(default_idx)
+            else:
+                # Fallback to GMT
+                gmt_idx = self.tz_combo.findText("UTC+0 (GMT)")
+                if gmt_idx >= 0:
+                    self.tz_combo.setCurrentIndex(gmt_idx)
             self.tz_combo.setEnabled(False)
             tz_layout.addWidget(self.tz_combo)
             group_layout.addLayout(tz_layout)
