@@ -19,6 +19,7 @@ from . import menu_bar
 from . import control_panel
 from . import controllers
 from . import panels
+from . import view_state
 
 # Re-export helpers for convenience
 from .menu_bar import MenuBarHelper, show_about_dialog, show_shortcuts_dialog
@@ -40,6 +41,7 @@ from .panels import (
     QCSettingsPanel,
     CoxSettingsPanel,
 )
+from .view_state import ViewStateManager
 
 __all__ = [
     # Modules
@@ -47,6 +49,7 @@ __all__ = [
     'control_panel',
     'controllers',
     'panels',
+    'view_state',
     # Menu bar
     'MenuBarHelper',
     'show_about_dialog',
@@ -60,6 +63,8 @@ __all__ = [
     'ProcessingSettingsPanel',
     'QCSettingsPanel',
     'CoxSettingsPanel',
+    # View state
+    'ViewStateManager',
     # Controllers
     'DataController',
     'SessionController',

@@ -55,7 +55,7 @@ processing/windows/           ├── window_plots.py
 ### Main Window Tab Structure
 
 ```
-HVSRMainWindow (main_window.py - 2511 lines) ← REFACTORED from 2886 lines
+HVSRMainWindow (main_window.py - 1616 lines) ← REFACTORED from 2886 lines (44% reduction)
 └── mode_tabs (QTabWidget)
     │
     ├── Tab 0: "Data Load" ─────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ HVSRMainWindow (main_window.py - 2511 lines) ← REFACTORED from 2886 lines
     │       └── File loading controls
     │
     ├── Tab 1: "Processing" ────────────────────────────────────────────────────
-    │   └── ProcessingTab (gui/tabs/processing_tab.py - ~350 lines) ← NEW!
+    │   └── ProcessingTab (gui/tabs/processing_tab.py - ~350 lines)
     │       ├── CollapsibleDataPanel (self.data_panel)
     │       ├── ProcessingSettingsPanel (from main_window_modules/panels/)
     │       ├── QCSettingsPanel (from main_window_modules/panels/)
@@ -96,22 +96,26 @@ HVSRMainWindow (main_window.py - 2511 lines) ← REFACTORED from 2886 lines
 
 ### Main Window Composition (Detail)
 ```
-gui/main_window.py (HVSRMainWindow - 2248 lines) ← REFACTORED from 2886
+gui/main_window.py (HVSRMainWindow - 1616 lines) ← REFACTORED from 2886 (44% reduction)
 │
 ├── USES: gui/main_window_modules/
-│         ├── menu_bar.py (MenuBarHelper)
+│         ├── menu_bar.py (MenuBarHelper) ← Menu creation
+│         ├── view_state.py (ViewStateManager) ← View state management
 │         ├── controllers/
-│         │   ├── processing_controller.py (ProcessingController) ← processing logic
-│         │   ├── plotting_controller.py (PlottingController) ← plotting logic
-│         │   ├── session_controller.py (SessionController) ← session logic
-│         │   └── data_controller.py (DataController)
+│         │   ├── data_controller.py (DataController) ← Data loading
+│         │   ├── processing_controller.py (ProcessingController) ← Processing logic
+│         │   ├── plotting_controller.py (PlottingController) ← Plotting logic
+│         │   ├── session_controller.py (SessionController) ← Session save/load
+│         │   ├── window_controller.py (WindowController) ← Window management
+│         │   ├── peak_controller.py (PeakController) ← Peak detection
+│         │   └── export_controller.py (ExportController) ← Export operations
 │         └── panels/ (ProcessingSettingsPanel, QCSettingsPanel, CoxSettingsPanel)
 │
 ├── DEPRECATED: gui/mixins/ (removed - functionality moved to controllers)
 │
 ├── CONTAINS: gui/tabs/
 │             ├── data_load_tab.py (DataLoadTab) ← Tab 0
-│             ├── processing_tab.py (ProcessingTab) ← Tab 1 (NEW!)
+│             ├── processing_tab.py (ProcessingTab) ← Tab 1
 │             └── azimuthal_tab.py (AzimuthalTab) ← Tab 2
 │
 ├── CONTAINS: gui/docks/
@@ -205,80 +209,129 @@ gui/workers/
 └── PlotExportWorker           → Plot export
 ```
 
-## Processing Tab Content (EXTRACTED to processing_tab.py)
+## Controller-Based Architecture (COMPLETE)
 
-The Processing tab UI has been extracted to `gui/tabs/processing_tab.py`. Key changes:
-
-```
-ProcessingTab (gui/tabs/processing_tab.py - ~350 lines):
-├── Uses modular panels from main_window_modules/panels/
-│   ├── ProcessingSettingsPanel (window, overlap, smoothing, frequency)
-│   ├── QCSettingsPanel (preset/custom modes)
-│   └── CoxSettingsPanel (Cox FDWRA parameters)
-├── Emits signals: process_requested, recompute_requested, settings_changed
-├── Provides backward compatibility properties (window_length_spin, etc.)
-└── FullProcessingSettings dataclass for bundling all settings
-
-main_window.py changes:
-├── Removed: create_control_panel(), create_settings_group(), create_window_group()
-├── Removed: toggle handlers (_on_qc_enable_toggled, etc.)
-├── Added: _on_process_requested() handler for ProcessingTab signal
-├── Added: backward compatibility properties (proxy to processing_tab)
-└── Uses PlottingController for plot operations
-```
-
-## Controller-Based Architecture (NEW)
-
-The main_window.py has been refactored to delegate functionality to controllers:
+The main_window.py uses a controller-based architecture with full delegation:
 
 ```
 main_window.py ────────────────────→ controllers/
-                                      ├── ProcessingController
+                                      │
+                                      ├── DataController (data_controller.py)
+                                      │   ├── load_from_dialog_result() ← Main loading entry
+                                      │   ├── load_single_file()
+                                      │   ├── load_multiple_files()
+                                      │   └── load_file_groups()
+                                      │
+                                      ├── ProcessingController (processing_controller.py)
                                       │   ├── start_processing()
                                       │   ├── validate_results()
                                       │   ├── _show_qc_failure_dialog()
                                       │   └── recompute_hvsr()
                                       │
-                                      ├── PlottingController  
+                                      ├── PlottingController (plotting_controller.py)
                                       │   ├── plot_hvsr_results()
                                       │   ├── apply_properties()
                                       │   ├── recalculate_mean_from_visible()
                                       │   └── get_window_lines() / get_stat_lines()
                                       │
-                                      └── SessionController
-                                          ├── save_session()
-                                          ├── load_session()
-                                          ├── extract_gui_state()
-                                          └── apply_gui_state()
+                                      ├── SessionController (session_controller.py)
+                                      │   ├── save_full_session() ← Complete session save
+                                      │   ├── load_full_session() ← Complete session load
+                                      │   ├── apply_session_state()
+                                      │   └── extract_gui_state()
+                                      │
+                                      ├── WindowController (window_controller.py)
+                                      │   ├── toggle_window()
+                                      │   ├── reject_all()
+                                      │   ├── accept_all()
+                                      │   └── get_statistics()
+                                      │
+                                      ├── PeakController (peak_controller.py)
+                                      │   ├── detect_peaks()
+                                      │   ├── enable_manual_mode()
+                                      │   ├── disable_manual_mode()
+                                      │   └── on_peaks_changed()
+                                      │
+                                      └── ExportController (export_controller.py)
+                                          ├── export_results()
+                                          ├── export_plot_image()
+                                          └── open_report_dialog()
 
-Deprecated Methods in main_window.py:
-├── process_hvsr() → Use ProcessingTab.process_requested signal
-├── _validate_processing_results() → Delegates to ProcessingController
-├── _show_qc_failure_dialog() → Delegates to ProcessingController
-├── _generate_qc_diagnostic_report() → Delegates to ProcessingController
-├── plot_results_separate_window() → Delegates to PlottingController
-└── replot_with_properties() → Delegates to PlottingController
+Helper Classes:
+├── MenuBarHelper (menu_bar.py)
+│   └── build_complete_menu_bar() ← Complete menu setup
+│
+└── ViewStateManager (view_state.py)
+    ├── toggle_plot_window()
+    ├── toggle_preview_canvas()
+    ├── toggle_loaded_data_column()
+    ├── toggle_azimuthal_tab()
+    └── handle_tab_changed()
+```
 
-Backward Compatibility Properties (deprecated):
+### Delegation Patterns
+```
+Main Window Methods → Controller Methods:
+├── on_files_selected() → data_ctrl.load_from_dialog_result()
+├── on_window_toggled() → window_ctrl.toggle_window()
+├── reject_all_windows() → window_ctrl.reject_all()
+├── accept_all_windows() → window_ctrl.accept_all()
+├── save_session() → session_ctrl.save_full_session()
+├── load_session() → session_ctrl.load_full_session()
+├── on_detect_peaks_requested() → peak_ctrl.detect_peaks()
+├── on_manual_mode_requested() → peak_ctrl.toggle_manual_mode()
+├── export_results() → export_ctrl.export_results()
+├── export_plot_image() → export_ctrl.export_plot_image()
+├── toggle_plot_window() → view_state.toggle_plot_window()
+├── toggle_preview_canvas() → view_state.toggle_preview_canvas()
+├── toggle_loaded_data_column() → view_state.toggle_loaded_data_column()
+├── toggle_azimuthal_tab() → view_state.toggle_azimuthal_tab()
+└── create_menu_bar() → menu_helper.build_complete_menu_bar()
+```
+
+### Backward Compatibility Properties (Deprecated)
+```
+Main window provides proxy properties to processing_tab widgets:
 ├── window_length_spin → self.processing_tab.window_length_spin
 ├── overlap_spin → self.processing_tab.overlap_spin
+├── smoothing_spin → self.processing_tab.smoothing_spin
+├── freq_min_spin → self.processing_tab.freq_min_spin
+├── freq_max_spin → self.processing_tab.freq_max_spin
 ├── ... (26 total property proxies)
 └── All marked for future removal
 ```
 
-## Refactoring Candidates (Updated)
+## Refactoring Summary
 
-1. **main_window.py (2511 lines)** - PRIORITY: MEDIUM (reduced from HIGH)
-   - ✅ Processing tab extracted to `gui/tabs/processing_tab.py`
-   - ✅ Plotting delegated to PlottingController
-   - Could still benefit from moving more callbacks to controllers
-   - Session save/load could be fully delegated to SessionController
+### Completed Refactoring
+```
+main_window.py:
+├── 2886 → 2248 lines (Phase 1: ProcessingTab extraction)
+├── 2248 → 1616 lines (Phase 2: Controller delegation)
+└── Total reduction: 44% (1270 lines removed)
 
-2. **data_load_tab.py (765 lines)** - PRIORITY: MEDIUM
+Methods moved to controllers:
+├── on_files_selected logic → DataController (~150 lines)
+├── Window management → WindowController (~40 lines)
+├── Session save/load → SessionController (~200 lines)
+├── Peak detection → PeakController (~80 lines)
+├── Export operations → ExportController (~100 lines)
+├── Menu creation → MenuBarHelper (~150 lines)
+└── View toggles → ViewStateManager (~50 lines)
+```
+
+### Remaining Refactoring Candidates
+```
+1. main_window.py (1616 lines) - PRIORITY: LOW (greatly reduced)
+   - on_processing_finished() still complex (could split further)
+   - restore_session_gui() still complex
+   
+2. data_load_tab.py (765 lines) - PRIORITY: MEDIUM
    - Could benefit from extracting panels to submodules
 
-3. **azimuthal_tab.py (720 lines)** - PRIORITY: MEDIUM
+3. azimuthal_tab.py (720 lines) - PRIORITY: MEDIUM
    - Could benefit from extracting settings panel
+```
 
 ## Cross-Package Dependencies
 
@@ -300,7 +353,7 @@ cli/ ─────────────────────────
 ## Config Dependencies
 ```
 config/settings.py      → Used by: api/, gui/, cli/
-config/session.py       → Used by: gui/main_window.py, gui/main_window_modules/controllers/session_controller.py
+config/session.py       → Used by: gui/main_window.py, SessionController
 config/schemas.py       → Used by: api/, config/settings.py
 config/plot_properties.py → Used by: gui/docks/properties/
 ```
@@ -318,9 +371,17 @@ config/plot_properties.py → Used by: gui/docks/properties/
 | RejectionEngine | processing/rejection/engine.py | Coordinate rejection algorithms |
 | AzimuthalHVSRProcessor | processing/azimuthal/ | Azimuthal processing |
 | HVSRPlotter | visualization/plotter.py | High-level plotting |
-| HVSRMainWindow | gui/main_window.py | Main application window |
+| HVSRMainWindow | gui/main_window.py | Main application window (1616 lines) |
+| DataController | gui/main_window_modules/controllers/ | Data loading operations |
+| ProcessingController | gui/main_window_modules/controllers/ | Processing operations |
+| PlottingController | gui/main_window_modules/controllers/ | Plot operations |
+| SessionController | gui/main_window_modules/controllers/ | Session management |
+| WindowController | gui/main_window_modules/controllers/ | Window management |
+| PeakController | gui/main_window_modules/controllers/ | Peak detection |
+| ExportController | gui/main_window_modules/controllers/ | Export operations |
+| MenuBarHelper | gui/main_window_modules/menu_bar.py | Menu bar creation |
+| ViewStateManager | gui/main_window_modules/view_state.py | View state management |
 | DataLoadTab | gui/tabs/data_load_tab.py | Tab 0: Data loading |
-| ProcessingTab | gui/tabs/processing_tab.py | Tab 1: HVSR processing (NEW) |
+| ProcessingTab | gui/tabs/processing_tab.py | Tab 1: HVSR processing |
 | AzimuthalTab | gui/tabs/azimuthal_tab.py | Tab 2: Azimuthal processing |
-| FullProcessingSettings | gui/tabs/processing_tab.py | Combined processing settings |
 | HVSRAnalysis | api/analysis.py | High-level API |

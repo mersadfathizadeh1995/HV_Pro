@@ -45,7 +45,8 @@ if HAS_PYQT5:
     # Import modular controllers and panels for future use
     from hvsr_pro.gui.main_window_modules.controllers import (
         ProcessingController, PlottingController, 
-        SessionController, WindowController
+        SessionController, WindowController, DataController,
+        PeakController, ExportController
     )
     from hvsr_pro.gui.main_window_modules.panels import (
         ProcessingSettings, QCSettings, CoxFDWRASettings
@@ -92,6 +93,13 @@ class HVSRMainWindow(QMainWindow):
         self.plotting_ctrl = PlottingController(self.plot_manager, self)
         self.session_ctrl = SessionController(self)
         self.window_ctrl = WindowController(self)
+        self.data_ctrl = DataController(self)
+        self.peak_ctrl = PeakController(self)
+        self.export_ctrl = ExportController(self)
+        
+        # Import ViewStateManager locally to avoid circular imports
+        from hvsr_pro.gui.main_window_modules.view_state import ViewStateManager
+        self.view_state = ViewStateManager(self)
         
         # Connect controller signals
         self._connect_controller_signals()
@@ -135,6 +143,18 @@ class HVSRMainWindow(QMainWindow):
         
         # Window controller signals
         self.window_ctrl.statistics_updated.connect(self._on_window_stats_updated)
+        
+        # Data controller signals
+        self.data_ctrl.info_message.connect(self.add_info)
+        self.data_ctrl.loading_error.connect(self._on_data_load_error)
+        
+        # Peak controller signals
+        self.peak_ctrl.info_message.connect(self.add_info)
+        self.peak_ctrl.error_occurred.connect(self._on_peak_detection_error)
+        
+        # Export controller signals
+        self.export_ctrl.info_message.connect(self.add_info)
+        self.export_ctrl.error_occurred.connect(self._on_export_error)
     
     def _on_plot_updated(self):
         """Handle plot update from plotting controller."""
@@ -167,152 +187,11 @@ class HVSRMainWindow(QMainWindow):
         return super().eventFilter(obj, event)
     
     def create_menu_bar(self):
-        """Create menu bar with common actions."""
-        menubar = self.menuBar()
-        menubar.setNativeMenuBar(False)  # Fix for Windows menu bar click issues
+        """Create menu bar using MenuBarHelper."""
+        from hvsr_pro.gui.main_window_modules.menu_bar import MenuBarHelper
         
-        # Ensure menu bar is visible and can receive events
-        menubar.setVisible(True)
-
-        # File menu
-        file_menu = menubar.addMenu('&File')
-        
-        # Open action
-        open_action = file_menu.addAction('&Open...')
-        open_action.setShortcut('Ctrl+O')
-        open_action.triggered.connect(self.load_data_file)
-        
-        # Save results action
-        save_action = file_menu.addAction('&Save Results...')
-        save_action.setShortcut('Ctrl+S')
-        save_action.triggered.connect(self.export_results)
-        
-        file_menu.addSeparator()
-        
-        # Session menu items
-        save_session_action = file_menu.addAction('Save &Session...')
-        save_session_action.setShortcut('Ctrl+Shift+S')
-        save_session_action.triggered.connect(self.save_session)
-        save_session_action.setToolTip("Save current settings and state to resume later")
-        
-        load_session_action = file_menu.addAction('&Load Session...')
-        load_session_action.setShortcut('Ctrl+Shift+O')
-        load_session_action.triggered.connect(self.load_session)
-        load_session_action.setToolTip("Load a saved session file")
-        
-        file_menu.addSeparator()
-        
-        # Export figure action
-        export_fig_action = file_menu.addAction('&Export Figure...')
-        export_fig_action.setShortcut('Ctrl+E')
-        export_fig_action.triggered.connect(self.export_figure)
-        
-        file_menu.addSeparator()
-        
-        # Exit action
-        exit_action = file_menu.addAction('E&xit')
-        exit_action.setShortcut('Ctrl+Q')
-        exit_action.triggered.connect(self.close)
-        
-        # Edit menu
-        edit_menu = menubar.addMenu('&Edit')
-        
-        # Copy info action
-        copy_action = edit_menu.addAction('&Copy Info')
-        copy_action.setShortcut('Ctrl+C')
-        copy_action.triggered.connect(self.copy_info)
-        
-        # Clear info action
-        clear_action = edit_menu.addAction('C&lear Info')
-        clear_action.triggered.connect(lambda: self.info_text.clear())
-        
-        # View menu
-        view_menu = menubar.addMenu('&View')
-
-        # Processing Tab section
-        processing_submenu = QMenu('Processing Tab', self)
-
-        self.layers_action = processing_submenu.addAction('&Layers Dock')
-        self.layers_action.setShortcut('Ctrl+Shift+L')
-        self.layers_action.setCheckable(True)
-        self.layers_action.setChecked(True)
-        self.layers_action.triggered.connect(lambda checked: self.layers_dock.setVisible(checked))
-
-        self.peaks_action = processing_submenu.addAction('&Peak Picker Dock')
-        self.peaks_action.setShortcut('Ctrl+Shift+P')
-        self.peaks_action.setCheckable(True)
-        self.peaks_action.setChecked(True)
-        self.peaks_action.triggered.connect(lambda checked: self.peak_picker_dock.setVisible(checked))
-
-        self.props_action = processing_submenu.addAction('P&roperties Dock')
-        self.props_action.setShortcut('Ctrl+Shift+R')
-        self.props_action.setCheckable(True)
-        self.props_action.setChecked(True)
-        self.props_action.triggered.connect(lambda checked: self.properties_dock.setVisible(checked))
-
-        view_menu.addMenu(processing_submenu)
-        view_menu.addSeparator()
-
-        # Data Load Tab section
-        dataload_submenu = QMenu('Data Load Tab', self)
-
-        self.preview_action = dataload_submenu.addAction('&Preview Canvas')
-        self.preview_action.setShortcut('Ctrl+Shift+V')
-        self.preview_action.setCheckable(True)
-        self.preview_action.setChecked(True)
-        self.preview_action.triggered.connect(self.toggle_preview_canvas)
-
-        view_menu.addMenu(dataload_submenu)
-        view_menu.addSeparator()
-
-        # Tab visibility section
-        tabs_submenu = QMenu('Tabs', self)
-
-        self.azimuthal_tab_action = tabs_submenu.addAction('&Azimuthal Tab')
-        self.azimuthal_tab_action.setShortcut('Ctrl+3')
-        self.azimuthal_tab_action.setCheckable(True)
-        self.azimuthal_tab_action.setChecked(True)
-        self.azimuthal_tab_action.triggered.connect(self.toggle_azimuthal_tab)
-
-        view_menu.addMenu(tabs_submenu)
-        view_menu.addSeparator()
-
-        # Loaded Data Column (global)
-        self.loaded_data_action = view_menu.addAction('&Loaded Data Column')
-        self.loaded_data_action.setShortcut('Ctrl+Shift+D')
-        self.loaded_data_action.setCheckable(True)
-        self.loaded_data_action.setChecked(True)
-        self.loaded_data_action.triggered.connect(self.toggle_loaded_data_column)
-
-        view_menu.addSeparator()
-
-        # Plot Window (global)
-        plot_action = view_menu.addAction('&Plot Window')
-        plot_action.setShortcut('Ctrl+P')
-        plot_action.triggered.connect(self.toggle_plot_window)
-        
-        # Mode menu
-        mode_menu = menubar.addMenu('&Mode')
-
-        dataload_action = mode_menu.addAction('&Data Load')
-        dataload_action.setShortcut('Ctrl+1')
-        dataload_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(0))
-        dataload_action.setToolTip("Switch to Data Load tab (Ctrl+1)")
-
-        processing_action = mode_menu.addAction('&Processing')
-        processing_action.setShortcut('Ctrl+2')
-        processing_action.triggered.connect(lambda: self.mode_tabs.setCurrentIndex(1))
-        processing_action.setToolTip("Switch to Processing tab (Ctrl+2)")
-        
-        # Help menu
-        help_menu = menubar.addMenu('&Help')
-        
-        about_action = help_menu.addAction('&About')
-        about_action.triggered.connect(self.show_about)
-        
-        shortcuts_action = help_menu.addAction('&Keyboard Shortcuts')
-        shortcuts_action.setShortcut('F1')
-        shortcuts_action.triggered.connect(self.show_shortcuts)
+        self.menu_helper = MenuBarHelper(self)
+        self.menu_helper.build_complete_menu_bar()
     
     def copy_info(self):
         """Copy info text to clipboard."""
@@ -322,51 +201,14 @@ class HVSRMainWindow(QMainWindow):
             self.statusBar().showMessage("Info copied to clipboard", 2000)
     
     def show_about(self):
-        """Show about dialog."""
-        QMessageBox.about(self, "About HVSR Pro",
-            "<h2>HVSR Pro v2.0</h2>"
-            "<p>Professional Horizontal-to-Vertical Spectral Ratio Analysis</p>"
-            "<p>A comprehensive tool for seismic data processing and HVSR computation.</p>"
-            "<br>"
-            "<p><b>Features:</b></p>"
-            "<ul>"
-            "<li>Single file processing</li>"
-            "<li>Advanced quality control algorithms</li>"
-            "<li>Cox FDWRA peak consistency analysis</li>"
-            "<li>Interactive visualization</li>"
-            "<li>Customizable processing parameters</li>"
-            "</ul>"
-            "<br>"
-            "<p>© 2024 HVSR Pro Development Team</p>")
+        """Show about dialog. Delegates to menu_bar module."""
+        from hvsr_pro.gui.main_window_modules.menu_bar import show_about_dialog
+        show_about_dialog(self)
     
     def show_shortcuts(self):
-        """Show keyboard shortcuts dialog."""
-        shortcuts_text = """
-        <h3>Keyboard Shortcuts</h3>
-        <table cellpadding="5">
-        <tr><th colspan="2" align="left">File Operations</th></tr>
-        <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
-        <tr><td><b>Ctrl+S</b></td><td>Save results</td></tr>
-        <tr><td><b>Ctrl+E</b></td><td>Export figure</td></tr>
-        <tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>
-
-        <tr><th colspan="2" align="left"><br>Tab Navigation</th></tr>
-        <tr><td><b>Ctrl+1</b></td><td>Switch to Data Load tab</td></tr>
-        <tr><td><b>Ctrl+2</b></td><td>Switch to Processing tab</td></tr>
-
-        <tr><th colspan="2" align="left"><br>View Controls</th></tr>
-        <tr><td><b>Ctrl+P</b></td><td>Toggle plot window</td></tr>
-        <tr><td><b>Ctrl+Shift+L</b></td><td>Toggle Layers Dock</td></tr>
-        <tr><td><b>Ctrl+Shift+P</b></td><td>Toggle Peak Picker Dock</td></tr>
-        <tr><td><b>Ctrl+Shift+R</b></td><td>Toggle Properties Dock</td></tr>
-        <tr><td><b>Ctrl+Shift+V</b></td><td>Toggle Preview Canvas</td></tr>
-        <tr><td><b>Ctrl+Shift+D</b></td><td>Toggle Loaded Data Column</td></tr>
-
-        <tr><th colspan="2" align="left"><br>Other</th></tr>
-        <tr><td><b>F1</b></td><td>Show this help</td></tr>
-        </table>
-        """
-        QMessageBox.information(self, "Keyboard Shortcuts", shortcuts_text)
+        """Show keyboard shortcuts dialog. Delegates to menu_bar module."""
+        from hvsr_pro.gui.main_window_modules.menu_bar import show_shortcuts_dialog
+        show_shortcuts_dialog(self)
     
     def _get_cpu_count(self) -> int:
         """Get number of CPU cores."""
@@ -583,53 +425,20 @@ class HVSRMainWindow(QMainWindow):
         self.canvas.status_message.connect(self.status_bar.showMessage)
     
     def toggle_plot_window(self):
-        """Toggle between separate and embedded plot modes."""
-        if self.plot_manager.mode == 'separate':
-            self.plot_manager.show_separate()
-            self.plot_mode_button.setText("Dock Plot")
-        else:
-            self.plot_manager.show_embedded()
-            self.plot_mode_button.setText("Show Plot")
+        """Toggle between separate and embedded plot modes. Delegates to ViewStateManager."""
+        self.view_state.toggle_plot_window()
 
     def toggle_preview_canvas(self, checked):
-        """
-        Toggle preview canvas visibility.
-
-        Args:
-            checked: True to show, False to hide
-        """
-        if hasattr(self, 'data_load_tab'):
-            self.data_load_tab.preview_canvas.setVisible(checked)
+        """Toggle preview canvas visibility. Delegates to ViewStateManager."""
+        self.view_state.toggle_preview_canvas(checked)
 
     def toggle_loaded_data_column(self, checked):
-        """
-        Toggle loaded data column visibility.
-
-        Args:
-            checked: True to show, False to hide
-        """
-        if hasattr(self, 'data_load_tab'):
-            self.data_load_tab.set_loaded_list_visible(checked)
+        """Toggle loaded data column visibility. Delegates to ViewStateManager."""
+        self.view_state.toggle_loaded_data_column(checked)
 
     def toggle_azimuthal_tab(self, checked):
-        """
-        Toggle azimuthal tab visibility.
-
-        Args:
-            checked: True to show, False to hide
-        """
-        if hasattr(self, 'azimuthal_tab'):
-            # Find the tab index
-            for i in range(self.mode_tabs.count()):
-                if self.mode_tabs.widget(i) == self.azimuthal_tab:
-                    if checked:
-                        self.mode_tabs.setTabVisible(i, True)
-                    else:
-                        self.mode_tabs.setTabVisible(i, False)
-                        # If currently on azimuthal tab, switch to processing
-                        if self.mode_tabs.currentIndex() == i:
-                            self.mode_tabs.setCurrentIndex(1)
-                    break
+        """Toggle azimuthal tab visibility. Delegates to ViewStateManager."""
+        self.view_state.toggle_azimuthal_tab(checked)
     
     def on_view_mode_changed(self, mode: str):
         """Handle view mode change."""
@@ -705,158 +514,68 @@ class HVSRMainWindow(QMainWindow):
         dialog.exec_()
     
     def on_files_selected(self, result: dict):
-        """Handle files selected from DataInputDialog."""
-        mode = result['mode']
-        files = result['files']
-        groups = result['groups']
-        options = result['options']
-        time_range = result.get('time_range')  # May be None
-
+        """
+        Handle files selected from DataInputDialog.
+        
+        Delegates loading to DataController and updates UI after load.
+        """
+        # Delegate loading to DataController
+        load_result = self.data_ctrl.load_from_dialog_result(result)
+        
+        if load_result.success:
+            self._update_ui_after_load(load_result)
+        else:
+            QMessageBox.critical(self, "Load Error", load_result.error_message)
+            self.add_info(f"ERROR: {load_result.error_message.split(chr(10))[0]}")
+    
+    def _update_ui_after_load(self, load_result):
+        """
+        Update UI components after successful data load.
+        
+        Args:
+            load_result: LoadResult from DataController
+        """
         # Store load mode and time range
-        self.load_mode = mode
-        self.current_time_range = time_range
-
-        # Log time range if enabled
-        if time_range and time_range.get('enabled'):
-            start = time_range['start']
-            end = time_range['end']
-            tz_name = time_range.get('timezone_name', 'UTC')
-            self.add_info(f"Time range selected: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({tz_name})")
-
-        # Load data and add to Data Load tab
-        try:
-            handler = HVSRDataHandler()
-
-            if mode == 'single':
-                # Single file mode
-                file_path = files[0]
-                self.add_info(f"Loading: {Path(file_path).name}...")
-
-                data = handler.load_data(file_path)
-
-                # Get file metadata
-                file_size = Path(file_path).stat().st_size / (1024 * 1024)  # MB
-                metadata = {
-                    'duration': data.duration,
-                    'sampling_rate': data.east.sampling_rate,
-                    'size_mb': file_size,
-                    'status': 'loaded'
-                }
-
-                # Convert time_range to seconds if provided
-                tr_seconds = None
-                if time_range and time_range.get('enabled'):
-                    start_dt = time_range['start']
-                    end_dt = time_range['end']
-                    # Calculate duration in seconds
-                    duration_seconds = (end_dt - start_dt).total_seconds()
-                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
-
-                # Add to data load tab
-                self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
-                
-                # Update preview canvas time filter if time range was specified
-                if time_range and time_range.get('enabled'):
-                    self._apply_time_range_to_preview(time_range, data)
-
-                # Store for processing
-                self.current_file = file_path
-                self.process_btn.setEnabled(True)
-                self.add_info(f"Loaded: {Path(file_path).name}")
-
-            elif mode == 'multi_type1':
-                # Multiple files with E,N,Z in each
-                self.add_info(f"Loading {len(files)} MiniSEED files...")
-
-                # Extract channel mapping from options if provided
-                channel_mapping = options.get('channel_mapping', None)
-                if channel_mapping:
-                    self.add_info(f"Using channel mapping: {channel_mapping}")
-                    data = handler.load_multi_miniseed_type1(files, channel_mapping=channel_mapping)
-                else:
-                    data = handler.load_multi_miniseed_type1(files)
-
-                # Convert time_range to seconds if provided
-                tr_seconds = None
-                if time_range and time_range.get('enabled'):
-                    start_dt = time_range['start']
-                    end_dt = time_range['end']
-                    duration_seconds = (end_dt - start_dt).total_seconds()
-                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
-
-                # Add each file individually to the list
-                for file_path in files:
-                    file_size = Path(file_path).stat().st_size / (1024 * 1024)
-                    # Estimate duration per file (approximate)
-                    file_duration = data.duration / len(files)
-                    metadata = {
-                        'duration': file_duration,
-                        'sampling_rate': data.east.sampling_rate,
-                        'size_mb': file_size,
-                        'status': 'loaded'
-                    }
-                    self.data_load_tab.add_loaded_file(file_path, data, metadata, tr_seconds)
-                
-                # Update preview canvas time filter if time range was specified
-                if time_range and time_range.get('enabled'):
-                    self._apply_time_range_to_preview(time_range, data)
-
-                # Store for processing
-                self.current_file = files
-                self.process_btn.setEnabled(True)
-                self.add_info(f"Loaded {len(files)} files (merged chronologically)")
-
-            elif mode == 'multi_type2':
-                # Separate E, N, Z files
-                complete = sum(1 for g in groups.values() if 'E' in g and 'N' in g and 'Z' in g)
-                self.add_info(f"Loading {complete} file groups...")
-                data = handler.load_multi_miniseed_type2(groups)
-
-                # Convert time_range to seconds if provided
-                tr_seconds = None
-                if time_range and time_range.get('enabled'):
-                    start_dt = time_range['start']
-                    end_dt = time_range['end']
-                    duration_seconds = (end_dt - start_dt).total_seconds()
-                    tr_seconds = {'start': 0.0, 'end': duration_seconds}
-
-                # Add each file group to the list
-                file_duration_per_group = data.duration / complete if complete > 0 else data.duration
-                for group_name, group_files in groups.items():
-                    if all(c in group_files for c in ['E', 'N', 'Z']):
-                        # Calculate size for this group
-                        group_size = sum(Path(str(f)).stat().st_size for f in group_files.values()) / (1024 * 1024)
-
-                        # Use group name as display name
-                        display_name = f"{group_name} (E/N/Z)"
-                        metadata = {
-                            'duration': file_duration_per_group,
-                            'sampling_rate': data.east.sampling_rate,
-                            'size_mb': group_size,
-                            'status': 'loaded'
-                        }
-                        self.data_load_tab.add_loaded_file(display_name, data, metadata, tr_seconds)
-                
-                # Update preview canvas time filter if time range was specified
-                if time_range and time_range.get('enabled'):
-                    self._apply_time_range_to_preview(time_range, data)
-
-                # Store for processing
-                self.current_file = groups
-                self.process_btn.setEnabled(True)
-                self.add_info(f"Loaded {complete} groups (3-component streams)")
-
-            # Update collapsible data panels in Processing and Azimuthal tabs
-            if hasattr(self, 'processing_data_panel'):
-                self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
-            if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'data_panel'):
-                self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
-
-        except Exception as e:
-            import traceback
-            error_msg = f"Failed to load data: {str(e)}\n{traceback.format_exc()}"
-            QMessageBox.critical(self, "Load Error", error_msg)
-            self.add_info(f"ERROR: {str(e)}")
+        self.load_mode = load_result.mode
+        self.current_time_range = load_result.time_range
+        
+        # Get time range in seconds format
+        tr_seconds = load_result.time_range_seconds
+        
+        # Add files to data load tab
+        for metadata in load_result.metadata_list:
+            display_name = metadata.get('display_name', metadata.get('file_path', 'Unknown'))
+            self.data_load_tab.add_loaded_file(
+                display_name, 
+                load_result.data, 
+                metadata, 
+                tr_seconds
+            )
+        
+        # Update preview canvas time filter if time range was specified
+        if load_result.time_range and load_result.time_range.get('enabled'):
+            self._apply_time_range_to_preview(load_result.time_range, load_result.data)
+        
+        # Store for processing
+        if load_result.mode == 'single':
+            self.current_file = load_result.files[0] if load_result.files else None
+        elif load_result.mode == 'multi_type1':
+            self.current_file = load_result.files
+        elif load_result.mode == 'multi_type2':
+            self.current_file = load_result.groups
+        
+        self.process_btn.setEnabled(True)
+        
+        # Update collapsible data panels in Processing and Azimuthal tabs
+        if hasattr(self, 'processing_data_panel'):
+            self.processing_data_panel.update_from_data_load_tab(self.data_load_tab)
+        if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'data_panel'):
+            self.azimuthal_tab.data_panel.update_from_data_load_tab(self.data_load_tab)
+    
+    def _on_data_load_error(self, error_msg: str):
+        """Handle data loading error from controller."""
+        QMessageBox.critical(self, "Load Error", error_msg)
+        self.add_info(f"ERROR: {error_msg}")
     
     def _apply_time_range_to_preview(self, time_range: dict, data):
         """
@@ -1118,6 +837,9 @@ class HVSRMainWindow(QMainWindow):
         self.windows = windows
         self.data = data
         
+        # Update WindowController with windows reference
+        self.window_ctrl.set_windows(windows)
+        
         # Update UI via processing tab
         if hasattr(self, 'processing_tab'):
             self.processing_tab.set_progress(0, visible=False)
@@ -1305,50 +1027,25 @@ class HVSRMainWindow(QMainWindow):
         self.add_info(f"ERROR: {error_msg}")
     
     def on_window_toggled(self, window_index: int):
-        """Handle window toggle event from canvas."""
-        if self.windows is None:
-            return
+        """Handle window toggle event from canvas. Delegates to WindowController."""
+        new_state = self.window_ctrl.toggle_window(window_index)
+        action = "Activated" if new_state else "Rejected"
+        self.add_info(f"{action} window {window_index}")
         
-        window = self.windows.get_window(window_index)
-        if window is None:
-            return
-        
-        # Toggle state
-        if window.is_active():
-            window.reject("Manual rejection", manual=True)
-            self.add_info(f"Rejected window {window_index}")
-        else:
-            window.activate()
-            self.add_info(f"Activated window {window_index}")
-        
-        # Update info
+        # Update info and refresh canvas
         self.update_window_info()
-        
-        # Refresh canvas
         self.canvas.update_window_states()
     
     def reject_all_windows(self):
-        """Reject all windows."""
-        if self.windows is None:
-            return
-        
-        for window in self.windows.windows:
-            if window.is_active():
-                window.reject("Batch rejection", manual=True)
-        
+        """Reject all windows. Delegates to WindowController."""
+        self.window_ctrl.reject_all()
         self.update_window_info()
         self.canvas.update_window_states()
         self.add_info("Rejected all windows")
     
     def accept_all_windows(self):
-        """Accept all windows."""
-        if self.windows is None:
-            return
-        
-        for window in self.windows.windows:
-            if window.is_rejected():
-                window.activate()
-        
+        """Accept all windows. Delegates to WindowController."""
+        self.window_ctrl.accept_all()
         self.update_window_info()
         self.canvas.update_window_states()
         self.add_info("Accepted all windows")
@@ -1393,359 +1090,105 @@ class HVSRMainWindow(QMainWindow):
         self.window_info_label.setText(info)
     
     def generate_report_plots(self):
-        """Open advanced export dialog for comprehensive visualizations."""
-        if self.hvsr_result is None:
-            QMessageBox.warning(self, "No Results", "No results to export.")
-            return
-        
-        from hvsr_pro.gui.dialogs import ExportDialog
-        
-        dialog = ExportDialog(self, self.hvsr_result, self.windows, self.data)
-        dialog.exec_()
+        """Open advanced export dialog. Delegates to ExportController."""
+        self.export_ctrl.set_references(self.hvsr_result, self.windows, self.data, self.plot_manager)
+        self.export_ctrl.open_report_dialog()
     
     def export_results(self):
-        """Export HVSR results (curve data, peaks, metadata)."""
+        """Export HVSR results. Delegates to ExportController."""
         if self.hvsr_result is None:
             QMessageBox.warning(self, "No Results", "No results to export.")
             return
         
-        # Select output directory
-        output_dir = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory"
-        )
+        self.export_ctrl.set_references(self.hvsr_result, self.windows, self.data, self.plot_manager)
+        result = self.export_ctrl.export_results()
         
-        if output_dir:
-            try:
-                from hvsr_pro.utils.export_utils import export_complete_dataset
-                
-                # Export complete dataset
-                created_files = export_complete_dataset(
-                    self.hvsr_result,
-                    output_dir,
-                    base_filename="hvsr"
-                )
-                
-                self.add_info(f"Exported to: {output_dir}")
-                for file_type, filepath in created_files.items():
-                    filename = Path(filepath).name
-                    self.add_info(f"   - {filename} ({file_type})")
-                
-                QMessageBox.information(
-                    self, "Export Complete",
-                    f"Results exported to:\n{output_dir}\n\n"
-                    f"Files created:\n" +
-                    "\n".join([f"• {Path(f).name}" for f in created_files.values()])
-                )
-                
-            except Exception as e:
-                import traceback
-                error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-                QMessageBox.critical(self, "Export Error", error_msg)
-                self.add_info(f"ERROR - Export: {str(e)}")
+        if result.success:
+            QMessageBox.information(
+                self, "Export Complete",
+                f"Results exported to:\n{result.file_path}\n\n"
+                f"Files created:\n" +
+                "\n".join([f"• {Path(f).name}" for f in result.created_files.values()])
+            )
+        elif result.error_message:
+            QMessageBox.critical(self, "Export Error", result.error_message)
     
     def save_session(self):
         """
         Save current session state including all settings and computed data.
-        
-        Note: This method contains inline session logic. Future refactoring
-        should delegate to SessionController for better separation of concerns.
-        The SessionController.save_session() provides a simplified interface
-        but this method handles the full state extraction for now.
+        Delegates to SessionController for the heavy lifting.
         """
-        from hvsr_pro.config.session import (
-            SessionManager, SessionState, 
-            ProcessingSettings as SessionProcessingSettings,
-            QCSettings as SessionQCSettings,
-            FileInfo, WindowState
-        )
+        # Sync work directory with controller
+        self.session_ctrl.set_work_directory(getattr(self, '_work_directory', ''))
         
-        # Get work directory for default save location
-        work_dir = getattr(self, '_work_directory', '')
+        # Delegate to session controller
+        result = self.session_ctrl.save_full_session(self)
         
-        if not work_dir:
-            # Ask user to set work directory first
-            reply = QMessageBox.question(
-                self, "Work Directory Required",
-                "Please set a work directory first to save sessions.\n\n"
-                "Would you like to select a work directory now?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            if reply == QMessageBox.Yes:
-                work_dir = QFileDialog.getExistingDirectory(
-                    self, "Select Work Directory"
-                )
-                if work_dir:
-                    self._work_directory = work_dir
-                    if hasattr(self, 'data_load_tab') and hasattr(self.data_load_tab, 'work_dir_edit'):
-                        self.data_load_tab.work_dir_edit.setText(work_dir)
-                else:
-                    return
-            else:
-                return
-        
-        manager = SessionManager(work_directory=work_dir)
-        
-        # Build session state
-        state = SessionState()
-        state.work_directory = work_dir
-        
-        # File info
-        current_file = getattr(self, 'current_file', '')
-        if isinstance(current_file, list):
-            current_file = ';'.join(str(f) for f in current_file)
-        state.file_info = FileInfo(
-            path=str(current_file) if current_file else '',
-            load_mode=getattr(self, 'load_mode', 'single')
-        )
-        
-        # Processing settings
-        state.processing = SessionProcessingSettings(
-            window_length=self.window_length_spin.value() if hasattr(self, 'window_length_spin') else 60.0,
-            overlap=self.overlap_spin.value() / 100.0 if hasattr(self, 'overlap_spin') else 0.5,
-            smoothing_bandwidth=self.smoothing_spin.value() if hasattr(self, 'smoothing_spin') else 40.0,
-            f_min=self.freq_min_spin.value() if hasattr(self, 'freq_min_spin') else 0.2,
-            f_max=self.freq_max_spin.value() if hasattr(self, 'freq_max_spin') else 20.0,
-            n_frequencies=self.freq_points_spin.value() if hasattr(self, 'freq_points_spin') else 100
-        )
-        
-        # QC settings
-        state.qc = SessionQCSettings(
-            enabled=self.qc_enable_check.isChecked() if hasattr(self, 'qc_enable_check') else True,
-            mode=self.qc_combo.currentData() if hasattr(self, 'qc_combo') else 'balanced',
-            cox_fdwra_enabled=self.cox_fdwra_check.isChecked() if hasattr(self, 'cox_fdwra_check') else False,
-            cox_n=self.cox_n_spin.value() if hasattr(self, 'cox_n_spin') else 2.0,
-            cox_max_iterations=self.cox_iterations_spin.value() if hasattr(self, 'cox_iterations_spin') else 50,
-            cox_min_iterations=self.cox_min_iterations_spin.value() if hasattr(self, 'cox_min_iterations_spin') else 1,
-            cox_distribution=self.cox_dist_combo.currentText() if hasattr(self, 'cox_dist_combo') else 'lognormal'
-        )
-        
-        # Window states
-        if self.windows and hasattr(self.windows, 'windows'):
-            state.window_states = [
-                WindowState(
-                    index=i,
-                    active=w.is_active(),
-                    rejection_reason=getattr(w, 'rejection_reason', None)
-                )
-                for i, w in enumerate(self.windows.windows)
-            ]
-            state.n_total_windows = len(self.windows.windows)
-            state.n_active_windows = self.windows.n_active
-        
-        # Results summary
-        if self.hvsr_result:
-            state.has_results = True
-            # Try to get peak_frequency from various possible attributes
-            peak_freq = None
-            if hasattr(self.hvsr_result, 'peak_frequency') and self.hvsr_result.peak_frequency is not None:
-                peak_freq = float(self.hvsr_result.peak_frequency)
-            elif hasattr(self.hvsr_result, 'f0') and self.hvsr_result.f0 is not None:
-                peak_freq = float(self.hvsr_result.f0)
-            elif hasattr(self.hvsr_result, 'peaks') and self.hvsr_result.peaks:
-                # Try to get from peaks list
-                if isinstance(self.hvsr_result.peaks, list) and len(self.hvsr_result.peaks) > 0:
-                    first_peak = self.hvsr_result.peaks[0]
-                    if isinstance(first_peak, dict) and 'frequency' in first_peak:
-                        peak_freq = float(first_peak['frequency'])
-                    elif hasattr(first_peak, 'frequency'):
-                        peak_freq = float(first_peak.frequency)
-            state.peak_frequency = peak_freq
-            
-            # Try to get peak_amplitude
-            peak_amp = None
-            if hasattr(self.hvsr_result, 'peak_amplitude') and self.hvsr_result.peak_amplitude is not None:
-                peak_amp = float(self.hvsr_result.peak_amplitude)
-            elif hasattr(self.hvsr_result, 'a0') and self.hvsr_result.a0 is not None:
-                peak_amp = float(self.hvsr_result.a0)
-            state.peak_amplitude = peak_amp
-        
-        # Get seismic data if available
-        seismic_data = getattr(self, 'seismic_data', None)
-        
-        # Get azimuthal result if available (from azimuthal tab)
-        azimuthal_result = None
-        if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'result'):
-            azimuthal_result = self.azimuthal_tab.result
-        
-        # Save full session with pickled data
-        session_folder = manager.save_full_session(
-            state=state,
-            windows=self.windows,
-            hvsr_result=self.hvsr_result,
-            seismic_data=seismic_data,
-            azimuthal_result=azimuthal_result
-        )
-        
-        if session_folder:
-            self.add_info(f"Session saved: {Path(session_folder).name}")
-            
-            # Build info message
-            info_msg = f"Session saved successfully to:\n{session_folder}\n\n"
-            info_msg += "Saved data:\n"
-            info_msg += f"  - Settings and metadata\n"
-            if self.windows:
-                info_msg += f"  - Window collection ({state.n_total_windows} windows)\n"
-            if self.hvsr_result:
-                if state.peak_frequency is not None:
-                    info_msg += f"  - HVSR results (f0 = {state.peak_frequency:.3f} Hz)\n"
-                else:
-                    info_msg += f"  - HVSR results\n"
-            if seismic_data:
-                info_msg += f"  - Original seismic data\n"
-            if azimuthal_result:
-                info_msg += f"  - Azimuthal processing results\n"
-            
-            QMessageBox.information(self, "Session Saved", info_msg)
+        if result.success:
+            QMessageBox.information(self, "Session Saved", result.info_message)
         else:
-            QMessageBox.critical(
-                self, "Save Failed",
-                "Failed to save session. Check the log for details."
-            )
+            QMessageBox.critical(self, "Save Failed", result.error_message)
     
     def load_session(self):
         """
         Load saved session state including computed data.
-        
-        Note: This method contains inline session logic. Future refactoring
-        should delegate to SessionController for better separation of concerns.
-        The SessionController.load_session() provides a simplified interface
-        but this method handles the full state restoration for now.
+        Delegates to SessionController for loading and applies state to GUI.
         """
-        from hvsr_pro.config.session import SessionManager
+        # Sync work directory with controller
+        self.session_ctrl.set_work_directory(getattr(self, '_work_directory', ''))
         
-        # Get work directory for default location
-        work_dir = getattr(self, '_work_directory', '')
-        default_dir = work_dir if work_dir else str(Path.home())
+        # Delegate loading to session controller
+        result = self.session_ctrl.load_full_session()
         
-        # Check for sessions folder
-        sessions_dir = Path(default_dir) / 'sessions' if default_dir else None
-        if sessions_dir and sessions_dir.exists():
-            default_dir = str(sessions_dir)
-        
-        manager = SessionManager(work_directory=work_dir)
-        
-        # Allow user to select session.json or session folder
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Session",
-            default_dir,
-            "Session Files (session.json);;All Files (*)"
-        )
-        
-        if not file_path:
+        if not result.success:
+            if result.error_message:
+                QMessageBox.critical(self, "Load Failed", result.error_message)
             return
         
-        # Load full session with pickled data
-        state, windows, hvsr_result, seismic_data, azimuthal_result = manager.load_full_session(file_path)
+        # Apply settings to GUI via controller
+        self.session_ctrl.apply_session_state(self, result)
         
-        if not state:
-            QMessageBox.critical(
-                self, "Load Failed",
-                "Failed to load session. The file may be corrupted or invalid."
-            )
-            return
-        
-        # Apply settings to GUI
-        # Work directory
-        self._work_directory = state.work_directory
-        if hasattr(self, 'data_load_tab') and hasattr(self.data_load_tab, 'work_dir_edit'):
-            self.data_load_tab.work_dir_edit.setText(state.work_directory)
-        
-        # Processing settings
-        if hasattr(self, 'window_length_spin'):
-            self.window_length_spin.setValue(state.processing.window_length)
-        if hasattr(self, 'overlap_spin'):
-            self.overlap_spin.setValue(int(state.processing.overlap * 100))
-        if hasattr(self, 'smoothing_spin'):
-            self.smoothing_spin.setValue(state.processing.smoothing_bandwidth)
-        if hasattr(self, 'freq_min_spin'):
-            self.freq_min_spin.setValue(state.processing.f_min)
-        if hasattr(self, 'freq_max_spin'):
-            self.freq_max_spin.setValue(state.processing.f_max)
-        if hasattr(self, 'freq_points_spin'):
-            self.freq_points_spin.setValue(state.processing.n_frequencies)
-        
-        # QC settings
-        if hasattr(self, 'qc_enable_check'):
-            self.qc_enable_check.setChecked(state.qc.enabled)
-        if hasattr(self, 'qc_combo'):
-            idx = self.qc_combo.findData(state.qc.mode)
-            if idx >= 0:
-                self.qc_combo.setCurrentIndex(idx)
-        if hasattr(self, 'cox_fdwra_check'):
-            self.cox_fdwra_check.setChecked(state.qc.cox_fdwra_enabled)
-        if hasattr(self, 'cox_n_spin'):
-            self.cox_n_spin.setValue(state.qc.cox_n)
-        if hasattr(self, 'cox_iterations_spin'):
-            self.cox_iterations_spin.setValue(state.qc.cox_max_iterations)
-        if hasattr(self, 'cox_min_iterations_spin'):
-            self.cox_min_iterations_spin.setValue(state.qc.cox_min_iterations)
-        if hasattr(self, 'cox_dist_combo'):
-            self.cox_dist_combo.setCurrentText(state.qc.cox_distribution)
-        
-        # Store file info and restore to data load tab
-        if state.file_info.path:
-            self.current_file = state.file_info.path
-            self.load_mode = state.file_info.load_mode
-            
-            # Restore file path to data load tab UI
-            if hasattr(self, 'data_load_tab'):
-                # Try to find the file path display widget
-                if hasattr(self.data_load_tab, 'file_path_edit'):
-                    self.data_load_tab.file_path_edit.setText(state.file_info.path)
-                elif hasattr(self.data_load_tab, 'file_label'):
-                    self.data_load_tab.file_label.setText(f"File: {state.file_info.path}")
-                
-                # Check if file exists and show warning if not
-                from pathlib import Path as PathLib
-                if not PathLib(state.file_info.path).exists():
-                    self.add_info(f"Warning: Original file not found: {state.file_info.path}")
-                else:
-                    self.add_info(f"Original file path restored: {state.file_info.path}")
-        
-        # Also store seismic_data attribute
-        if seismic_data is not None:
-            self.seismic_data = seismic_data
-        
-        # Build info message for user
+        # Build info message
+        state = result.state
         restored_data = []
-        if windows is not None:
-            restored_data.append(f"Window collection ({state.n_total_windows} windows, {state.n_active_windows} active)")
-        if hvsr_result is not None:
-            if state.peak_frequency is not None:
-                restored_data.append(f"HVSR results (f0 = {state.peak_frequency:.3f} Hz)")
+        if result.windows is not None:
+            n_total = getattr(state, 'n_total_windows', 0)
+            n_active = getattr(state, 'n_active_windows', 0)
+            restored_data.append(f"Window collection ({n_total} windows, {n_active} active)")
+        if result.hvsr_result is not None:
+            peak_freq = getattr(state, 'peak_frequency', None)
+            if peak_freq is not None:
+                restored_data.append(f"HVSR results (f0 = {peak_freq:.3f} Hz)")
             else:
                 restored_data.append("HVSR results")
-        if seismic_data is not None:
+        if result.seismic_data is not None:
             restored_data.append("Original seismic data")
-        if azimuthal_result is not None:
+        if result.azimuthal_result is not None:
             restored_data.append("Azimuthal processing results")
         
-        self.add_info(f"Session loaded: {Path(state.session_folder).name}")
+        session_name = Path(getattr(state, 'session_folder', '')).name if state else 'Unknown'
+        self.add_info(f"Session loaded: {session_name}")
         
         # Restore full GUI state if we have complete data
-        if hvsr_result is not None and windows is not None:
+        if result.hvsr_result is not None and result.windows is not None:
             self.add_info("Restoring GUI with HVSR results and windows...")
             try:
-                # Use the proper restore method that mirrors on_processing_finished()
-                self.restore_session_gui(hvsr_result, windows, seismic_data)
+                self.restore_session_gui(result.hvsr_result, result.windows, result.seismic_data)
                 self.add_info("GUI fully restored - plot, layers, and docks updated")
             except Exception as e:
                 self.add_info(f"Warning: Partial restore - {str(e)}")
         
         # Restore azimuthal results if available
-        if azimuthal_result is not None and hasattr(self, 'azimuthal_tab'):
+        if result.azimuthal_result is not None and hasattr(self, 'azimuthal_tab'):
             try:
-                self.azimuthal_tab.result = azimuthal_result
+                self.azimuthal_tab.result = result.azimuthal_result
                 self.azimuthal_tab.update_plot()
                 self.add_info("Azimuthal results restored")
             except Exception as e:
                 self.add_info(f"Warning: Could not restore azimuthal results - {str(e)}")
         
         # Build info message
-        info_msg = f"Session loaded successfully!\n\n"
-        info_msg += f"Session: {Path(state.session_folder).name}\n\n"
-        
+        info_msg = f"Session loaded successfully!\n\nSession: {session_name}\n\n"
         if restored_data:
             info_msg += "Restored data:\n"
             for item in restored_data:
@@ -1753,8 +1196,9 @@ class HVSRMainWindow(QMainWindow):
             info_msg += "\nAll data restored - no re-processing needed!"
         else:
             info_msg += "Settings restored. Data will need to be re-processed.\n"
-            if state.file_info.path:
-                info_msg += f"\nOriginal file: {state.file_info.path}"
+            file_path = getattr(state.file_info, 'path', '') if hasattr(state, 'file_info') else ''
+            if file_path:
+                info_msg += f"\nOriginal file: {file_path}"
         
         QMessageBox.information(self, "Session Loaded", info_msg)
     
@@ -1772,6 +1216,10 @@ class HVSRMainWindow(QMainWindow):
         self.hvsr_result = hvsr_result
         self.windows = windows
         self.data = seismic_data
+        
+        # Update WindowController with windows reference
+        if windows is not None:
+            self.window_ctrl.set_windows(windows)
         
         # Log data availability for debugging
         self.add_info(f"Session data: HVSR={'Yes' if hvsr_result else 'No'}, "
@@ -1870,89 +1318,49 @@ class HVSRMainWindow(QMainWindow):
             self.recompute_btn.setEnabled(True)
     
     def on_peaks_changed(self, peaks: list):
-        """Handle peak list changes from dock."""
-        # Update plot markers
-        self.plot_manager.add_peak_markers(peaks)
-        self.add_info(f"Peaks updated: {len(peaks)} peak(s) - markers updated on plot")
+        """Handle peak list changes from dock. Delegates to PeakController."""
+        self.peak_ctrl.set_references(self.hvsr_result, self.peak_picker_dock, self.plot_manager)
+        self.peak_ctrl.on_peaks_changed(peaks)
     
     def on_detect_peaks_requested(self, mode: str, settings: dict):
-        """Handle peak detection request from dock."""
+        """Handle peak detection request from dock. Delegates to PeakController."""
         if self.hvsr_result is None:
             QMessageBox.warning(self, "No Data", "Please process HVSR data first.")
             return
         
-        self.add_info(f"Peak detection: mode={mode}, settings={settings}")
+        # Set up controller with current references
+        self.peak_ctrl.set_references(self.hvsr_result, self.peak_picker_dock, self.plot_manager)
         
-        try:
-            from hvsr_pro.processing.windows import find_top_n_peaks, find_multi_peaks
-            
-            frequencies = self.hvsr_result.frequencies
-            mean_hvsr = self.hvsr_result.mean_hvsr
-            
-            # Run appropriate detection algorithm
-            if mode == "auto_top_n":
-                peaks = find_top_n_peaks(
-                    frequencies,
-                    mean_hvsr,
-                    n_peaks=settings['n_peaks'],
-                    prominence=settings['prominence'],
-                    freq_range=(settings['freq_min'], settings['freq_max'])
-                )
-                self.add_info(f"Auto Top N: Found {len(peaks)} peak(s)")
-                
-            elif mode == "auto_multi":
-                peaks = find_multi_peaks(
-                    frequencies,
-                    mean_hvsr,
-                    prominence=settings['prominence'],
-                    min_distance=settings['min_distance'],
-                    freq_range=(settings['freq_min'], settings['freq_max'])
-                )
-                self.add_info(f"Auto Multi: Found {len(peaks)} peak(s)")
-            
-            else:
-                self.add_info(f"Unknown mode: {mode}")
-                return
-            
-            # Add peaks to dock
-            if peaks:
-                self.peak_picker_dock.add_peaks(peaks)
-                
-                # Log peak details
-                for i, peak in enumerate(peaks, 1):
-                    self.add_info(f"  Peak {i}: f={peak['frequency']:.2f} Hz, A={peak['amplitude']:.2f}")
-            else:
-                QMessageBox.information(self, "No Peaks", "No peaks found with current settings.\nTry lowering prominence threshold.")
-                self.add_info("No peaks detected - try different settings")
+        # Detect peaks
+        peaks = self.peak_ctrl.detect_peaks(mode, settings)
         
-        except Exception as e:
-            QMessageBox.critical(self, "Detection Error", f"Peak detection failed:\n{str(e)}")
-            self.add_info(f"ERROR - Peak detection: {str(e)}")
+        # Add to dock if found
+        if peaks:
+            self.peak_picker_dock.add_peaks(peaks)
+        else:
+            QMessageBox.information(
+                self, "No Peaks", 
+                "No peaks found with current settings.\nTry lowering prominence threshold."
+            )
     
     def on_manual_mode_requested(self, activate: bool):
-        """Handle manual peak picking mode toggle."""
+        """Handle manual peak picking mode toggle. Delegates to PeakController."""
+        self.peak_ctrl.set_references(self.hvsr_result, self.peak_picker_dock, self.plot_manager)
+        
         if activate:
-            # Enable manual picking on plot
-            self.plot_manager.enable_manual_picking(self.on_manual_peak_selected)
-            self.add_info("Manual peak picking ACTIVE - Click on HVSR curve to add peak")
+            self.peak_ctrl.enable_manual_mode(self.on_manual_peak_selected)
             self.status_bar.showMessage("MANUAL MODE: Click on HVSR curve to add peak")
         else:
-            # Disable manual picking
-            self.plot_manager.disable_manual_picking()
-            self.add_info("Manual peak picking deactivated")
+            self.peak_ctrl.disable_manual_mode()
             self.status_bar.showMessage("Ready")
     
     def on_manual_peak_selected(self, frequency: float, amplitude: float):
-        """
-        Handle manual peak selection from plot click.
-        
-        Args:
-            frequency: Clicked frequency (Hz)
-            amplitude: Clicked amplitude (H/V ratio)
-        """
-        # Add peak to dock with 'Manual' source
-        self.peak_picker_dock.add_peak(frequency, amplitude, source='Manual')
-        self.add_info(f"Manual peak added: f={frequency:.2f} Hz, A={amplitude:.2f}")
+        """Handle manual peak selection from plot click. Delegates to PeakController."""
+        self.peak_ctrl.add_manual_peak(frequency, amplitude)
+    
+    def _on_peak_detection_error(self, error_msg: str):
+        """Handle peak detection error from controller."""
+        QMessageBox.critical(self, "Detection Error", error_msg)
     
     def on_properties_changed(self, properties):
         """
@@ -2022,69 +1430,29 @@ class HVSRMainWindow(QMainWindow):
         self.export_plot_image()
     
     def export_plot_image(self):
-        """Export current plot view as high-DPI image."""
+        """Export current plot view as high-DPI image. Delegates to ExportController."""
         if self.hvsr_result is None or self.plot_manager.fig is None:
             QMessageBox.warning(self, "No Plot", "No plot to export. Please process data first.")
             return
         
-        # Ask user for file path and format
-        file_path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Export Plot as Image",
-            "hvsr_plot.png",
-            "PNG Image (*.png);;PDF Document (*.pdf);;SVG Vector (*.svg);;JPEG Image (*.jpg)"
-        )
+        self.export_ctrl.set_references(self.hvsr_result, self.windows, self.data, self.plot_manager)
+        result = self.export_ctrl.export_plot_image()
         
-        if not file_path:
-            return  # User cancelled
-        
-        try:
-            # Determine DPI based on format
-            if file_path.endswith('.pdf') or file_path.endswith('.svg'):
-                dpi = 300  # Vector formats
-            else:
-                # Ask for DPI for raster formats
-                dpi, ok = QInputDialog.getItem(
-                    self,
-                    "Select Resolution",
-                    "Choose image resolution (DPI):",
-                    ["150 (Screen)", "300 (Print)", "600 (High Quality)"],
-                    1,  # Default to 300
-                    False
-                )
-                
-                if not ok:
-                    return  # User cancelled
-                
-                # Extract DPI number
-                dpi = int(dpi.split()[0])
-            
-            # Save the figure
-            self.plot_manager.fig.savefig(
-                file_path,
-                dpi=dpi,
-                bbox_inches='tight',
-                facecolor='white',
-                edgecolor='none'
-            )
-            
-            # Log success
-            file_size = Path(file_path).stat().st_size / 1024  # KB
-            self.add_info(f"Plot exported to: {Path(file_path).name}")
-            self.add_info(f"  Resolution: {dpi} DPI, Size: {file_size:.1f} KB")
-            
+        if result.success:
+            file_size = Path(result.file_path).stat().st_size / 1024  # KB
             QMessageBox.information(
                 self,
                 "Export Success",
                 f"Plot saved successfully!\n\n"
-                f"File: {Path(file_path).name}\n"
-                f"Resolution: {dpi} DPI\n"
+                f"File: {Path(result.file_path).name}\n"
                 f"Size: {file_size:.1f} KB"
             )
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Failed to export plot:\n{str(e)}")
-            self.add_info(f"ERROR - Plot export: {str(e)}")
+        elif result.error_message:
+            QMessageBox.critical(self, "Export Error", result.error_message)
+    
+    def _on_export_error(self, error_msg: str):
+        """Handle export error from controller."""
+        QMessageBox.critical(self, "Export Error", error_msg)
     
     def add_info(self, message: str):
         """Add information message to log."""

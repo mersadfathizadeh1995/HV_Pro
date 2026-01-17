@@ -5,7 +5,7 @@ Menu Bar Module
 Menu bar creation and action handlers for the main window.
 """
 
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional, TYPE_CHECKING
 
 try:
     from PyQt5.QtWidgets import (
@@ -17,17 +17,26 @@ try:
 except ImportError:
     HAS_PYQT5 = False
 
+if TYPE_CHECKING:
+    from hvsr_pro.gui.main_window import HVSRMainWindow
+
 
 if HAS_PYQT5:
     class MenuBarHelper:
         """
         Helper class for creating and managing menu bars.
         
+        Manages complete menu bar setup for HVSRMainWindow, including:
+        - File menu (open, save, session, export, exit)
+        - Edit menu (copy, clear)
+        - View menu with submenus for docks, tabs
+        - Mode menu for tab switching
+        - Help menu
+        
         Usage:
             helper = MenuBarHelper(main_window)
-            helper.create_file_menu(on_open, on_save, on_exit)
-            helper.create_view_menu(view_toggles)
-            helper.create_help_menu()
+            helper.build_complete_menu_bar()
+            # Access stored actions via helper.actions['action_name']
         """
         
         def __init__(self, parent: QMainWindow):
@@ -45,6 +54,209 @@ if HAS_PYQT5:
             self.menus: Dict[str, QMenu] = {}
             self.actions: Dict[str, QAction] = {}
         
+        def build_complete_menu_bar(self) -> None:
+            """
+            Build the complete menu bar for HVSRMainWindow.
+            
+            This creates all menus and actions, storing references in self.actions
+            for later access by the main window.
+            """
+            self._build_file_menu()
+            self._build_edit_menu()
+            self._build_view_menu()
+            self._build_mode_menu()
+            self._build_help_menu()
+        
+        def _build_file_menu(self) -> QMenu:
+            """Build the File menu."""
+            file_menu = self.menubar.addMenu('&File')
+            self.menus['file'] = file_menu
+            
+            # Open action
+            open_action = file_menu.addAction('&Open...')
+            open_action.setShortcut('Ctrl+O')
+            open_action.triggered.connect(self.parent.load_data_file)
+            self.actions['open'] = open_action
+            
+            # Save results action
+            save_action = file_menu.addAction('&Save Results...')
+            save_action.setShortcut('Ctrl+S')
+            save_action.triggered.connect(self.parent.export_results)
+            self.actions['save'] = save_action
+            
+            file_menu.addSeparator()
+            
+            # Session menu items
+            save_session_action = file_menu.addAction('Save &Session...')
+            save_session_action.setShortcut('Ctrl+Shift+S')
+            save_session_action.triggered.connect(self.parent.save_session)
+            save_session_action.setToolTip("Save current settings and state to resume later")
+            self.actions['save_session'] = save_session_action
+            
+            load_session_action = file_menu.addAction('&Load Session...')
+            load_session_action.setShortcut('Ctrl+Shift+O')
+            load_session_action.triggered.connect(self.parent.load_session)
+            load_session_action.setToolTip("Load a saved session file")
+            self.actions['load_session'] = load_session_action
+            
+            file_menu.addSeparator()
+            
+            # Export figure action
+            export_fig_action = file_menu.addAction('&Export Figure...')
+            export_fig_action.setShortcut('Ctrl+E')
+            export_fig_action.triggered.connect(self.parent.export_figure)
+            self.actions['export_figure'] = export_fig_action
+            
+            file_menu.addSeparator()
+            
+            # Exit action
+            exit_action = file_menu.addAction('E&xit')
+            exit_action.setShortcut('Ctrl+Q')
+            exit_action.triggered.connect(self.parent.close)
+            self.actions['exit'] = exit_action
+            
+            return file_menu
+        
+        def _build_edit_menu(self) -> QMenu:
+            """Build the Edit menu."""
+            edit_menu = self.menubar.addMenu('&Edit')
+            self.menus['edit'] = edit_menu
+            
+            # Copy info action
+            copy_action = edit_menu.addAction('&Copy Info')
+            copy_action.setShortcut('Ctrl+C')
+            copy_action.triggered.connect(self.parent.copy_info)
+            self.actions['copy'] = copy_action
+            
+            # Clear info action
+            clear_action = edit_menu.addAction('C&lear Info')
+            clear_action.triggered.connect(lambda: self.parent.info_text.clear())
+            self.actions['clear'] = clear_action
+            
+            return edit_menu
+        
+        def _build_view_menu(self) -> QMenu:
+            """Build the View menu with submenus."""
+            view_menu = self.menubar.addMenu('&View')
+            self.menus['view'] = view_menu
+            
+            # === Processing Tab submenu ===
+            processing_submenu = QMenu('Processing Tab', self.parent)
+            self.menus['processing_submenu'] = processing_submenu
+            
+            layers_action = processing_submenu.addAction('&Layers Dock')
+            layers_action.setShortcut('Ctrl+Shift+L')
+            layers_action.setCheckable(True)
+            layers_action.setChecked(True)
+            layers_action.triggered.connect(lambda checked: self.parent.layers_dock.setVisible(checked))
+            self.actions['layers'] = layers_action
+            # Also store on parent for backward compatibility
+            self.parent.layers_action = layers_action
+            
+            peaks_action = processing_submenu.addAction('&Peak Picker Dock')
+            peaks_action.setShortcut('Ctrl+Shift+P')
+            peaks_action.setCheckable(True)
+            peaks_action.setChecked(True)
+            peaks_action.triggered.connect(lambda checked: self.parent.peak_picker_dock.setVisible(checked))
+            self.actions['peaks'] = peaks_action
+            self.parent.peaks_action = peaks_action
+            
+            props_action = processing_submenu.addAction('P&roperties Dock')
+            props_action.setShortcut('Ctrl+Shift+R')
+            props_action.setCheckable(True)
+            props_action.setChecked(True)
+            props_action.triggered.connect(lambda checked: self.parent.properties_dock.setVisible(checked))
+            self.actions['props'] = props_action
+            self.parent.props_action = props_action
+            
+            view_menu.addMenu(processing_submenu)
+            view_menu.addSeparator()
+            
+            # === Data Load Tab submenu ===
+            dataload_submenu = QMenu('Data Load Tab', self.parent)
+            self.menus['dataload_submenu'] = dataload_submenu
+            
+            preview_action = dataload_submenu.addAction('&Preview Canvas')
+            preview_action.setShortcut('Ctrl+Shift+V')
+            preview_action.setCheckable(True)
+            preview_action.setChecked(True)
+            preview_action.triggered.connect(self.parent.toggle_preview_canvas)
+            self.actions['preview'] = preview_action
+            self.parent.preview_action = preview_action
+            
+            view_menu.addMenu(dataload_submenu)
+            view_menu.addSeparator()
+            
+            # === Tabs submenu ===
+            tabs_submenu = QMenu('Tabs', self.parent)
+            self.menus['tabs_submenu'] = tabs_submenu
+            
+            azimuthal_tab_action = tabs_submenu.addAction('&Azimuthal Tab')
+            azimuthal_tab_action.setShortcut('Ctrl+3')
+            azimuthal_tab_action.setCheckable(True)
+            azimuthal_tab_action.setChecked(True)
+            azimuthal_tab_action.triggered.connect(self.parent.toggle_azimuthal_tab)
+            self.actions['azimuthal_tab'] = azimuthal_tab_action
+            self.parent.azimuthal_tab_action = azimuthal_tab_action
+            
+            view_menu.addMenu(tabs_submenu)
+            view_menu.addSeparator()
+            
+            # === Global view items ===
+            loaded_data_action = view_menu.addAction('&Loaded Data Column')
+            loaded_data_action.setShortcut('Ctrl+Shift+D')
+            loaded_data_action.setCheckable(True)
+            loaded_data_action.setChecked(True)
+            loaded_data_action.triggered.connect(self.parent.toggle_loaded_data_column)
+            self.actions['loaded_data'] = loaded_data_action
+            self.parent.loaded_data_action = loaded_data_action
+            
+            view_menu.addSeparator()
+            
+            plot_action = view_menu.addAction('&Plot Window')
+            plot_action.setShortcut('Ctrl+P')
+            plot_action.triggered.connect(self.parent.toggle_plot_window)
+            self.actions['plot_window'] = plot_action
+            
+            return view_menu
+        
+        def _build_mode_menu(self) -> QMenu:
+            """Build the Mode menu."""
+            mode_menu = self.menubar.addMenu('&Mode')
+            self.menus['mode'] = mode_menu
+            
+            dataload_action = mode_menu.addAction('&Data Load')
+            dataload_action.setShortcut('Ctrl+1')
+            dataload_action.triggered.connect(lambda: self.parent.mode_tabs.setCurrentIndex(0))
+            dataload_action.setToolTip("Switch to Data Load tab (Ctrl+1)")
+            self.actions['mode_dataload'] = dataload_action
+            
+            processing_action = mode_menu.addAction('&Processing')
+            processing_action.setShortcut('Ctrl+2')
+            processing_action.triggered.connect(lambda: self.parent.mode_tabs.setCurrentIndex(1))
+            processing_action.setToolTip("Switch to Processing tab (Ctrl+2)")
+            self.actions['mode_processing'] = processing_action
+            
+            return mode_menu
+        
+        def _build_help_menu(self) -> QMenu:
+            """Build the Help menu."""
+            help_menu = self.menubar.addMenu('&Help')
+            self.menus['help'] = help_menu
+            
+            about_action = help_menu.addAction('&About')
+            about_action.triggered.connect(lambda: show_about_dialog(self.parent))
+            self.actions['about'] = about_action
+            
+            shortcuts_action = help_menu.addAction('&Keyboard Shortcuts')
+            shortcuts_action.setShortcut('F1')
+            shortcuts_action.triggered.connect(lambda: show_shortcuts_dialog(self.parent))
+            self.actions['shortcuts'] = shortcuts_action
+            
+            return help_menu
+        
+        # === Legacy methods for backward compatibility ===
+        
         def create_file_menu(
             self,
             on_open: Optional[Callable] = None,
@@ -53,7 +265,7 @@ if HAS_PYQT5:
             on_load_session: Optional[Callable] = None,
             on_exit: Optional[Callable] = None
         ) -> QMenu:
-            """Create the File menu."""
+            """Create the File menu (legacy interface)."""
             file_menu = self.menubar.addMenu('&File')
             self.menus['file'] = file_menu
             
@@ -97,7 +309,7 @@ if HAS_PYQT5:
             self,
             on_copy_info: Optional[Callable] = None
         ) -> QMenu:
-            """Create the Edit menu."""
+            """Create the Edit menu (legacy interface)."""
             edit_menu = self.menubar.addMenu('&Edit')
             self.menus['edit'] = edit_menu
             
@@ -113,12 +325,7 @@ if HAS_PYQT5:
             self,
             toggles: Dict[str, tuple] = None
         ) -> QMenu:
-            """
-            Create the View menu with toggle actions.
-            
-            Args:
-                toggles: Dict of {name: (label, callback, default_checked)}
-            """
+            """Create the View menu with toggle actions (legacy interface)."""
             view_menu = self.menubar.addMenu('&View')
             self.menus['view'] = view_menu
             
@@ -136,7 +343,7 @@ if HAS_PYQT5:
             self,
             mode_actions: Dict[str, tuple] = None
         ) -> QMenu:
-            """Create the Mode menu."""
+            """Create the Mode menu (legacy interface)."""
             mode_menu = self.menubar.addMenu('&Mode')
             self.menus['mode'] = mode_menu
             
@@ -155,7 +362,7 @@ if HAS_PYQT5:
             on_about: Optional[Callable] = None,
             on_shortcuts: Optional[Callable] = None
         ) -> QMenu:
-            """Create the Help menu."""
+            """Create the Help menu (legacy interface)."""
             help_menu = self.menubar.addMenu('&Help')
             self.menus['help'] = help_menu
             
@@ -188,49 +395,51 @@ if HAS_PYQT5:
             if action:
                 action.setEnabled(enabled)
 
-    def show_about_dialog(parent, version: str = "1.0.0"):
+    def show_about_dialog(parent, version: str = "2.0.0"):
         """Show the About dialog."""
-        about_text = f"""
-        <h2>HVSR Pro</h2>
-        <p><b>Version:</b> {version}</p>
-        <p>Professional HVSR (Horizontal-to-Vertical Spectral Ratio) Analysis Software</p>
-        
-        <h3>Features:</h3>
-        <ul>
-            <li>Load seismic data (ASCII, MiniSEED)</li>
-            <li>Interactive window rejection</li>
-            <li>Color-coded visualization</li>
-            <li>Real-time HVSR updates</li>
-            <li>Quality metrics and statistics</li>
-            <li>Export results and plots</li>
-            <li>Azimuthal HVSR analysis</li>
-        </ul>
-        
-        <p>Built with PyQt5 and scientific Python libraries.</p>
-        """
-        QMessageBox.about(parent, "About HVSR Pro", about_text)
+        QMessageBox.about(parent, "About HVSR Pro",
+            "<h2>HVSR Pro v2.0</h2>"
+            "<p>Professional Horizontal-to-Vertical Spectral Ratio Analysis</p>"
+            "<p>A comprehensive tool for seismic data processing and HVSR computation.</p>"
+            "<br>"
+            "<p><b>Features:</b></p>"
+            "<ul>"
+            "<li>Single and multi-file processing</li>"
+            "<li>Advanced quality control algorithms</li>"
+            "<li>Cox FDWRA peak consistency analysis</li>"
+            "<li>Interactive visualization</li>"
+            "<li>Azimuthal HVSR analysis</li>"
+            "<li>Customizable processing parameters</li>"
+            "</ul>"
+            "<br>"
+            "<p>&copy; 2024 HVSR Pro Development Team</p>")
 
     def show_shortcuts_dialog(parent):
         """Show keyboard shortcuts dialog."""
         shortcuts_text = """
         <h3>Keyboard Shortcuts</h3>
-        <table>
-            <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
-            <tr><td><b>Ctrl+S</b></td><td>Save results</td></tr>
-            <tr><td><b>Ctrl+Shift+S</b></td><td>Save session</td></tr>
-            <tr><td><b>Ctrl+Shift+O</b></td><td>Load session</td></tr>
-            <tr><td><b>Ctrl+P</b></td><td>Process HVSR</td></tr>
-            <tr><td><b>Ctrl+R</b></td><td>Recompute HVSR</td></tr>
-            <tr><td><b>Ctrl+E</b></td><td>Export figure</td></tr>
-            <tr><td><b>Ctrl+Q</b></td><td>Quit</td></tr>
-            <tr><td><b>F1</b></td><td>Show shortcuts</td></tr>
+        <table cellpadding="5">
+        <tr><th colspan="2" align="left">File Operations</th></tr>
+        <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
+        <tr><td><b>Ctrl+S</b></td><td>Save results</td></tr>
+        <tr><td><b>Ctrl+E</b></td><td>Export figure</td></tr>
+        <tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>
+
+        <tr><th colspan="2" align="left"><br>Tab Navigation</th></tr>
+        <tr><td><b>Ctrl+1</b></td><td>Switch to Data Load tab</td></tr>
+        <tr><td><b>Ctrl+2</b></td><td>Switch to Processing tab</td></tr>
+
+        <tr><th colspan="2" align="left"><br>View Controls</th></tr>
+        <tr><td><b>Ctrl+P</b></td><td>Toggle plot window</td></tr>
+        <tr><td><b>Ctrl+Shift+L</b></td><td>Toggle Layers Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+P</b></td><td>Toggle Peak Picker Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+R</b></td><td>Toggle Properties Dock</td></tr>
+        <tr><td><b>Ctrl+Shift+V</b></td><td>Toggle Preview Canvas</td></tr>
+        <tr><td><b>Ctrl+Shift+D</b></td><td>Toggle Loaded Data Column</td></tr>
+
+        <tr><th colspan="2" align="left"><br>Other</th></tr>
+        <tr><td><b>F1</b></td><td>Show this help</td></tr>
         </table>
-        
-        <h3>Window Interaction</h3>
-        <ul>
-            <li><b>Click window curve:</b> Toggle acceptance</li>
-            <li><b>Layers panel:</b> Toggle visibility</li>
-        </ul>
         """
         QMessageBox.information(parent, "Keyboard Shortcuts", shortcuts_text)
 

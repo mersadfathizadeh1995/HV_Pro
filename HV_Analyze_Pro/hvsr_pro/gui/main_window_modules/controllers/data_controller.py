@@ -6,19 +6,45 @@ Handles data loading and file operations for the main window.
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Tuple
 from datetime import datetime, timedelta
+from dataclasses import dataclass, field
 
 try:
     from PyQt5.QtWidgets import QWidget, QMessageBox, QProgressDialog
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QObject, pyqtSignal
     HAS_PYQT5 = True
 except ImportError:
     HAS_PYQT5 = False
 
 
+@dataclass
+class LoadResult:
+    """Result from a data loading operation."""
+    success: bool
+    data: Any = None
+    mode: str = 'single'
+    files: List[str] = field(default_factory=list)
+    groups: Dict = field(default_factory=dict)
+    time_range: Optional[Dict] = None
+    metadata_list: List[Dict] = field(default_factory=list)
+    error_message: str = ''
+    
+    @property
+    def time_range_seconds(self) -> Optional[Dict]:
+        """Convert time range to seconds format."""
+        if not self.time_range or not self.time_range.get('enabled'):
+            return None
+        start_dt = self.time_range.get('start')
+        end_dt = self.time_range.get('end')
+        if start_dt and end_dt:
+            duration_seconds = (end_dt - start_dt).total_seconds()
+            return {'start': 0.0, 'end': duration_seconds}
+        return None
+
+
 if HAS_PYQT5:
-    class DataController:
+    class DataController(QObject):
         """
         Controller for data loading and management.
         
@@ -27,7 +53,18 @@ if HAS_PYQT5:
         - Time range application
         - Data merging
         - Preview updates
+        
+        Signals:
+            loading_started: Emitted when loading begins
+            loading_finished: Emitted with LoadResult when complete
+            loading_error: Emitted with error message on failure
+            info_message: Emitted with info messages during loading
         """
+        
+        loading_started = pyqtSignal()
+        loading_finished = pyqtSignal(object)  # LoadResult
+        loading_error = pyqtSignal(str)
+        info_message = pyqtSignal(str)
         
         def __init__(self, parent: QWidget):
             """
@@ -36,10 +73,233 @@ if HAS_PYQT5:
             Args:
                 parent: Parent widget (main window)
             """
+            super().__init__(parent)
             self.parent = parent
             self.current_data = None
             self.current_files: List[str] = []
             self.time_range: Optional[Dict] = None
+            self.load_mode: str = 'single'
+        
+        def load_from_dialog_result(self, result: dict) -> LoadResult:
+            """
+            Load data from DataInputDialog result.
+            
+            This is the main entry point for loading data.
+            
+            Args:
+                result: Dictionary from DataInputDialog containing:
+                    - mode: 'single', 'multi_type1', or 'multi_type2'
+                    - files: List of file paths
+                    - groups: Dict of file groups (for multi_type2)
+                    - options: Loading options (channel_mapping, etc.)
+                    - time_range: Optional time range dict
+            
+            Returns:
+                LoadResult with success status and loaded data
+            """
+            from hvsr_pro.core import HVSRDataHandler
+            
+            mode = result.get('mode', 'single')
+            files = result.get('files', [])
+            groups = result.get('groups', {})
+            options = result.get('options', {})
+            time_range = result.get('time_range')
+            
+            self.loading_started.emit()
+            
+            # Log time range if enabled
+            if time_range and time_range.get('enabled'):
+                start = time_range['start']
+                end = time_range['end']
+                tz_name = time_range.get('timezone_name', 'UTC')
+                self.info_message.emit(
+                    f"Time range selected: {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({tz_name})"
+                )
+            
+            try:
+                handler = HVSRDataHandler()
+                
+                if mode == 'single':
+                    return self._load_single(handler, files, time_range)
+                elif mode == 'multi_type1':
+                    return self._load_multi_type1(handler, files, options, time_range)
+                elif mode == 'multi_type2':
+                    return self._load_multi_type2(handler, groups, time_range)
+                else:
+                    return LoadResult(
+                        success=False,
+                        error_message=f"Unknown load mode: {mode}"
+                    )
+                    
+            except Exception as e:
+                import traceback
+                error_msg = f"Failed to load data: {str(e)}"
+                self.loading_error.emit(error_msg)
+                return LoadResult(
+                    success=False,
+                    error_message=f"{error_msg}\n{traceback.format_exc()}"
+                )
+        
+        def _load_single(self, handler, files: List[str], time_range: Optional[Dict]) -> LoadResult:
+            """Load single file mode."""
+            if not files:
+                return LoadResult(success=False, error_message="No files provided")
+            
+            file_path = files[0]
+            self.info_message.emit(f"Loading: {Path(file_path).name}...")
+            
+            data = handler.load_data(file_path)
+            
+            # Get file metadata
+            file_size = Path(file_path).stat().st_size / (1024 * 1024)  # MB
+            metadata = {
+                'duration': data.duration,
+                'sampling_rate': data.east.sampling_rate,
+                'size_mb': file_size,
+                'status': 'loaded',
+                'file_path': file_path,
+                'display_name': file_path
+            }
+            
+            # Store state
+            self.current_data = data
+            self.current_files = [file_path]
+            self.time_range = time_range
+            self.load_mode = 'single'
+            
+            self.info_message.emit(f"Loaded: {Path(file_path).name}")
+            
+            result = LoadResult(
+                success=True,
+                data=data,
+                mode='single',
+                files=[file_path],
+                time_range=time_range,
+                metadata_list=[metadata]
+            )
+            
+            self.loading_finished.emit(result)
+            return result
+        
+        def _load_multi_type1(
+            self, 
+            handler, 
+            files: List[str], 
+            options: Dict,
+            time_range: Optional[Dict]
+        ) -> LoadResult:
+            """Load multiple files with E,N,Z in each."""
+            if not files:
+                return LoadResult(success=False, error_message="No files provided")
+            
+            self.info_message.emit(f"Loading {len(files)} MiniSEED files...")
+            
+            # Extract channel mapping from options if provided
+            channel_mapping = options.get('channel_mapping', None)
+            if channel_mapping:
+                self.info_message.emit(f"Using channel mapping: {channel_mapping}")
+                data = handler.load_multi_miniseed_type1(files, channel_mapping=channel_mapping)
+            else:
+                data = handler.load_multi_miniseed_type1(files)
+            
+            # Build metadata for each file
+            metadata_list = []
+            for file_path in files:
+                file_size = Path(file_path).stat().st_size / (1024 * 1024)
+                file_duration = data.duration / len(files)  # Approximate
+                metadata = {
+                    'duration': file_duration,
+                    'sampling_rate': data.east.sampling_rate,
+                    'size_mb': file_size,
+                    'status': 'loaded',
+                    'file_path': file_path,
+                    'display_name': file_path
+                }
+                metadata_list.append(metadata)
+            
+            # Store state
+            self.current_data = data
+            self.current_files = files
+            self.time_range = time_range
+            self.load_mode = 'multi_type1'
+            
+            self.info_message.emit(f"Loaded {len(files)} files (merged chronologically)")
+            
+            result = LoadResult(
+                success=True,
+                data=data,
+                mode='multi_type1',
+                files=files,
+                time_range=time_range,
+                metadata_list=metadata_list
+            )
+            
+            self.loading_finished.emit(result)
+            return result
+        
+        def _load_multi_type2(
+            self,
+            handler,
+            groups: Dict,
+            time_range: Optional[Dict]
+        ) -> LoadResult:
+            """Load separate E, N, Z files."""
+            if not groups:
+                return LoadResult(success=False, error_message="No file groups provided")
+            
+            complete = sum(1 for g in groups.values() if 'E' in g and 'N' in g and 'Z' in g)
+            self.info_message.emit(f"Loading {complete} file groups...")
+            
+            data = handler.load_multi_miniseed_type2(groups)
+            
+            # Build metadata for each group
+            metadata_list = []
+            all_files = []
+            file_duration_per_group = data.duration / complete if complete > 0 else data.duration
+            
+            for group_name, group_files in groups.items():
+                if all(c in group_files for c in ['E', 'N', 'Z']):
+                    # Calculate size for this group
+                    group_size = sum(
+                        Path(str(f)).stat().st_size for f in group_files.values()
+                    ) / (1024 * 1024)
+                    
+                    display_name = f"{group_name} (E/N/Z)"
+                    metadata = {
+                        'duration': file_duration_per_group,
+                        'sampling_rate': data.east.sampling_rate,
+                        'size_mb': group_size,
+                        'status': 'loaded',
+                        'file_path': display_name,
+                        'display_name': display_name,
+                        'group_name': group_name
+                    }
+                    metadata_list.append(metadata)
+                    
+                    # Collect all files
+                    for comp_path in group_files.values():
+                        all_files.append(str(comp_path))
+            
+            # Store state
+            self.current_data = data
+            self.current_files = all_files
+            self.time_range = time_range
+            self.load_mode = 'multi_type2'
+            
+            self.info_message.emit(f"Loaded {complete} groups (3-component streams)")
+            
+            result = LoadResult(
+                success=True,
+                data=data,
+                mode='multi_type2',
+                files=all_files,
+                groups=groups,
+                time_range=time_range,
+                metadata_list=metadata_list
+            )
+            
+            self.loading_finished.emit(result)
+            return result
         
         def load_single_file(
             self, 
@@ -49,7 +309,7 @@ if HAS_PYQT5:
             progress_callback: Optional[Callable] = None
         ):
             """
-            Load a single data file.
+            Load a single data file (legacy method).
             
             Args:
                 file_path: Path to file
@@ -94,14 +354,7 @@ if HAS_PYQT5:
             progress_callback: Optional[Callable] = None
         ):
             """
-            Load and merge multiple files.
-            
-            Args:
-                file_paths: List of file paths
-                channel_mapping: Per-file channel mapping
-                time_range: Time range to extract
-                merge_method: How to merge files
-                progress_callback: Progress callback function
+            Load and merge multiple files (legacy method).
             """
             from hvsr_pro.loaders import MiniSeedLoader
             
@@ -111,7 +364,6 @@ if HAS_PYQT5:
             loader = MiniSeedLoader()
             
             try:
-                # Load with channel mapping
                 data = loader.load_multiple(
                     file_paths,
                     channel_mapping=channel_mapping,
@@ -141,12 +393,7 @@ if HAS_PYQT5:
             progress_callback: Optional[Callable] = None
         ):
             """
-            Load grouped E/N/Z files.
-            
-            Args:
-                groups: Dict of {base_name: {'E': path, 'N': path, 'Z': path}}
-                time_range: Time range to extract
-                progress_callback: Progress callback function
+            Load grouped E/N/Z files (legacy method).
             """
             from hvsr_pro.loaders import MiniSeedLoader
             
@@ -156,7 +403,6 @@ if HAS_PYQT5:
             loader = MiniSeedLoader()
             
             try:
-                # Collect all files
                 all_files = []
                 for base_name, components in groups.items():
                     for comp, path in components.items():
@@ -190,12 +436,9 @@ if HAS_PYQT5:
             tz_offset = time_range.get('timezone_offset', 0)
             
             if start_dt and end_dt:
-                # Apply timezone offset
                 utc_offset = timedelta(hours=tz_offset)
                 start_utc = start_dt - utc_offset
                 end_utc = end_dt - utc_offset
-                
-                # Trim data
                 data = data.trim(start_utc, end_utc)
             
             return data
@@ -223,6 +466,18 @@ if HAS_PYQT5:
             self.time_range = None
 
 else:
+    @dataclass
+    class LoadResult:
+        """Dummy class when PyQt5 not available."""
+        success: bool = False
+        data: Any = None
+        mode: str = 'single'
+        files: List[str] = field(default_factory=list)
+        groups: Dict = field(default_factory=dict)
+        time_range: Optional[Dict] = None
+        metadata_list: List[Dict] = field(default_factory=list)
+        error_message: str = ''
+    
     class DataController:
         """Dummy class when PyQt5 not available."""
         def __init__(self, *args, **kwargs):
