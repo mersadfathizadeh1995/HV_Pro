@@ -275,6 +275,7 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
         self.data_load_tab = DataLoadTab(self)
         self.data_load_tab.load_file_requested.connect(self.load_data_file)
         self.data_load_tab.file_selected.connect(self.on_data_file_selected_for_preview)
+        self.data_load_tab.data_cleared.connect(self._on_data_cleared)
         self.mode_tabs.addTab(self.data_load_tab, "Data Load")
 
         # === Tab 2: Processing ===
@@ -398,6 +399,49 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
         else:
             # Need to load - this shouldn't happen normally
             self.add_info(f"Loading for preview: {Path(file_path).name}")
+    
+    def _on_data_cleared(self):
+        """
+        Handle data cleared from Data Load tab.
+        
+        Syncs the clearing across all tabs and resets processing state.
+        """
+        # Clear main window data state
+        self.data = None
+        self.current_file = None
+        self.windows = None
+        self.hvsr_result = None
+        self.load_mode = 'single'
+        self.current_time_range = None
+        
+        # Disable process button
+        self.process_btn.setEnabled(False)
+        
+        # Clear processing tab's collapsible data panel
+        if hasattr(self, 'processing_data_panel') and self.processing_data_panel:
+            self.processing_data_panel.clear_files()
+        
+        # Clear azimuthal tab's data panel
+        if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'data_panel'):
+            self.azimuthal_tab.data_panel.clear_files()
+        
+        # Clear plot window if showing
+        if hasattr(self, 'plot_manager') and self.plot_manager:
+            try:
+                self.plot_manager.clear()
+            except Exception:
+                pass  # Plot manager may not have clear method
+        
+        # Clear layers dock
+        if hasattr(self, 'layers_dock'):
+            self.layers_dock.rebuild({}, {})
+        
+        # Clear controller state
+        if hasattr(self, 'data_ctrl'):
+            self.data_ctrl.clear()
+        
+        self.add_info("Data cleared from all tabs")
+        self.status_bar.showMessage("Data cleared")
     
     # === REMOVED: create_control_panel, create_file_group ===
     # These methods are now replaced by ProcessingTab

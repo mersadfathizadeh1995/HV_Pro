@@ -5,10 +5,92 @@ Data Controller
 Handles data loading and file operations for the main window.
 """
 
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+
+
+def extract_base_name_from_components(files: List[str]) -> str:
+    """
+    Extract common base name from multi-component file paths.
+    
+    Removes component suffixes commonly found in SAC, PEER, and other formats
+    to create a clean display name. Works with various naming conventions:
+    
+    - SAC: recording_n.sac, recording_e.sac, recording_z.sac
+    - PEER: recording_090.vt2, recording_360.vt2, recording-up.vt2
+    - Standard: recording_NS.txt, recording_EW.txt, recording_UD.txt
+    - Channel codes: recording.BHN, recording.BHE, recording.BHZ
+    
+    Args:
+        files: List of file paths (typically 3 for N, E, Z components)
+        
+    Returns:
+        Base name without component suffixes
+    """
+    if not files:
+        return "Unknown"
+    
+    # Get stems (filenames without extension)
+    stems = [Path(f).stem for f in files]
+    
+    # Component suffix patterns to remove (case-insensitive matching)
+    # Ordered from most specific to least specific
+    suffix_patterns = [
+        # Full word suffixes
+        r'[_\-\.]?(north|south|east|west|vertical|vert|up|down)$',
+        # Two-letter component codes
+        r'[_\-\.]?(ns|ew|ud|ne)$',
+        # Single letter with separator
+        r'[_\-\.](n|e|z|v|u|x|y)$',
+        # PEER numeric azimuth patterns (090, 360, 000, 180, 270)
+        r'[_\-\.](090|360|000|180|270)$',
+        # Channel codes (last 3 characters if they match standard patterns)
+        r'[_\-\.]?(bhn|bhe|bhz|hhn|hhe|hhz|hne|hnn|hnz|eln|ele|elz|lhn|lhe|lhz)$',
+        # Very short suffix at end (be careful - only if preceded by separator)
+        r'_([nez])$',
+    ]
+    
+    # Extract base names by removing suffixes
+    base_names = []
+    for stem in stems:
+        base = stem
+        # Try each pattern
+        for pattern in suffix_patterns:
+            new_base = re.sub(pattern, '', base, flags=re.IGNORECASE)
+            if new_base != base:
+                base = new_base
+                break  # Only remove one suffix type
+        base_names.append(base)
+    
+    # Find the common prefix among base names
+    if len(base_names) == 1:
+        return base_names[0]
+    
+    # Check if all base names are the same after suffix removal
+    if len(set(base_names)) == 1:
+        return base_names[0]
+    
+    # If base names differ, find the longest common prefix
+    common_prefix = base_names[0]
+    for name in base_names[1:]:
+        # Find common prefix length
+        i = 0
+        while i < len(common_prefix) and i < len(name) and common_prefix[i] == name[i]:
+            i += 1
+        common_prefix = common_prefix[:i]
+    
+    # Remove trailing separators from common prefix
+    common_prefix = common_prefix.rstrip('_-.')
+    
+    # If common prefix is too short or empty, use the first file's stem
+    if len(common_prefix) < 3:
+        # Just use first file's base name
+        return base_names[0] if base_names else stems[0]
+    
+    return common_prefix
 
 try:
     from PyQt5.QtWidgets import QWidget, QMessageBox, QProgressDialog
@@ -358,14 +440,18 @@ if HAS_PYQT5:
             # Calculate total size
             total_size = sum(Path(f).stat().st_size for f in files) / (1024 * 1024)
             
+            # Extract clean base name from component files
+            base_name = extract_base_name_from_components(files)
+            display_name = f"{base_name} (N/E/Z)"
+            
             # Build metadata
             metadata = {
                 'duration': data.duration,
                 'sampling_rate': data.east.sampling_rate,
                 'size_mb': total_size,
                 'status': 'loaded',
-                'file_path': f"{Path(files[0]).stem} (N/E/Z)",
-                'display_name': f"{Path(files[0]).stem} (N/E/Z)",
+                'file_path': display_name,
+                'display_name': display_name,
                 'format': file_format
             }
             

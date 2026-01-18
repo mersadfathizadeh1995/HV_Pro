@@ -44,6 +44,7 @@ if HAS_PYQT5:
         load_file_requested = pyqtSignal()
         file_selected = pyqtSignal(str)  # file_path
         preview_mode_changed = pyqtSignal(str)  # mode
+        data_cleared = pyqtSignal()  # Emitted when all files are cleared
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -593,6 +594,9 @@ if HAS_PYQT5:
 
             # Disable export button
             self.export_btn.setEnabled(False)
+            
+            # Emit signal to notify main window and other tabs
+            self.data_cleared.emit()
 
         def add_loaded_file(self, file_path: str, data, metadata: dict, time_range=None, group_name=None):
             """
