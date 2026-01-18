@@ -2,15 +2,15 @@
 Rejection Pipeline Presets
 ===========================
 
-Pre-configured QC pipelines for common use cases.
+Pre-configured QC pipelines for HVSR analysis.
 
 Presets:
-    - conservative: Only obvious problems (lenient)
-    - balanced: Moderate rejection (recommended)
-    - aggressive: Strict quality control
-    - sesame: SESAME-compliant with Cox FDWRA
-    - publication: Publication-quality 4-condition workflow
-    - ml: Machine learning-based (requires sklearn)
+    - sesame: SESAME-compliant with FDWRA (default, matches hvsrpy)
+    - custom: User-defined settings (persisted across sessions)
+
+Legacy presets (deprecated):
+    - conservative, balanced, aggressive, publication, ml
+    These are kept for backward compatibility but SESAME is recommended.
 """
 
 import logging
@@ -18,50 +18,64 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Preset configurations
+# SESAME Standard configuration (matches hvsrpy defaults)
+SESAME_CONFIG = {
+    'description': 'SESAME standard with Peak Frequency Consistency (FDWRA)',
+    'algorithms': [
+        {'type': 'AmplitudeRejection', 'params': {}},
+        {'type': 'STALTARejection', 'params': {
+            'sta_length': 1.0,
+            'lta_length': 30.0,
+            'min_ratio': 0.2,
+            'max_ratio': 2.5
+        }},
+    ],
+    'post_hvsr': [],
+    'use_cox_fdwra': True,
+    'fdwra_params': {
+        'n': 2.0,
+        'max_iterations': 50,
+        'min_iterations': 1,
+        'distribution_fn': 'lognormal',
+        'distribution_mc': 'lognormal'
+    }
+}
+
+# Preset configurations (SESAME is primary, others kept for backward compatibility)
 PRESET_CONFIGS = {
+    'sesame': SESAME_CONFIG,
+    # Legacy presets (deprecated - use SESAME or custom instead)
     'conservative': {
-        'description': 'Only reject clear problems (lenient thresholds)',
+        'description': '[Deprecated] Only reject clear problems (use SESAME instead)',
         'algorithms': [
             {'type': 'AmplitudeRejection', 'params': {}},
-            {'type': 'QualityThresholdRejection', 'params': {'threshold': 0.2}},
         ],
         'post_hvsr': []
     },
     'balanced': {
-        'description': 'Balanced approach (moderate quality control, recommended)',
+        'description': '[Deprecated] Balanced approach (use SESAME instead)',
         'algorithms': [
             {'type': 'AmplitudeRejection', 'params': {}},
         ],
         'post_hvsr': []
     },
     'aggressive': {
-        'description': 'Thorough quality control with multiple checks',
+        'description': '[Deprecated] Thorough quality control (use custom settings instead)',
         'algorithms': [
             {'type': 'AmplitudeRejection', 'params': {}},
-            {'type': 'QualityThresholdRejection', 'params': {'threshold': 0.35}},  # Reduced from 0.5
             {'type': 'STALTARejection', 'params': {
                 'sta_length': 1.0,
                 'lta_length': 30.0,
-                'min_ratio': 0.08,   # Reduced from 0.15 (allows quieter windows)
-                'max_ratio': 3.5     # Increased from 2.5 (allows more transients)
+                'min_ratio': 0.08,
+                'max_ratio': 3.5
             }},
-            {'type': 'FrequencyDomainRejection', 'params': {'spike_threshold': 4.0}},  # Increased from 3.0
-            {'type': 'StatisticalOutlierRejection', 'params': {'method': 'iqr', 'threshold': 2.5}},  # Increased from 2.0
+            {'type': 'FrequencyDomainRejection', 'params': {'spike_threshold': 4.0}},
+            {'type': 'StatisticalOutlierRejection', 'params': {'method': 'iqr', 'threshold': 2.5}},
         ],
         'post_hvsr': []
     },
-    'sesame': {
-        'description': 'SESAME-compliant with Cox et al. (2020) FDWRA',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-            {'type': 'QualityThresholdRejection', 'params': {'threshold': 0.3}},
-        ],
-        'post_hvsr': [],
-        'use_cox_fdwra': True
-    },
     'publication': {
-        'description': 'Publication-quality 4-condition rejection workflow',
+        'description': '[Deprecated] Publication-quality (use SESAME with custom settings)',
         'algorithms': [
             {'type': 'AmplitudeRejection', 'params': {}},
         ],
@@ -72,7 +86,7 @@ PRESET_CONFIGS = {
         'use_cox_fdwra': True
     },
     'ml': {
-        'description': 'Machine learning-based anomaly detection (requires sklearn)',
+        'description': '[Deprecated] Machine learning-based (requires sklearn)',
         'algorithms': [
             {'type': 'AmplitudeRejection', 'params': {}},
             {'type': 'IsolationForestRejection', 'params': {'contamination': 0.1}},

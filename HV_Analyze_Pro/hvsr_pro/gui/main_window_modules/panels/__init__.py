@@ -10,9 +10,11 @@ from hvsr_pro.gui.main_window_modules.panels.processing_settings_panel import (
     ProcessingSettings,
 )
 # QCSettingsPanel now uses unified QCSettings from processing/rejection/settings.py
-from hvsr_pro.gui.panels.qc_panel import QCSettingsPanel
+from hvsr_pro.gui.panels.qc_panel import QCSettingsPanel  # Deprecated
+from hvsr_pro.gui.panels.unified_qc_panel import UnifiedQCPanel, SESAME_DEFAULTS
 from hvsr_pro.processing.rejection.settings import QCSettings
 
+# CoxSettingsPanel is deprecated - use UnifiedQCPanel instead
 from hvsr_pro.gui.main_window_modules.panels.cox_settings_panel import (
     CoxSettingsPanel,
     CoxFDWRASettings,
@@ -21,8 +23,10 @@ from hvsr_pro.gui.main_window_modules.panels.cox_settings_panel import (
 __all__ = [
     'ProcessingSettingsPanel',
     'ProcessingSettings',
-    'QCSettingsPanel',
+    'QCSettingsPanel',  # Deprecated - use UnifiedQCPanel
+    'UnifiedQCPanel',
+    'SESAME_DEFAULTS',
     'QCSettings',
-    'CoxSettingsPanel',
+    'CoxSettingsPanel',  # Deprecated - use UnifiedQCPanel
     'CoxFDWRASettings',
 ]

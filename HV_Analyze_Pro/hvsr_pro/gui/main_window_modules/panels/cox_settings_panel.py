@@ -2,7 +2,12 @@
 Cox FDWRA Settings Panel
 ========================
 
-Panel containing Cox Frequency-Domain Window Rejection Algorithm settings.
+.. deprecated:: 2.0
+    This module is deprecated. Use :class:`unified_qc_panel.UnifiedQCPanel` instead.
+    FDWRA settings are now integrated into the unified panel as
+    "Peak Frequency Consistency (FDWRA)" in Phase 2.
+
+Panel containing Frequency-Domain Window Rejection Algorithm settings.
 """
 
 from dataclasses import dataclass

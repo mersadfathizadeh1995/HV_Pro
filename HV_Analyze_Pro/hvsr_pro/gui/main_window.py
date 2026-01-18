@@ -705,7 +705,10 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             settings.manual_sampling_rate,
             custom_qc_settings,
             cox_fdwra_settings,
-            getattr(settings, 'smoothing_method', 'konno_ohmachi')
+            getattr(settings, 'smoothing_method', 'konno_ohmachi'),
+            qc_enabled=settings.qc_enabled,
+            phase1_enabled=getattr(settings, 'phase1_enabled', True),
+            phase2_enabled=getattr(settings, 'phase2_enabled', True)
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)

@@ -38,14 +38,16 @@ class FullProcessingSettings:
     
     # QC settings
     qc_enabled: bool = True
-    qc_mode: str = 'preset'  # 'preset' or 'custom'
-    qc_preset: str = 'balanced'
+    qc_mode: str = 'sesame'  # 'sesame' or 'custom'
+    qc_preset: str = 'sesame'
     custom_qc_settings: Optional[Dict] = None
+    phase1_enabled: bool = True  # Phase 1 (Pre-HVSR) enable
+    phase2_enabled: bool = True  # Phase 2 (Post-HVSR) enable
     
-    # Cox FDWRA settings
-    cox_enabled: bool = False
+    # Cox FDWRA settings (now part of Phase 2)
+    cox_enabled: bool = True  # FDWRA enabled in SESAME by default
     cox_n: float = 2.0
-    cox_max_iterations: int = 20
+    cox_max_iterations: int = 50  # hvsrpy default
     cox_min_iterations: int = 1
     cox_distribution: str = 'lognormal'
     
@@ -62,8 +64,10 @@ class FullProcessingSettings:
 if HAS_PYQT5:
     from hvsr_pro.gui.components import CollapsibleDataPanel
     from hvsr_pro.gui.main_window_modules.panels import (
-        ProcessingSettingsPanel, QCSettingsPanel, CoxSettingsPanel
+        ProcessingSettingsPanel, UnifiedQCPanel
     )
+    # Keep old imports for backward compatibility but mark as deprecated
+    from hvsr_pro.gui.main_window_modules.panels import QCSettingsPanel, CoxSettingsPanel
 
     class ProcessingTab(QWidget):
         """
@@ -154,13 +158,13 @@ if HAS_PYQT5:
             self.processing_panel = ProcessingSettingsPanel()
             layout.addWidget(self.processing_panel)
             
-            # QC settings panel (from modular panels)
-            self.qc_panel = QCSettingsPanel()
-            layout.addWidget(self.qc_panel)
+            # Unified QC settings panel (replaces old qc_panel + cox_panel)
+            self.unified_qc_panel = UnifiedQCPanel()
+            layout.addWidget(self.unified_qc_panel)
             
-            # Cox FDWRA settings panel (from modular panels)
-            self.cox_panel = CoxSettingsPanel()
-            layout.addWidget(self.cox_panel)
+            # Backward compatibility aliases
+            self.qc_panel = self.unified_qc_panel
+            self.cox_panel = None  # Deprecated - use unified_qc_panel
             
             # Parallel processing group
             parallel_group = self._create_parallel_group()
@@ -302,8 +306,7 @@ if HAS_PYQT5:
             
             # Panel changes emit settings_changed
             self.processing_panel.settings_changed.connect(self.settings_changed.emit)
-            self.qc_panel.settings_changed.connect(self.settings_changed.emit)
-            self.cox_panel.settings_changed.connect(self.settings_changed.emit)
+            self.unified_qc_panel.settings_changed.connect(self.settings_changed.emit)
         
         def _on_process_clicked(self):
             """Handle Process HVSR button click."""
@@ -339,8 +342,10 @@ if HAS_PYQT5:
                 FullProcessingSettings with current values
             """
             proc = self.processing_panel.get_settings()
-            qc = self.qc_panel.get_settings()
-            cox = self.cox_panel.get_settings()
+            qc_settings = self.unified_qc_panel.get_settings()
+            
+            # Extract FDWRA settings from unified panel
+            fdwra = qc_settings.get('cox_fdwra', {})
             
             return FullProcessingSettings(
                 # Processing
@@ -354,16 +359,18 @@ if HAS_PYQT5:
                 override_sampling=proc.override_sampling,
                 manual_sampling_rate=proc.manual_sampling_rate,
                 # QC
-                qc_enabled=qc.enabled,
-                qc_mode=qc.mode,
-                qc_preset=qc.preset,
-                custom_qc_settings=qc.custom_algorithms if qc.mode == 'custom' else None,
-                # Cox FDWRA
-                cox_enabled=cox.enabled,
-                cox_n=cox.n_value,
-                cox_max_iterations=cox.max_iterations,
-                cox_min_iterations=cox.min_iterations,
-                cox_distribution=cox.distribution,
+                qc_enabled=qc_settings.get('enabled', True),
+                qc_mode=qc_settings.get('mode', 'sesame'),
+                qc_preset='sesame' if qc_settings.get('mode') == 'sesame' else 'custom',
+                custom_qc_settings=qc_settings,
+                phase1_enabled=qc_settings.get('phase1_enabled', True),
+                phase2_enabled=qc_settings.get('phase2_enabled', True),
+                # Cox FDWRA (from unified panel)
+                cox_enabled=fdwra.get('enabled', False),
+                cox_n=fdwra.get('n', 2.0),
+                cox_max_iterations=fdwra.get('max_iterations', 50),
+                cox_min_iterations=fdwra.get('min_iterations', 1),
+                cox_distribution=fdwra.get('distribution_fn', 'lognormal'),
                 # Parallel
                 use_parallel=self.parallel_check.isChecked(),
                 n_cores=self.cores_spin.value(),
@@ -448,47 +455,49 @@ if HAS_PYQT5:
         @property
         def qc_enable_check(self):
             """Backward compatibility: access QC enable check."""
-            return self.qc_panel.enable_check
+            return self.unified_qc_panel.master_enable
         
         @property
         def preset_radio(self):
-            """Backward compatibility: access preset radio."""
-            return self.qc_panel.preset_radio
+            """Backward compatibility: access preset radio (SESAME)."""
+            return self.unified_qc_panel.sesame_radio
         
         @property
         def custom_radio(self):
             """Backward compatibility: access custom radio."""
-            return self.qc_panel.custom_radio
+            return self.unified_qc_panel.custom_radio
         
         @property
         def qc_combo(self):
-            """Backward compatibility: access QC preset combo."""
-            return self.qc_panel.preset_combo
+            """Backward compatibility: QC combo is deprecated - returns None."""
+            # No longer a combo box - SESAME/Custom only
+            return None
         
         @property
         def cox_fdwra_check(self):
-            """Backward compatibility: access Cox enable check."""
-            return self.cox_panel.enable_check
+            """Backward compatibility: access FDWRA enable check."""
+            return self.unified_qc_panel.fdwra_row['checkbox']
         
         @property
         def cox_n_spin(self):
-            """Backward compatibility: access Cox n spin."""
-            return self.cox_panel.n_spin
+            """Backward compatibility: Cox n spin is in dialog - returns None."""
+            # Parameters now in settings dialog
+            return None
         
         @property
         def cox_iterations_spin(self):
-            """Backward compatibility: access Cox max iterations spin."""
-            return self.cox_panel.max_iterations_spin
+            """Backward compatibility: Cox iterations spin is in dialog - returns None."""
+            return None
         
         @property
         def cox_min_iterations_spin(self):
-            """Backward compatibility: access Cox min iterations spin."""
-            return self.cox_panel.min_iterations_spin
+            """Backward compatibility: Cox min iterations spin is in dialog - returns None."""
+            return None
         
         @property
         def cox_dist_combo(self):
-            """Backward compatibility: access Cox distribution combo."""
-            return self.cox_panel.dist_combo
+            """Backward compatibility: Cox distribution combo is in dialog - returns None."""
+            return None
 
 
 else:

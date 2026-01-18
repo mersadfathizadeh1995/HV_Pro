@@ -2,6 +2,14 @@
 Quality Control Settings Panel
 ==============================
 
+.. deprecated:: 2.0
+    This module is deprecated. Use :class:`unified_qc_panel.UnifiedQCPanel` instead.
+    The UnifiedQCPanel provides:
+    - Hierarchical checkboxes (Master → Phase → Algorithm)
+    - SESAME standard preset matching hvsrpy defaults
+    - Individual settings dialogs for each algorithm
+    - Custom settings persistence across sessions
+
 Unified widget for HVSR quality control settings.
 Uses QCSettings dataclass from processing/rejection/settings.py.
 """

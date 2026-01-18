@@ -179,8 +179,10 @@ class QCSettings:
     
     Attributes:
         enabled: Master QC enable/disable
-        mode: 'preset' or 'custom'
+        mode: 'preset', 'sesame', or 'custom'
         preset: Preset name if mode is 'preset'
+        phase1_enabled: Enable Phase 1 (Pre-HVSR) algorithms
+        phase2_enabled: Enable Phase 2 (Post-HVSR) algorithms
         
         Pre-HVSR algorithms (time-domain):
         - amplitude: Amplitude rejection
@@ -193,8 +195,8 @@ class QCSettings:
         - hvsr_amplitude: HVSR peak amplitude rejection
         - flat_peak: Flat peak detection
         
-        Cox FDWRA:
-        - cox_fdwra: Cox et al. (2020) FDWRA settings
+        FDWRA (Peak Frequency Consistency):
+        - cox_fdwra: FDWRA settings
         
         ML algorithms (optional):
         - isolation_forest: Isolation Forest settings
@@ -208,8 +210,10 @@ class QCSettings:
     """
     # Master settings
     enabled: bool = True
-    mode: str = 'preset'  # 'preset' or 'custom'
-    preset: str = 'balanced'  # conservative, balanced, aggressive, sesame, publication
+    mode: str = 'sesame'  # 'preset', 'sesame', or 'custom'
+    preset: str = 'sesame'  # Default to SESAME
+    phase1_enabled: bool = True  # Phase 1 (Pre-HVSR) enable
+    phase2_enabled: bool = True  # Phase 2 (Post-HVSR) enable
     
     # Pre-HVSR algorithms (time-domain)
     amplitude: AmplitudeSettings = field(default_factory=AmplitudeSettings)
@@ -234,6 +238,8 @@ class QCSettings:
             'enabled': self.enabled,
             'mode': self.mode,
             'preset': self.preset,
+            'phase1_enabled': self.phase1_enabled,
+            'phase2_enabled': self.phase2_enabled,
             'algorithms': {
                 'amplitude': self.amplitude.to_dict(),
                 'quality_threshold': self.quality_threshold.to_dict(),
@@ -252,8 +258,10 @@ class QCSettings:
         """Create QCSettings from dictionary."""
         settings = cls(
             enabled=data.get('enabled', True),
-            mode=data.get('mode', 'preset'),
-            preset=data.get('preset', 'balanced')
+            mode=data.get('mode', 'sesame'),
+            preset=data.get('preset', 'sesame'),
+            phase1_enabled=data.get('phase1_enabled', True),
+            phase2_enabled=data.get('phase2_enabled', True)
         )
         
         # Load algorithm settings
@@ -416,16 +424,23 @@ class QCSettings:
 
 # Preset descriptions for UI
 PRESET_DESCRIPTIONS = {
-    "conservative": "Only rejects obvious problems (dead channels, clipping). Best for noisy data.",
-    "balanced": "Amplitude checks only. Recommended for most datasets.",
-    "aggressive": "Strict QC with STA/LTA, frequency, and statistical checks. For clean data.",
-    "sesame": "SESAME-compliant processing with Cox FDWRA for publication-quality results.",
-    "publication": "4-condition rejection: HVSR amplitude, peak consistency, flat peaks."
+    "sesame": "SESAME standard with Amplitude + STA/LTA + Peak Frequency Consistency (FDWRA). Recommended for publication-quality results.",
+    "custom": "User-defined settings. Configure each algorithm individually and save for future sessions.",
+    # Legacy presets (deprecated)
+    "conservative": "[Deprecated] Use SESAME or custom settings instead.",
+    "balanced": "[Deprecated] Use SESAME or custom settings instead.",
+    "aggressive": "[Deprecated] Use custom settings instead.",
+    "publication": "[Deprecated] Use SESAME with custom settings instead."
 }
 
 
 def get_preset_names() -> list:
-    """Get list of available preset names."""
+    """Get list of available preset names (primary presets only)."""
+    return ['sesame', 'custom']
+
+
+def get_all_preset_names() -> list:
+    """Get all preset names including deprecated ones."""
     return list(PRESET_DESCRIPTIONS.keys())
 
 

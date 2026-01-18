@@ -37,7 +37,8 @@ class ProcessingThread(QThread):
                  use_parallel=False, n_cores=None, 
                  manual_sampling_rate=None, custom_qc_settings=None,
                  cox_fdwra_settings=None, smoothing_method='konno_ohmachi',
-                 file_format='auto', degrees_from_north=None):
+                 file_format='auto', degrees_from_north=None,
+                 qc_enabled=True, phase1_enabled=True, phase2_enabled=True):
         super().__init__()
         self.file_input = file_input  # Can be str, list, or dict
         self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2', 'multi_component'
@@ -59,6 +60,11 @@ class ProcessingThread(QThread):
         self.custom_qc_settings = custom_qc_settings  # Optional custom QC settings
         # Cox FDWRA settings: {'n': float, 'max_iterations': int, 'min_iterations': int, 'distribution': str}
         self.cox_fdwra_settings = cox_fdwra_settings or {}
+        
+        # Phase-level QC control
+        self.qc_enabled = qc_enabled  # Master QC enable/disable
+        self.phase1_enabled = phase1_enabled  # Phase 1 (Pre-HVSR) enable
+        self.phase2_enabled = phase2_enabled  # Phase 2 (Post-HVSR) enable
     
     def run(self):
         """Execute processing pipeline with multi-file support."""
@@ -143,12 +149,20 @@ class ProcessingThread(QThread):
             # Step 3: Quality control
             engine = RejectionEngine()
 
-            # Check if QC is completely disabled
-            if self.custom_qc_settings and not self.custom_qc_settings.get('enabled', True):
+            # Check master QC enable flag first
+            qc_disabled = not self.qc_enabled
+            if self.custom_qc_settings:
+                # Also check settings-level enable flag
+                qc_disabled = qc_disabled or not self.custom_qc_settings.get('enabled', True)
+            
+            if qc_disabled:
                 self.progress.emit(50, "Quality control disabled (skipping)...")
                 # Skip QC entirely - all windows remain active
+            elif not self.phase1_enabled:
+                self.progress.emit(50, "Phase 1 QC disabled (skipping pre-HVSR rejection)...")
+                # Skip Phase 1 but Phase 2 (FDWRA) may still run after HVSR
             elif self.custom_qc_settings and self.qc_mode == 'custom':
-                # Use custom QC settings
+                # Use custom QC settings (Phase 1 algorithms)
                 self.progress.emit(50, "Applying quality control (custom settings)...")
                 self._apply_custom_qc(engine, self.custom_qc_settings)
                 engine.evaluate(windows, auto_apply=True)
@@ -214,8 +228,17 @@ class ProcessingThread(QThread):
             )
             result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
             
-            # Step 5: Apply Cox FDWRA (if enabled or SESAME mode)
-            if self.apply_cox_fdwra or self.qc_mode == 'sesame':
+            # Step 5: Apply Cox FDWRA (if enabled and Phase 2 is enabled)
+            apply_fdwra = self.apply_cox_fdwra or self.qc_mode == 'sesame'
+            if self.custom_qc_settings:
+                # Check FDWRA enabled in custom settings
+                fdwra_settings = self.custom_qc_settings.get('algorithms', {}).get('fdwra', {})
+                apply_fdwra = apply_fdwra or fdwra_settings.get('enabled', False)
+            
+            # Phase 2 must be enabled and master QC must be enabled
+            apply_fdwra = apply_fdwra and self.qc_enabled and self.phase2_enabled
+            
+            if apply_fdwra:
                 self.progress.emit(85, "Applying Cox FDWRA (peak consistency)...")
                 
                 # Store raw spectra BEFORE Cox FDWRA rejection (for comparison plot)
