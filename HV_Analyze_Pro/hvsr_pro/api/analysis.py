@@ -18,6 +18,7 @@ class ProcessingConfig:
     """Configuration for HVSR processing."""
     window_length: float = 30.0
     overlap: float = 0.5
+    smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
     freq_min: float = 0.2
     freq_max: float = 20.0
@@ -32,6 +33,7 @@ class ProcessingConfig:
         return {
             'window_length': self.window_length,
             'overlap': self.overlap,
+            'smoothing_method': self.smoothing_method,
             'smoothing_bandwidth': self.smoothing_bandwidth,
             'freq_min': self.freq_min,
             'freq_max': self.freq_max,
@@ -89,15 +91,25 @@ class HVSRAnalysis:
         return self._config
     
     def load_data(self, 
-                  file_path: Union[str, Path],
+                  file_path: Union[str, Path, List[str]],
+                  format: str = 'auto',
+                  degrees_from_north: Optional[float] = None,
                   start_time: Optional[str] = None,
                   end_time: Optional[str] = None,
                   timezone_offset: int = 0) -> 'HVSRAnalysis':
         """
-        Load seismic data from a file.
+        Load seismic data from a file or files.
+        
+        Supports multiple formats:
+        - Single file formats: TXT, MiniSEED, SAF, GCF
+        - Multi-file formats: SAC (3 files), PEER (3 files)
         
         Args:
-            file_path: Path to the data file (MiniSEED, ASCII, CSV)
+            file_path: Path to data file, or list of 3 paths for SAC/PEER
+            format: Format hint: 'auto', 'txt', 'miniseed', 'saf', 'gcf',
+                   'sac', 'peer'. Default: auto-detect
+            degrees_from_north: Sensor orientation (optional). Required for
+                               numeric component naming (123/12Z patterns)
             start_time: Optional start time filter (ISO format)
             end_time: Optional end time filter (ISO format)
             timezone_offset: Timezone offset from UTC in hours
@@ -108,18 +120,51 @@ class HVSRAnalysis:
         Raises:
             FileNotFoundError: If file doesn't exist
             ValueError: If file format is not supported
+            
+        Example:
+            # Single file
+            >>> analysis.load_data('data.saf', format='saf')
+            
+            # Multi-file (SAC)
+            >>> analysis.load_data([
+            ...     'data_n.sac', 'data_e.sac', 'data_z.sac'
+            ... ], format='sac')
         """
         from hvsr_pro.core import HVSRDataHandler
+        from hvsr_pro.loaders import FORMAT_INFO
         
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        
-        self._file_path = file_path
-        
-        # Load data
         handler = HVSRDataHandler()
-        self._data = handler.load_data(str(file_path))
+        
+        # Handle multi-file input (list of paths)
+        if isinstance(file_path, (list, tuple)):
+            # Validate all files exist
+            for fp in file_path:
+                p = Path(fp)
+                if not p.exists():
+                    raise FileNotFoundError(f"File not found: {fp}")
+            
+            self._file_path = file_path[0]  # Store first for reference
+            
+            # Use multi-component loading
+            self._data = handler.load_multi_component(
+                list(file_path),
+                format=format,
+                degrees_from_north=degrees_from_north
+            )
+        else:
+            # Single file
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            self._file_path = file_path
+            
+            # Load data with format and orientation options
+            self._data = handler.load_data(
+                str(file_path),
+                format=format,
+                degrees_from_north=degrees_from_north
+            )
         
         # Apply time range filter if specified
         if start_time or end_time:
@@ -147,7 +192,14 @@ class HVSRAnalysis:
         Args:
             window_length: Window length in seconds (default: 30)
             overlap: Window overlap as fraction 0-1 (default: 0.5)
-            smoothing_bandwidth: Konno-Ohmachi smoothing b (default: 40)
+            smoothing_method: Smoothing method (default: 'konno_ohmachi')
+                Options: 'konno_ohmachi', 'parzen', 'savitzky_golay',
+                        'linear_rectangular', 'log_rectangular',
+                        'linear_triangular', 'log_triangular', 'none'
+            smoothing_bandwidth: Smoothing bandwidth (default: 40)
+                - Konno-Ohmachi: inverse width (20-80 typical)
+                - Parzen/rectangular/triangular: window width in Hz or log10
+                - Savitzky-Golay: number of points (odd integer)
             freq_min: Minimum frequency in Hz (default: 0.2)
             freq_max: Maximum frequency in Hz (default: 20)
             n_frequencies: Number of frequency points (default: 100)
@@ -165,6 +217,49 @@ class HVSRAnalysis:
                 setattr(self._config, key, value)
             else:
                 raise ValueError(f"Unknown configuration parameter: {key}")
+        
+        return self
+    
+    def configure_smoothing(self, 
+                            method: str = 'konno_ohmachi',
+                            bandwidth: Optional[float] = None) -> 'HVSRAnalysis':
+        """
+        Configure smoothing method.
+        
+        Convenience method for setting smoothing parameters.
+        
+        Args:
+            method: Smoothing method name
+                Options: 'konno_ohmachi', 'parzen', 'savitzky_golay',
+                        'linear_rectangular', 'log_rectangular',
+                        'linear_triangular', 'log_triangular', 'none'
+            bandwidth: Method-specific bandwidth (uses default if None)
+                - Konno-Ohmachi: 40 (inverse width, higher = less smoothing)
+                - Parzen: 0.5 Hz
+                - Savitzky-Golay: 9 (odd integer, number of points)
+                - Linear/log rectangular/triangular: 0.5 Hz or 0.05 log10
+                
+        Returns:
+            self for method chaining
+        """
+        from hvsr_pro.processing.smoothing import SmoothingMethod, DEFAULT_BANDWIDTHS
+        
+        # Normalize method name
+        method = method.lower().replace(" ", "_").replace("-", "_")
+        
+        # Validate method
+        try:
+            smoothing_method = SmoothingMethod.from_string(method)
+        except ValueError:
+            valid = [m.value for m in SmoothingMethod]
+            raise ValueError(f"Invalid smoothing method: {method}. Valid: {valid}")
+        
+        # Get default bandwidth if not specified
+        if bandwidth is None:
+            bandwidth = DEFAULT_BANDWIDTHS.get(smoothing_method, 40.0)
+        
+        self._config.smoothing_method = method
+        self._config.smoothing_bandwidth = bandwidth
         
         return self
     
@@ -198,6 +293,7 @@ class HVSRAnalysis:
         
         # Compute HVSR
         processor = HVSRProcessor(
+            smoothing_method=self._config.smoothing_method,
             smoothing_bandwidth=self._config.smoothing_bandwidth,
             f_min=self._config.freq_min,
             f_max=self._config.freq_max,

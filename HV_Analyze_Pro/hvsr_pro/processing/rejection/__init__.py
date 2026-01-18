@@ -8,6 +8,7 @@ Modules:
     - base: Base classes and interfaces
     - engine: Rejection engine coordinator
     - presets: Pre-configured QC pipelines
+    - settings: Unified settings dataclasses
     - algorithms: Individual rejection algorithms
 """
 
@@ -20,6 +21,21 @@ from hvsr_pro.processing.rejection.presets import (
     create_preset_pipeline,
     get_available_presets,
     get_preset_description,
+)
+from hvsr_pro.processing.rejection.settings import (
+    QCSettings,
+    AlgorithmSettings,
+    AmplitudeSettings,
+    QualityThresholdSettings,
+    STALTASettings,
+    FrequencyDomainSettings,
+    StatisticalOutlierSettings,
+    HVSRAmplitudeSettings,
+    FlatPeakSettings,
+    CoxFDWRASettings,
+    IsolationForestSettings,
+    PRESET_DESCRIPTIONS,
+    get_preset_names,
 )
 from hvsr_pro.processing.rejection.algorithms import (
     # Statistical
@@ -46,6 +62,20 @@ __all__ = [
     'create_preset_pipeline',
     'get_available_presets',
     'get_preset_description',
+    # Settings
+    'QCSettings',
+    'AlgorithmSettings',
+    'AmplitudeSettings',
+    'QualityThresholdSettings',
+    'STALTASettings',
+    'FrequencyDomainSettings',
+    'StatisticalOutlierSettings',
+    'HVSRAmplitudeSettings',
+    'FlatPeakSettings',
+    'CoxFDWRASettings',
+    'IsolationForestSettings',
+    'PRESET_DESCRIPTIONS',
+    'get_preset_names',
     # Algorithms
     'QualityThresholdRejection',
     'StatisticalOutlierRejection',

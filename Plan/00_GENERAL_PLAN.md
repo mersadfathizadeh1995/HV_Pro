@@ -16,29 +16,33 @@ Enhance hvsr_pro to have feature parity with hvsrpy while maintaining:
 
 ## Feature Gap Analysis
 
-### 1. Data Loading (Priority: HIGH)
-| Feature | hvsrpy | hvsr_pro | Action |
+### 1. Data Loading (Priority: HIGH) - COMPLETED
+| Feature | hvsrpy | hvsr_pro | Status |
 |---------|--------|----------|--------|
-| MiniSEED | ✅ | ✅ | None |
-| ASCII/TXT | ❌ | ✅ | None |
-| SAF (SESAME ASCII) | ✅ | ❌ | **Add** |
-| SAC | ✅ | ❌ | **Add** |
-| GCF (Guralp) | ✅ | ❌ | **Add** |
-| PEER | ✅ | ❌ | **Add** |
-| Auto-detection | ✅ | ❌ | **Add** |
-| Multi-file mapping | ✅ | ✅ | None |
+| MiniSEED | ✅ | ✅ | Done |
+| ASCII/TXT | ❌ | ✅ | Done |
+| SAF (SESAME ASCII) | ✅ | ✅ | **Done** |
+| SAC | ✅ | ✅ | **Done** |
+| GCF (Guralp) | ✅ | ✅ | **Done** |
+| PEER | ✅ | ✅ | **Done** |
+| Auto-detection | ✅ | ✅ | **Done** |
+| Multi-file mapping | ✅ | ✅ | Done |
 
-### 2. Smoothing Methods (Priority: HIGH)
-| Method | hvsrpy | hvsr_pro | Action |
+**Implementation:** `loaders/` package with registry pattern, config dataclasses, GUI tabs.
+
+### 2. Smoothing Methods (Priority: HIGH) - COMPLETED
+| Method | hvsrpy | hvsr_pro | Status |
 |--------|--------|----------|--------|
-| Konno-Ohmachi | ✅ | ✅ | Enhance params |
-| Parzen | ✅ | ❌ | **Add** |
-| Savitzky-Golay | ✅ | ❌ | **Add** |
-| Linear Rectangular | ✅ | ❌ | **Add** |
-| Log Rectangular | ✅ | ❌ | **Add** |
-| Linear Triangular | ✅ | ❌ | **Add** |
-| Log Triangular | ✅ | ❌ | **Add** |
-| No Smoothing | ❌ | ❌ | **Add** |
+| Konno-Ohmachi | ✅ | ✅ | Done |
+| Parzen | ✅ | ✅ | **Done** |
+| Savitzky-Golay | ✅ | ✅ | **Done** |
+| Linear Rectangular | ✅ | ✅ | **Done** |
+| Log Rectangular | ✅ | ✅ | **Done** |
+| Linear Triangular | ✅ | ✅ | **Done** |
+| Log Triangular | ✅ | ✅ | **Done** |
+| No Smoothing | ❌ | ✅ | **Done** |
+
+**Implementation:** `processing/smoothing/` package with registry pattern, GUI dialog, API method.
 
 ### 3. Horizontal Combination (Priority: MEDIUM)
 | Method | hvsrpy | hvsr_pro | Action |
@@ -95,32 +99,38 @@ Enhance hvsr_pro to have feature parity with hvsrpy while maintaining:
 ### Phase A: Core Infrastructure (Foundation)
 *Estimated: 3-4 sessions*
 
-1. **Smoothing Module** (core/processing/smoothing/)
-   - Create modular smoothing functions (no Numba dependency)
-   - Settings dataclass with validation
-   - GUI dialog for smoothing selection
-   - Registry pattern for extensibility
+1. **Smoothing Module** (processing/smoothing/) - **COMPLETED**
+   - ✅ Created 8 modular smoothing functions (pure NumPy, no Numba)
+   - ✅ Settings dataclass with validation
+   - ✅ GUI dialog for smoothing selection
+   - ✅ Registry pattern for extensibility
+   - ✅ API configure_smoothing() method
 
-2. **Statistics Module** (core/processing/statistics/)
+2. **Statistics Module** (processing/statistics/) - **TODO**
    - Lognormal mean/std/nth_std functions
    - Normal statistics (existing)
    - Factory pattern for distribution selection
    - SESAME criteria functions
 
-### Phase B: Data Loading Enhancement
+### Phase B: Data Loading Enhancement - **COMPLETED**
 *Estimated: 2-3 sessions*
+**Detailed Plan:** `Plan/02_DATA_LOADING_PLAN.md`
 
-1. **New Loaders** (loaders/)
-   - SAF loader (SESAME ASCII Format)
-   - SAC loader (via ObsPy)
-   - GCF loader (via ObsPy)
-   - PEER loader (custom parser)
-   - Auto-detection utility
+1. **New Loaders** (loaders/) - **COMPLETED**
+   - ✅ SAF loader (SESAME ASCII Format)
+   - ✅ SAC loader (via ObsPy, 3 separate files)
+   - ✅ GCF loader (via ObsPy)
+   - ✅ PEER loader (custom parser, 3 separate files)
+   - ✅ Auto-detection utility (FORMAT_INFO registry)
+   - ✅ Loader configuration system (config.py dataclasses)
+   - ✅ Component orientation utilities (NEZ, XYZ, 123, 12Z patterns)
 
-2. **GUI Integration**
-   - Update DataInputDialog with format selection
-   - Add format-specific options panels
-   - Channel mapping for all formats
+2. **GUI Integration** - **COMPLETED**
+   - ✅ SingleFileTab with format selector (auto, txt, miniseed, saf, gcf)
+   - ✅ MultiComponentTab for SAC/PEER (3-file browser)
+   - ✅ MultiFileBrowser widget
+   - ✅ Degrees from north input for orientation
+   - ✅ API load_data() with format and degrees_from_north params
 
 ### Phase C: Horizontal Combination Methods
 *Estimated: 1-2 sessions*
@@ -188,29 +198,32 @@ GUI Component → Signal → Controller → Core Function → Result
 
 ---
 
-## Suggested Starting Point
+## Suggested Next Steps
 
-**Recommendation: Start with Smoothing Methods (Phase A.1)**
+**Smoothing Methods (Phase A.1) - COMPLETED**
 
-Reasons:
-1. **Foundational** - Used by all HVSR processing
-2. **Self-contained** - Minimal dependencies
-3. **Testable** - Easy to verify correctness
-4. **High impact** - Users immediately benefit
-5. **Good pattern** - Establishes modular architecture pattern
-
-The smoothing implementation will establish:
+The smoothing implementation established:
 - Registry pattern for extensible methods
-- Settings dataclass pattern
+- Settings dataclass pattern  
 - GUI dialog integration pattern
 - Core → API → GUI workflow
 
-After smoothing, recommend proceeding with:
-1. Statistics enhancement (builds on smoothing testing)
-2. Data loaders (independent, high user value)
-3. Horizontal combination (quick wins)
-4. Advanced processing (more complex)
-5. API/CLI (integrates all above)
+**Data Loading (Phase B) - COMPLETED**
+
+The data loading implementation added:
+- 4 new file format loaders (SAF, SAC, GCF, PEER)
+- FORMAT_INFO registry for auto-detection
+- GUI format selection (SingleFileTab) and multi-file browser (MultiComponentTab)
+- API load_data() with format and degrees_from_north parameters
+- Orientation utilities for component identification (NEZ, XYZ, 123, 12Z)
+
+**Recommendation: Continue with Statistics Enhancement (Phase A.2)**
+
+Next priorities:
+1. **Statistics enhancement** - Lognormal functions, SESAME criteria
+2. **Horizontal combination** - Remaining methods (quick wins)
+3. **Advanced processing** - Diffuse Field HVSR, PSD
+4. **CLI** - Command-line interface implementation
 
 ---
 

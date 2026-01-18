@@ -8,6 +8,7 @@ Main class for computing HVSR from window collections.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Optional, Tuple, List, Dict, Any, TYPE_CHECKING
 import numpy as np
 from multiprocessing import Pool, cpu_count
@@ -18,11 +19,12 @@ if TYPE_CHECKING:
 from hvsr_pro.processing.hvsr.structures import HVSRResult, WindowSpectrum, Peak
 from hvsr_pro.processing.hvsr.spectral import (
     compute_fft,
-    konno_ohmachi_smoothing_fast,
+    konno_ohmachi_smoothing_fast,  # Keep for backward compatibility
     calculate_horizontal_spectrum,
     calculate_hvsr,
     logspace_frequencies
 )
+from hvsr_pro.processing.smoothing import get_smoothing_function, get_default_bandwidth
 
 # Import window structures directly to avoid circular imports
 # Peak detection is imported lazily in _detect_peaks method
@@ -43,14 +45,19 @@ def _process_single_window_parallel(args):
     
     Args:
         args: Tuple of (window, target_frequencies, smoothing_bandwidth, 
-              horizontal_method, taper)
+              horizontal_method, taper, smoothing_method)
     
     Returns:
         Tuple of (WindowSpectrum, None) or (None, error_message)
     """
-    window, target_frequencies, smoothing_bandwidth, horizontal_method, taper = args
+    window, target_frequencies, smoothing_bandwidth, horizontal_method, taper, smoothing_method = args
     
     try:
+        # Import inside function for multiprocessing
+        from hvsr_pro.processing.smoothing import get_smoothing_function
+        from hvsr_pro.processing.hvsr.spectral import compute_fft, calculate_horizontal_spectrum, calculate_hvsr
+        from hvsr_pro.processing.hvsr.structures import WindowSpectrum
+        
         sampling_rate = window.data.sampling_rate
         
         # Validate data
@@ -69,16 +76,13 @@ def _process_single_window_parallel(args):
         freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, taper)
         freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, taper)
         
-        # Apply Konno-Ohmachi smoothing
-        smooth_e = konno_ohmachi_smoothing_fast(
-            freq_e, spec_e, smoothing_bandwidth, normalize=True, fc_array=target_frequencies
-        )
-        smooth_n = konno_ohmachi_smoothing_fast(
-            freq_n, spec_n, smoothing_bandwidth, normalize=True, fc_array=target_frequencies
-        )
-        smooth_z = konno_ohmachi_smoothing_fast(
-            freq_z, spec_z, smoothing_bandwidth, normalize=True, fc_array=target_frequencies
-        )
+        # Get smoothing function from registry
+        smooth_fn = get_smoothing_function(smoothing_method)
+        
+        # Apply smoothing
+        smooth_e = smooth_fn(freq_e, spec_e, target_frequencies, smoothing_bandwidth)
+        smooth_n = smooth_fn(freq_n, spec_n, target_frequencies, smoothing_bandwidth)
+        smooth_z = smooth_fn(freq_z, spec_z, target_frequencies, smoothing_bandwidth)
         
         # Calculate horizontal spectrum
         horizontal = calculate_horizontal_spectrum(smooth_e, smooth_n, horizontal_method)
@@ -117,13 +121,24 @@ class HVSRProcessor:
     
     Computes H/V spectral ratios from window collections with:
     - FFT computation
-    - Konno-Ohmachi smoothing
+    - Configurable spectral smoothing (7 methods available)
     - Statistical analysis
     - Peak detection
+    
+    Available smoothing methods:
+        - 'konno_ohmachi': Log-frequency smoothing (default, standard for HVSR)
+        - 'parzen': Constant Hz bandwidth smoothing
+        - 'savitzky_golay': Polynomial fitting smoothing
+        - 'linear_rectangular': Simple boxcar average in Hz
+        - 'log_rectangular': Boxcar average in log-frequency
+        - 'linear_triangular': Weighted average in Hz
+        - 'log_triangular': Weighted average in log-frequency
+        - 'none': No smoothing (interpolation only)
     
     Example:
         >>> processor = HVSRProcessor(
         ...     smoothing_bandwidth=40,
+        ...     smoothing_method='konno_ohmachi',
         ...     f_min=0.2,
         ...     f_max=20.0
         ... )
@@ -133,6 +148,7 @@ class HVSRProcessor:
     
     def __init__(self,
                  smoothing_bandwidth: float = 40,
+                 smoothing_method: str = 'konno_ohmachi',
                  f_min: float = 0.2,
                  f_max: float = 20.0,
                  n_frequencies: int = 100,
@@ -143,7 +159,14 @@ class HVSRProcessor:
         Initialize HVSR processor.
         
         Args:
-            smoothing_bandwidth: Konno-Ohmachi smoothing parameter (default: 40)
+            smoothing_bandwidth: Smoothing bandwidth parameter (default: 40)
+                - Konno-Ohmachi: inverse width (20-80 typical, higher = less smoothing)
+                - Parzen/rectangular/triangular: window width in Hz or log10
+                - Savitzky-Golay: number of points (odd integer)
+            smoothing_method: Smoothing method name (default: 'konno_ohmachi')
+                Options: 'konno_ohmachi', 'parzen', 'savitzky_golay',
+                        'linear_rectangular', 'log_rectangular',
+                        'linear_triangular', 'log_triangular', 'none'
             f_min: Minimum frequency in Hz (default: 0.2)
             f_max: Maximum frequency in Hz (default: 20.0)
             n_frequencies: Number of frequency points (default: 100)
@@ -152,6 +175,7 @@ class HVSRProcessor:
             taper: Taper window type ('hann', 'hamming', 'blackman', None)
         """
         self.smoothing_bandwidth = smoothing_bandwidth
+        self.smoothing_method = smoothing_method.lower().replace(" ", "_").replace("-", "_")
         self.f_min = f_min
         self.f_max = f_max
         self.n_frequencies = n_frequencies
@@ -160,10 +184,17 @@ class HVSRProcessor:
         self.taper = taper if taper else None
         self.use_only_active = True
         
+        # Validate smoothing method
+        try:
+            self._smooth_fn = get_smoothing_function(self.smoothing_method)
+        except ValueError as e:
+            raise ValueError(f"Invalid smoothing_method: {e}")
+        
         # Generate target frequency array (log-spaced)
         self.target_frequencies = logspace_frequencies(f_min, f_max, n_frequencies)
         
-        logger.info(f"HVSRProcessor initialized: b={smoothing_bandwidth}, f=[{f_min}, {f_max}] Hz")
+        logger.info(f"HVSRProcessor initialized: method={self.smoothing_method}, "
+                    f"b={smoothing_bandwidth}, f=[{f_min}, {f_max}] Hz")
     
     def process(self,
                 windows: WindowCollection,
@@ -205,7 +236,7 @@ class HVSRProcessor:
             
             args_list = [
                 (window, self.target_frequencies, self.smoothing_bandwidth, 
-                 self.horizontal_method, self.taper)
+                 self.horizontal_method, self.taper, self.smoothing_method)
                 for window in window_list
             ]
             
@@ -302,16 +333,10 @@ class HVSRProcessor:
         freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, self.taper)
         freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, self.taper)
         
-        # Apply Konno-Ohmachi smoothing
-        smooth_e = konno_ohmachi_smoothing_fast(
-            freq_e, spec_e, self.smoothing_bandwidth, normalize=True, fc_array=self.target_frequencies
-        )
-        smooth_n = konno_ohmachi_smoothing_fast(
-            freq_n, spec_n, self.smoothing_bandwidth, normalize=True, fc_array=self.target_frequencies
-        )
-        smooth_z = konno_ohmachi_smoothing_fast(
-            freq_z, spec_z, self.smoothing_bandwidth, normalize=True, fc_array=self.target_frequencies
-        )
+        # Apply smoothing using the configured method
+        smooth_e = self._smooth_fn(freq_e, spec_e, self.target_frequencies, self.smoothing_bandwidth)
+        smooth_n = self._smooth_fn(freq_n, spec_n, self.target_frequencies, self.smoothing_bandwidth)
+        smooth_z = self._smooth_fn(freq_z, spec_z, self.target_frequencies, self.smoothing_bandwidth)
         
         # Calculate horizontal spectrum
         horizontal = calculate_horizontal_spectrum(smooth_e, smooth_n, self.horizontal_method)
@@ -361,6 +386,7 @@ class HVSRProcessor:
     def _get_processing_params(self) -> Dict[str, Any]:
         """Get processing parameters."""
         return {
+            'smoothing_method': self.smoothing_method,
             'smoothing_bandwidth': self.smoothing_bandwidth,
             'f_min': self.f_min,
             'f_max': self.f_max,
@@ -385,6 +411,6 @@ class HVSRProcessor:
     
     def __repr__(self) -> str:
         return (f"HVSRProcessor(f=[{self.f_min}-{self.f_max}]Hz, "
-                f"smoothing=KO{self.smoothing_bandwidth}, "
-                f"method={self.horizontal_method})")
+                f"smoothing={self.smoothing_method}(b={self.smoothing_bandwidth}), "
+                f"horizontal={self.horizontal_method})")
 

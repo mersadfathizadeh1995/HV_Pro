@@ -28,6 +28,7 @@ class FullProcessingSettings:
     # Processing settings
     window_length: float = 60.0
     overlap: float = 0.5
+    smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
     freq_min: float = 0.2
     freq_max: float = 20.0
@@ -345,6 +346,7 @@ if HAS_PYQT5:
                 # Processing
                 window_length=proc.window_length,
                 overlap=proc.overlap,
+                smoothing_method=getattr(proc, 'smoothing_method', 'konno_ohmachi'),
                 smoothing_bandwidth=proc.smoothing_bandwidth,
                 freq_min=proc.freq_min,
                 freq_max=proc.freq_max,

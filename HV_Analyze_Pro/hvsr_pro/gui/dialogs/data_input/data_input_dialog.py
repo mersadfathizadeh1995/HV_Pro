@@ -31,9 +31,12 @@ except ImportError:
 if HAS_PYQT5:
     from hvsr_pro.gui.components import CollapsibleGroupBox
     from hvsr_pro.gui.dialogs.data_input.tabs import (
-        SingleFileTab, MultiType1Tab, MultiType2Tab, AdvancedOptionsTab
+        SingleFileTab, MultiType1Tab, MultiType2Tab, MultiComponentTab,
+        AdvancedOptionsTab
     )
     from hvsr_pro.gui.dialogs.data_input.preview_panel import PreviewPanel
+    from hvsr_pro.gui.dialogs.mappers import ComponentMapperDialog
+    from hvsr_pro.loaders.preview import get_preview
 
 
 if HAS_PYQT5:
@@ -63,6 +66,8 @@ if HAS_PYQT5:
             
             # Storage
             self.load_mode = 'single'
+            self.component_mapping = None  # User-defined component mapping
+            self.mapping_orientation = None  # User-defined orientation
             
             self._init_ui()
             self._connect_signals()
@@ -100,12 +105,14 @@ if HAS_PYQT5:
             self.single_tab = SingleFileTab(self)
             self.type1_tab = MultiType1Tab(self)
             self.type2_tab = MultiType2Tab(self)
+            self.multi_component_tab = MultiComponentTab(self)
             self.advanced_tab = AdvancedOptionsTab(self)
             
             # Add tabs
             self.tabs.addTab(self.single_tab, "Single File")
             self.tabs.addTab(self.type1_tab, "Multi-File (3-channel)")
             self.tabs.addTab(self.type2_tab, "Multi-File (Separate E,N,Z)")
+            self.tabs.addTab(self.multi_component_tab, "SAC/PEER Files")
             self.tabs.addTab(self.advanced_tab, "Advanced Options")
             
             scroll_layout.addWidget(self.tabs)
@@ -135,6 +142,17 @@ if HAS_PYQT5:
             
             # === BUTTONS (outside scroll area) ===
             button_layout = QHBoxLayout()
+            
+            # Preview & Map Components button
+            self.map_btn = QPushButton("Preview && Map Components...")
+            self.map_btn.setToolTip(
+                "Open component mapper to verify and customize\n"
+                "how channels are assigned to E, N, Z components"
+            )
+            self.map_btn.clicked.connect(self._open_component_mapper)
+            self.map_btn.setEnabled(False)
+            button_layout.addWidget(self.map_btn)
+            
             button_layout.addStretch()
             
             cancel_btn = QPushButton("Cancel")
@@ -170,6 +188,7 @@ if HAS_PYQT5:
             self.single_tab.validation_changed.connect(self._on_validation_changed)
             self.type1_tab.validation_changed.connect(self._on_validation_changed)
             self.type2_tab.validation_changed.connect(self._on_validation_changed)
+            self.multi_component_tab.validation_changed.connect(self._on_validation_changed)
             
             # Connect file selection signals to preview
             self.single_tab.file_selected.connect(self._on_file_selected_for_preview)
@@ -180,14 +199,24 @@ if HAS_PYQT5:
             # Connect Type2 selection changes
             self.type2_tab.files_changed.connect(self._on_files_changed_for_preview)
             
+            # Connect multi-component files changed
+            self.multi_component_tab.files_changed.connect(self._on_files_changed_for_preview)
+            
             # Connect preview_requested signals
             self.single_tab.preview_requested.connect(self._update_preview)
             self.type1_tab.preview_requested.connect(self._update_preview)
             self.type2_tab.preview_requested.connect(self._update_preview)
+            self.multi_component_tab.preview_requested.connect(self._update_preview)
         
         def _on_tab_changed(self, index: int):
             """Handle tab change to update load mode."""
-            mode_map = {0: 'single', 1: 'multi_type1', 2: 'multi_type2', 3: 'advanced'}
+            mode_map = {
+                0: 'single', 
+                1: 'multi_type1', 
+                2: 'multi_type2', 
+                3: 'multi_component',
+                4: 'advanced'
+            }
             self.load_mode = mode_map.get(index, 'single')
             
             # Update Load button based on current tab's validation
@@ -200,6 +229,9 @@ if HAS_PYQT5:
             # Guard against being called during initialization
             if hasattr(self, 'load_btn'):
                 self._update_load_button()
+            # Also update Map button
+            if hasattr(self, 'map_btn'):
+                self._update_map_button()
         
         def _update_load_button(self):
             """Update Load button enabled state based on current tab."""
@@ -211,9 +243,86 @@ if HAS_PYQT5:
                 has_any_data = (
                     self.single_tab.is_valid() or
                     self.type1_tab.is_valid() or
-                    self.type2_tab.is_valid()
+                    self.type2_tab.is_valid() or
+                    self.multi_component_tab.is_valid()
                 )
                 self.load_btn.setEnabled(has_any_data)
+        
+        def _update_map_button(self):
+            """Update Map button enabled state based on file selection."""
+            # Enable map button when files are selected
+            current_tab = self.tabs.currentWidget()
+            
+            # Check if current tab has files
+            has_files = False
+            if hasattr(current_tab, 'get_files'):
+                files = current_tab.get_files()
+                has_files = len(files) > 0
+            
+            self.map_btn.setEnabled(has_files)
+        
+        def _open_component_mapper(self):
+            """Open the component mapper dialog."""
+            # Get files from current tab
+            current_tab = self.tabs.currentWidget()
+            
+            files = []
+            if hasattr(current_tab, 'get_files'):
+                files = current_tab.get_files()
+            
+            if not files:
+                QMessageBox.warning(
+                    self,
+                    "No Files",
+                    "Please select files first before mapping components."
+                )
+                return
+            
+            # Determine format
+            format_name = None
+            if hasattr(current_tab, 'get_format'):
+                format_name = current_tab.get_format()
+            elif hasattr(current_tab, 'selected_format'):
+                format_name = current_tab.selected_format
+            
+            # Get preview data
+            try:
+                preview = get_preview(files, format=format_name, n_samples=2000)
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Preview Error",
+                    f"Could not load preview: {str(e)}"
+                )
+                return
+            
+            if preview.error:
+                QMessageBox.warning(
+                    self,
+                    "Preview Error",
+                    f"Preview error: {preview.error}"
+                )
+                return
+            
+            # Open component mapper dialog
+            dialog = ComponentMapperDialog(preview, self)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                # Store mapping results
+                result = dialog.get_result()
+                self.component_mapping = result.get('mapping')
+                self.mapping_orientation = result.get('orientation')
+                
+                # Show confirmation
+                mapping_str = ", ".join(
+                    f"{comp}={idx}" for comp, idx in self.component_mapping.items()
+                )
+                QMessageBox.information(
+                    self,
+                    "Mapping Set",
+                    f"Component mapping set: {mapping_str}\n\n"
+                    "This mapping will be used when loading the data."
+                )
         
         def _on_file_selected_for_preview(self, file_path: str):
             """Handle single file selection for preview."""
@@ -250,14 +359,17 @@ if HAS_PYQT5:
                 tab_result = self.type1_tab.get_result()
             elif self.load_mode == 'multi_type2':
                 tab_result = self.type2_tab.get_result()
+            elif self.load_mode == 'multi_component':
+                tab_result = self.multi_component_tab.get_result()
             else:
                 tab_result = self.advanced_tab.get_result()
             
             # Validate we have files
             files = tab_result.get('files', [])
             groups = tab_result.get('groups', {})
+            component_files = tab_result.get('component_files', {})
             
-            if not files and not groups:
+            if not files and not groups and not component_files:
                 QMessageBox.warning(self, "No Files", "Please select files to load.")
                 return
             
@@ -281,12 +393,17 @@ if HAS_PYQT5:
                 'mode': self.load_mode,
                 'files': files,
                 'groups': groups,
+                'component_files': component_files,
+                'format': tab_result.get('format', 'auto'),
                 'time_range': time_range,
                 'options': {
                     'merge_continuous': advanced_options.get('merge_continuous', True),
                     'verify_sampling_rate': advanced_options.get('verify_sampling_rate', True),
                     'column_mapping': tab_result.get('column_mapping'),
                     'channel_mapping': tab_result.get('channel_mapping'),
+                    'degrees_from_north': tab_result.get('degrees_from_north') or self.mapping_orientation,
+                    # Component mapping from mapper dialog
+                    'component_mapping': self.component_mapping,
                 }
             }
             

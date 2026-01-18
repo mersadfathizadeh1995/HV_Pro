@@ -11,12 +11,17 @@ from typing import Optional
 try:
     from PyQt5.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-        QLabel, QSpinBox, QDoubleSpinBox, QCheckBox
+        QLabel, QSpinBox, QDoubleSpinBox, QCheckBox,
+        QComboBox, QPushButton
     )
     from PyQt5.QtCore import pyqtSignal
     HAS_PYQT5 = True
 except ImportError:
     HAS_PYQT5 = False
+
+from hvsr_pro.processing.smoothing import (
+    SmoothingMethod, SmoothingConfig, DEFAULT_BANDWIDTHS, BANDWIDTH_RANGES
+)
 
 
 @dataclass
@@ -24,6 +29,7 @@ class ProcessingSettings:
     """Data class for processing settings."""
     window_length: float = 60.0
     overlap: float = 0.5
+    smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
     freq_min: float = 0.2
     freq_max: float = 20.0
@@ -81,20 +87,49 @@ if HAS_PYQT5:
             ov_layout.addWidget(self.overlap_spin)
             layout.addLayout(ov_layout)
             
-            # Smoothing bandwidth
+            # Smoothing section
+            smoothing_label = QLabel("<b>Spectral Smoothing:</b>")
+            layout.addWidget(smoothing_label)
+            
+            # Method selector
+            method_layout = QHBoxLayout()
+            method_layout.addWidget(QLabel("Method:"))
+            self.smoothing_method_combo = QComboBox()
+            
+            # Add all smoothing methods
+            for method in SmoothingMethod:
+                self.smoothing_method_combo.addItem(method.display_name(), method.value)
+            
+            self.smoothing_method_combo.setToolTip(
+                "Select spectral smoothing method\n"
+                "Konno-Ohmachi is the standard for HVSR analysis"
+            )
+            method_layout.addWidget(self.smoothing_method_combo)
+            
+            # Advanced settings button
+            self.smoothing_advanced_btn = QPushButton("...")
+            self.smoothing_advanced_btn.setMaximumWidth(30)
+            self.smoothing_advanced_btn.setToolTip("Open advanced smoothing settings")
+            method_layout.addWidget(self.smoothing_advanced_btn)
+            layout.addLayout(method_layout)
+            
+            # Bandwidth
             sb_layout = QHBoxLayout()
-            sb_layout.addWidget(QLabel("Konno-Ohmachi (b):"))
+            self.smoothing_bw_label = QLabel("Bandwidth (b):")
+            sb_layout.addWidget(self.smoothing_bw_label)
             self.smoothing_spin = QDoubleSpinBox()
-            self.smoothing_spin.setRange(10, 100)
+            self.smoothing_spin.setRange(1, 200)
             self.smoothing_spin.setValue(40)
             self.smoothing_spin.setSingleStep(5)
             self.smoothing_spin.setToolTip(
-                "Konno-Ohmachi smoothing bandwidth parameter (b)\n"
-                "Higher values = more smoothing\n"
-                "Standard: b=40 (recommended)"
+                "Smoothing bandwidth parameter\n"
+                "Meaning depends on selected method"
             )
             sb_layout.addWidget(self.smoothing_spin)
             layout.addLayout(sb_layout)
+            
+            # Store smoothing config
+            self._smoothing_config = SmoothingConfig()
             
             # Frequency range section
             freq_label = QLabel("<b>Frequency Range (HVSR Computation):</b>")
@@ -165,9 +200,18 @@ if HAS_PYQT5:
                 self.sampling_rate_spin.setEnabled
             )
             
+            # Connect smoothing method change to update bandwidth range
+            self.smoothing_method_combo.currentIndexChanged.connect(
+                self._on_smoothing_method_changed
+            )
+            
+            # Connect advanced button
+            self.smoothing_advanced_btn.clicked.connect(self._open_smoothing_dialog)
+            
             # Connect all value changes to emit settings_changed
             self.window_length_spin.valueChanged.connect(self._emit_settings_changed)
             self.overlap_spin.valueChanged.connect(self._emit_settings_changed)
+            self.smoothing_method_combo.currentIndexChanged.connect(self._emit_settings_changed)
             self.smoothing_spin.valueChanged.connect(self._emit_settings_changed)
             self.freq_min_spin.valueChanged.connect(self._emit_settings_changed)
             self.freq_max_spin.valueChanged.connect(self._emit_settings_changed)
@@ -179,6 +223,82 @@ if HAS_PYQT5:
             """Emit settings_changed signal with current settings."""
             self.settings_changed.emit(self.get_settings())
         
+        def _on_smoothing_method_changed(self, index: int):
+            """Handle smoothing method change."""
+            method_value = self.smoothing_method_combo.currentData()
+            try:
+                method = SmoothingMethod.from_string(method_value)
+            except ValueError:
+                return
+            
+            # Update bandwidth range and label based on method
+            bw_range = BANDWIDTH_RANGES.get(method, (1, 200))
+            default_bw = DEFAULT_BANDWIDTHS.get(method, 40.0)
+            
+            # Update label
+            if method == SmoothingMethod.SAVITZKY_GOLAY:
+                self.smoothing_bw_label.setText("Window Points:")
+                self.smoothing_spin.setDecimals(0)
+                self.smoothing_spin.setSingleStep(2)
+            elif method in (SmoothingMethod.LOG_RECTANGULAR, SmoothingMethod.LOG_TRIANGULAR):
+                self.smoothing_bw_label.setText("Bandwidth (log):")
+                self.smoothing_spin.setDecimals(3)
+                self.smoothing_spin.setSingleStep(0.01)
+            elif method == SmoothingMethod.KONNO_OHMACHI:
+                self.smoothing_bw_label.setText("Bandwidth (b):")
+                self.smoothing_spin.setDecimals(1)
+                self.smoothing_spin.setSingleStep(5)
+            else:
+                self.smoothing_bw_label.setText("Bandwidth (Hz):")
+                self.smoothing_spin.setDecimals(2)
+                self.smoothing_spin.setSingleStep(0.1)
+            
+            # Update range
+            self.smoothing_spin.setRange(bw_range[0], bw_range[1])
+            
+            # Set default value if current is out of range
+            current = self.smoothing_spin.value()
+            if current < bw_range[0] or current > bw_range[1]:
+                self.smoothing_spin.setValue(default_bw)
+            
+            # Disable for 'none' method
+            self.smoothing_spin.setEnabled(method != SmoothingMethod.NONE)
+            
+            # Update internal config
+            self._smoothing_config = SmoothingConfig(
+                method=method,
+                bandwidth=self.smoothing_spin.value()
+            )
+        
+        def _open_smoothing_dialog(self):
+            """Open advanced smoothing settings dialog."""
+            from hvsr_pro.gui.dialogs.smoothing import SmoothingSettingsDialog
+            
+            # Get current config
+            method_value = self.smoothing_method_combo.currentData()
+            try:
+                method = SmoothingMethod.from_string(method_value)
+            except ValueError:
+                method = SmoothingMethod.KONNO_OHMACHI
+            
+            config = SmoothingConfig(
+                method=method,
+                bandwidth=self.smoothing_spin.value()
+            )
+            
+            # Open dialog
+            dialog = SmoothingSettingsDialog(config, self)
+            if dialog.exec_():
+                new_config = dialog.get_config()
+                
+                # Update UI with new config
+                index = self.smoothing_method_combo.findData(new_config.method.value)
+                if index >= 0:
+                    self.smoothing_method_combo.setCurrentIndex(index)
+                
+                self.smoothing_spin.setValue(new_config.bandwidth)
+                self._smoothing_config = new_config
+        
         def get_settings(self) -> ProcessingSettings:
             """
             Get current processing settings.
@@ -187,9 +307,12 @@ if HAS_PYQT5:
                 ProcessingSettings object with current values
             """
             override = self.override_sampling_check.isChecked()
+            method_value = self.smoothing_method_combo.currentData() or 'konno_ohmachi'
+            
             return ProcessingSettings(
                 window_length=self.window_length_spin.value(),
                 overlap=self.overlap_spin.value() / 100.0,
+                smoothing_method=method_value,
                 smoothing_bandwidth=self.smoothing_spin.value(),
                 freq_min=self.freq_min_spin.value(),
                 freq_max=self.freq_max_spin.value(),
@@ -210,6 +333,13 @@ if HAS_PYQT5:
             
             self.window_length_spin.setValue(settings.window_length)
             self.overlap_spin.setValue(int(settings.overlap * 100))
+            
+            # Set smoothing method
+            method = getattr(settings, 'smoothing_method', 'konno_ohmachi')
+            index = self.smoothing_method_combo.findData(method)
+            if index >= 0:
+                self.smoothing_method_combo.setCurrentIndex(index)
+            
             self.smoothing_spin.setValue(settings.smoothing_bandwidth)
             self.freq_min_spin.setValue(settings.freq_min)
             self.freq_max_spin.setValue(settings.freq_max)

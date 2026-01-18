@@ -125,6 +125,11 @@ if HAS_PYQT5:
                     return self._load_multi_type1(handler, files, options, time_range)
                 elif mode == 'multi_type2':
                     return self._load_multi_type2(handler, groups, time_range)
+                elif mode == 'multi_component':
+                    component_files = result.get('component_files', {})
+                    # Include format in options (it's stored at top level in result)
+                    options['format'] = result.get('format', 'auto')
+                    return self._load_multi_component(handler, component_files, options, time_range)
                 else:
                     return LoadResult(
                         success=False,
@@ -296,6 +301,89 @@ if HAS_PYQT5:
                 groups=groups,
                 time_range=time_range,
                 metadata_list=metadata_list
+            )
+            
+            self.loading_finished.emit(result)
+            return result
+        
+        def _load_multi_component(
+            self,
+            handler,
+            component_files: Dict[str, str],
+            options: Dict,
+            time_range: Optional[Dict]
+        ) -> LoadResult:
+            """
+            Load multi-component files (SAC, PEER formats).
+            
+            These formats store each component in a separate file.
+            
+            Args:
+                handler: HVSRDataHandler instance
+                component_files: Dict mapping component (N, E, Z) to file path
+                options: Loading options (format, degrees_from_north, etc.)
+                time_range: Optional time range
+                
+            Returns:
+                LoadResult with loaded data
+            """
+            if not component_files:
+                return LoadResult(success=False, error_message="No component files provided")
+            
+            # Extract file paths in correct order
+            files = []
+            for comp in ['N', 'E', 'Z']:
+                if comp in component_files:
+                    files.append(str(component_files[comp]))
+            
+            if len(files) != 3:
+                return LoadResult(
+                    success=False,
+                    error_message=f"Expected 3 component files, got {len(files)}"
+                )
+            
+            # Get format and orientation from options
+            file_format = options.get('format', 'auto')
+            degrees_from_north = options.get('degrees_from_north')
+            
+            self.info_message.emit(f"Loading 3 component files ({file_format} format)...")
+            
+            # Load using multi-component method
+            data = handler.load_multi_component(
+                files,
+                format=file_format,
+                degrees_from_north=degrees_from_north
+            )
+            
+            # Calculate total size
+            total_size = sum(Path(f).stat().st_size for f in files) / (1024 * 1024)
+            
+            # Build metadata
+            metadata = {
+                'duration': data.duration,
+                'sampling_rate': data.east.sampling_rate,
+                'size_mb': total_size,
+                'status': 'loaded',
+                'file_path': f"{Path(files[0]).stem} (N/E/Z)",
+                'display_name': f"{Path(files[0]).stem} (N/E/Z)",
+                'format': file_format
+            }
+            
+            # Store state
+            self.current_data = data
+            self.current_files = files
+            self.time_range = time_range
+            self.load_mode = 'multi_component'
+            
+            self.info_message.emit(f"Loaded 3 component files successfully")
+            
+            result = LoadResult(
+                success=True,
+                data=data,
+                mode='multi_component',
+                files=files,
+                time_range=time_range,
+                metadata_list=[metadata]
             )
             
             self.loading_finished.emit(result)

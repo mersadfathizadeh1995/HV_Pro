@@ -521,6 +521,9 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
         if load_result.time_range and load_result.time_range.get('enabled'):
             self._apply_time_range_to_preview(load_result.time_range, load_result.data)
         
+        # Store the loaded data
+        self.data = load_result.data
+        
         # Store for processing
         if load_result.mode == 'single':
             self.current_file = load_result.files[0] if load_result.files else None
@@ -528,6 +531,9 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             self.current_file = load_result.files
         elif load_result.mode == 'multi_type2':
             self.current_file = load_result.groups
+        elif load_result.mode == 'multi_component':
+            # For multi-component (SAC, PEER), store the list of files
+            self.current_file = load_result.files
         
         self.process_btn.setEnabled(True)
         
@@ -654,7 +660,8 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             settings.n_cores,
             settings.manual_sampling_rate,
             custom_qc_settings,
-            cox_fdwra_settings
+            cox_fdwra_settings,
+            getattr(settings, 'smoothing_method', 'konno_ohmachi')
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)

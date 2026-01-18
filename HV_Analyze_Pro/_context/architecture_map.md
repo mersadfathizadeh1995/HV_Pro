@@ -23,6 +23,36 @@ hvsr_pro/
 loaders/         → core/data_handler     → core/data_structures
 (TxtLoader)         (HVSRDataHandler)       (SeismicData, ComponentData)
 (MiniSeedLoader)
+(SAFLoader)      → load_data()
+(SACLoader)      → load_multi_component()
+(GCFLoader)
+(PEERLoader)
+```
+
+### Data Loaders Package
+```
+loaders/
+├── __init__.py       → FORMAT_INFO registry, exports
+├── config.py         → LoaderConfig, SAFConfig, SACConfig, GCFConfig, PEERConfig
+├── patterns.py       → Compiled regex for SAF/PEER parsing
+├── orientation.py    → orient_traces(), arrange_traces(), trim_traces()
+├── base_loader.py    → BaseDataLoader
+├── txt_loader.py     → ASCII/TXT format
+├── miniseed_loader.py → MiniSEED format (via ObsPy)
+├── saf_loader.py     → SESAME ASCII Format
+├── sac_loader.py     → SAC format (3 files, via ObsPy)
+├── gcf_loader.py     → Guralp Compressed Format (via ObsPy)
+└── peer_loader.py    → PEER NGA format (3 files)
+
+Supported Formats:
+| Format   | Extensions           | Type       | Description                |
+|----------|---------------------|------------|----------------------------|
+| txt      | .txt, .dat, .asc    | Single     | OSCAR ASCII format         |
+| miniseed | .mseed, .miniseed   | Single/3   | Standard seismic format    |
+| saf      | .saf                | Single     | SESAME ASCII Format        |
+| sac      | .sac                | 3 files    | Seismic Analysis Code      |
+| gcf      | .gcf                | Single     | Guralp Compressed Format   |
+| peer     | .vt2, .at2, .dt2    | 3 files    | PEER ground motion         |
 ```
 
 ### Processing Pipeline
@@ -30,6 +60,25 @@ loaders/         → core/data_handler     → core/data_structures
 core/data_structures → processing/windows → processing/hvsr → processing/rejection
 (SeismicData)           (WindowManager)      (HVSRProcessor)   (RejectionEngine)
                         (WindowCollection)   (HVSRResult)      (CoxFDWRARejection)
+```
+
+### Smoothing Methods (NEW)
+```
+processing/smoothing/
+├── __init__.py      → Package exports
+├── methods.py       → 8 smoothing functions (konno_ohmachi, parzen, etc.)
+├── settings.py      → SmoothingMethod enum, SmoothingConfig dataclass
+└── registry.py      → SMOOTHING_OPERATORS dict, get_smoothing_function()
+
+Available methods: konno_ohmachi, parzen, savitzky_golay, 
+                   linear_rectangular, log_rectangular,
+                   linear_triangular, log_triangular, none
+
+Usage in HVSRProcessor:
+  processor = HVSRProcessor(
+      smoothing_method='konno_ohmachi',  # or any method
+      smoothing_bandwidth=40.0
+  )
 ```
 
 ### Azimuthal Processing
@@ -180,6 +229,8 @@ cli/ ──────→ config/
 | WindowCollection | processing/windows/ | Window container |
 | HVSRProcessor | processing/hvsr/ | Compute HVSR |
 | HVSRResult | processing/hvsr/ | HVSR result container |
+| SmoothingConfig | processing/smoothing/ | Smoothing configuration |
+| SmoothingMethod | processing/smoothing/ | Smoothing method enum |
 | RejectionEngine | processing/rejection/ | QC coordination |
 | AzimuthalHVSRProcessor | processing/azimuthal/ | Azimuthal analysis |
 | HVSRPlotter | visualization/ | High-level plotting |

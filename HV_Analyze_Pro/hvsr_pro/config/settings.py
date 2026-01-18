@@ -24,6 +24,7 @@ class WindowSettings:
 @dataclass
 class ProcessingSettings:
     """HVSR processing settings."""
+    smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
     f_min: float = 0.2
     f_max: float = 20.0
@@ -151,6 +152,7 @@ def save_settings(settings: ApplicationSettings, filepath: str) -> None:
 # Processing presets
 PROCESSING_PRESETS = {
     'default': {
+        'smoothing_method': 'konno_ohmachi',
         'smoothing_bandwidth': 40,
         'f_min': 0.2,
         'f_max': 20.0,
@@ -158,6 +160,7 @@ PROCESSING_PRESETS = {
         'horizontal_method': 'geometric_mean',
     },
     'high_resolution': {
+        'smoothing_method': 'konno_ohmachi',
         'smoothing_bandwidth': 20,
         'f_min': 0.1,
         'f_max': 25.0,
@@ -165,6 +168,7 @@ PROCESSING_PRESETS = {
         'horizontal_method': 'geometric_mean',
     },
     'quick': {
+        'smoothing_method': 'konno_ohmachi',
         'smoothing_bandwidth': 60,
         'f_min': 0.5,
         'f_max': 15.0,

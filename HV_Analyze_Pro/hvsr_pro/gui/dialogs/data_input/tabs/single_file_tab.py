@@ -12,7 +12,7 @@ try:
     from PyQt5.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
         QPushButton, QLabel, QLineEdit, QCheckBox, QFileDialog,
-        QComboBox, QDateTimeEdit, QMessageBox, QDialog
+        QComboBox, QDateTimeEdit, QMessageBox, QDialog, QDoubleSpinBox
     )
     from PyQt5.QtCore import Qt, pyqtSignal
     HAS_PYQT5 = True
@@ -22,28 +22,46 @@ except ImportError:
 if HAS_PYQT5:
     from hvsr_pro.gui.dialogs.data_input.base_tab import DataInputTabBase
     from hvsr_pro.gui.dialogs.data_input.time_range_panel import TimeRangePanel
+    from hvsr_pro.loaders import FORMAT_INFO, get_file_filter
 
 
 if HAS_PYQT5:
     class SingleFileTab(DataInputTabBase):
         """
-        Tab for loading a single file (ASCII or MiniSEED).
+        Tab for loading a single file (ASCII, MiniSEED, SAF, GCF).
         
         Features:
+        - Format selection (auto-detect or manual)
         - Browse for single file
         - Column mapping for CSV/text files
         - Time range selection
+        - Degrees from north for orientation
         
         Signals:
             file_selected: Emitted when file is selected (str path)
             column_mapping_applied: Emitted when mapping is configured (dict)
+            format_changed: Emitted when format is changed (str)
         """
         
         file_selected = pyqtSignal(str)
         column_mapping_applied = pyqtSignal(dict)
+        format_changed = pyqtSignal(str)
+        
+        # Single-file formats (exclude SAC and PEER which need 3 files)
+        SINGLE_FILE_FORMATS = {
+            'auto': 'Auto-detect',
+            'txt': 'ASCII Text',
+            'miniseed': 'MiniSEED',
+            'saf': 'SESAME ASCII Format',
+            'gcf': 'Guralp GCF',
+            'minishark': 'MiniShark',
+            'srecord3c': 'SeismicRecording3C (JSON)',
+        }
         
         def __init__(self, parent=None):
             self.column_mapping = None
+            self.selected_format = 'auto'
+            self.degrees_from_north = None
             super().__init__(parent)
         
         def _init_ui(self):
@@ -52,11 +70,33 @@ if HAS_PYQT5:
             
             # Instructions
             info = QLabel(
-                "Load a single ASCII (.txt) or MiniSEED (.mseed) file.\n"
-                "Best for: Simple datasets with all components in one file."
+                "Load a single file containing all 3 components.\n"
+                "Supported: ASCII (.txt), MiniSEED (.mseed), SAF (.saf), GCF (.gcf), "
+                "MiniShark (.minishark), SeismicRecording3C (.json)"
             )
             info.setWordWrap(True)
             layout.addWidget(info)
+            
+            # Format selection group
+            format_group = QGroupBox("Format")
+            format_layout = QHBoxLayout(format_group)
+            
+            format_layout.addWidget(QLabel("Format:"))
+            
+            self.format_combo = QComboBox()
+            for fmt_id, fmt_name in self.SINGLE_FILE_FORMATS.items():
+                self.format_combo.addItem(fmt_name, fmt_id)
+            self.format_combo.currentIndexChanged.connect(self._on_format_changed)
+            format_layout.addWidget(self.format_combo)
+            
+            format_layout.addStretch()
+            
+            # Format info
+            self.format_info_label = QLabel()
+            self.format_info_label.setStyleSheet("color: gray; font-style: italic;")
+            format_layout.addWidget(self.format_info_label)
+            
+            layout.addWidget(format_group)
             
             # File selection group
             file_group = QGroupBox("File Selection")
@@ -75,7 +115,7 @@ if HAS_PYQT5:
             
             file_layout.addLayout(path_layout)
             
-            # Column mapping option
+            # Column mapping option (for TXT format)
             self.use_column_mapping = QCheckBox("Enable Column Mapping (for CSV/text files)")
             self.use_column_mapping.setStyleSheet("""
                 QCheckBox {
@@ -104,11 +144,89 @@ if HAS_PYQT5:
             
             layout.addWidget(file_group)
             
+            # Orientation group (for SAF/GCF)
+            self.orientation_group = QGroupBox("Sensor Orientation (Optional)")
+            orientation_layout = QHBoxLayout(self.orientation_group)
+            
+            self.use_custom_rotation = QCheckBox("Specify degrees from north:")
+            self.use_custom_rotation.toggled.connect(self._on_rotation_toggled)
+            orientation_layout.addWidget(self.use_custom_rotation)
+            
+            self.rotation_spin = QDoubleSpinBox()
+            self.rotation_spin.setRange(0, 360)
+            self.rotation_spin.setSingleStep(1)
+            self.rotation_spin.setDecimals(1)
+            self.rotation_spin.setSuffix("°")
+            self.rotation_spin.setValue(0)
+            self.rotation_spin.setEnabled(False)
+            self.rotation_spin.setToolTip(
+                "Rotation of sensor's north component relative to magnetic north.\n"
+                "Clockwise positive (0-360°). SAF files may have this in header."
+            )
+            orientation_layout.addWidget(self.rotation_spin)
+            
+            orientation_layout.addStretch()
+            
+            layout.addWidget(self.orientation_group)
+            self.orientation_group.setVisible(False)  # Hidden for txt/miniseed
+            
             # Time range panel
             self.time_range_panel = TimeRangePanel(title="Time Range (Optional)")
             layout.addWidget(self.time_range_panel)
             
             layout.addStretch()
+            
+            # Initialize format info
+            self._update_format_ui()
+        
+        def _on_format_changed(self, index: int):
+            """Handle format selection change."""
+            self.selected_format = self.format_combo.currentData()
+            self._update_format_ui()
+            
+            # Clear current selection when format changes
+            self.file_path_edit.clear()
+            self.clear_files()
+            
+            self.format_changed.emit(self.selected_format)
+        
+        def _update_format_ui(self):
+            """Update UI based on selected format."""
+            fmt = self.selected_format
+            
+            # Update format info
+            if fmt == 'auto':
+                self.format_info_label.setText("Format will be auto-detected from file")
+            else:
+                format_info = FORMAT_INFO.get(fmt, {})
+                self.format_info_label.setText(format_info.get('description', ''))
+            
+            # Show/hide column mapping (only for txt/auto)
+            show_column_mapping = fmt in ('auto', 'txt')
+            self.use_column_mapping.setVisible(show_column_mapping)
+            
+            # Show/hide orientation (for saf/gcf/minishark/srecord3c/auto)
+            show_orientation = fmt in ('auto', 'saf', 'gcf', 'minishark', 'srecord3c')
+            self.orientation_group.setVisible(show_orientation)
+        
+        def _get_file_filter(self) -> str:
+            """Get file filter for current format."""
+            fmt = self.selected_format
+            
+            if fmt == 'auto':
+                return get_file_filter(single_file_only=True)
+            
+            format_info = FORMAT_INFO.get(fmt, {})
+            extensions = format_info.get('extensions', ['.*'])
+            
+            ext_str = " ".join(f"*{ext}" for ext in extensions)
+            name = format_info.get('name', fmt.upper())
+            
+            return f"{name} Files ({ext_str});;All Files (*)"
+        
+        def _on_rotation_toggled(self, checked: bool):
+            """Handle rotation checkbox toggle."""
+            self.rotation_spin.setEnabled(checked)
         
         def _on_browse(self):
             """Handle browse button click."""
@@ -116,7 +234,7 @@ if HAS_PYQT5:
                 self,
                 "Select Seismic Data File",
                 "",
-                "Data Files (*.txt *.csv *.mseed *.miniseed);;Text/CSV (*.txt *.csv);;MiniSEED (*.mseed *.miniseed);;All Files (*)"
+                self._get_file_filter()
             )
             
             if not file_path:
@@ -125,8 +243,9 @@ if HAS_PYQT5:
             path = Path(file_path)
             self.file_path_edit.setText(file_path)
             
-            # Check if column mapping needed
-            if self.use_column_mapping.isChecked() and path.suffix.lower() in ['.txt', '.csv', '.dat', '.asc']:
+            # Check if column mapping needed (for txt format or auto with txt extension)
+            is_txt = path.suffix.lower() in ['.txt', '.csv', '.dat', '.asc']
+            if self.use_column_mapping.isChecked() and is_txt:
                 self._show_column_mapper(file_path)
             else:
                 self.set_files([file_path])
@@ -235,11 +354,23 @@ if HAS_PYQT5:
             """Get time range settings."""
             return self.time_range_panel.get_time_range()
         
+        def get_format(self) -> str:
+            """Get selected format."""
+            return self.selected_format
+        
+        def get_degrees_from_north(self) -> Optional[float]:
+            """Get degrees from north setting."""
+            if self.use_custom_rotation.isChecked():
+                return self.rotation_spin.value()
+            return None
+        
         def get_result(self) -> Dict[str, Any]:
             """Get complete result dictionary."""
             result = super().get_result()
+            result['format'] = self.selected_format
             result['time_range'] = self.get_time_range()
             result['column_mapping'] = self.column_mapping
+            result['degrees_from_north'] = self.get_degrees_from_north()
             return result
         
         def clear(self):
@@ -248,6 +379,8 @@ if HAS_PYQT5:
             self.file_path_edit.clear()
             self.column_mapping = None
             self.use_column_mapping.setChecked(False)
+            self.use_custom_rotation.setChecked(False)
+            self.rotation_spin.setValue(0)
             self.time_range_panel.set_enabled(False)
 
 else:

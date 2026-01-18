@@ -9,39 +9,53 @@
 
 ## File Import Methods
 
-### Currently Supported (2)
+### All Formats Implemented (6) - COMPLETED
 1. ✅ ASCII/TXT (OSCAR format, 4-column)
-2. ✅ MiniSEED (via ObsPy)
+2. ✅ MiniSEED (via ObsPy) - single file or 3 files
+3. ✅ SAF (SESAME ASCII Format) - single file
+4. ✅ SAC (Seismic Analysis Code) - 3 files via ObsPy
+5. ✅ GCF (Guralp Compressed Format) - single file via ObsPy
+6. ✅ PEER (Pacific Earthquake Engineering Research) - 3 files custom parser
 
-### To Add from hvsrpy (4)
-3. ❌ **SAF** (SESAME ASCII Format) - `hvsrpy/data_wrangler.py`
-4. ❌ **SAC** (Seismic Analysis Code) - via ObsPy
-5. ❌ **GCF** (Guralp Compressed Format) - via ObsPy
-6. ❌ **PEER** (Pacific Earthquake Engineering Research) - custom parser
+**Location:** `loaders/` package
+- `config.py` - LoaderConfig dataclasses per format
+- `patterns.py` - Compiled regex for SAF/PEER parsing
+- `orientation.py` - Trace orientation utilities (NEZ, XYZ, 123)
+- `saf_loader.py` - SESAME ASCII Format loader
+- `sac_loader.py` - SAC format (3 separate files)
+- `gcf_loader.py` - Guralp Compressed Format
+- `peer_loader.py` - PEER NGA format (3 separate files)
+- `__init__.py` - FORMAT_INFO registry, get_file_filter(), detect_format()
 
-### Also Consider
-7. ❌ **Generic CSV** - Flexible column mapping
-8. ❌ **Auto-detection** - Try all formats until one succeeds
+**GUI Integration:**
+- SingleFileTab: Format selector (auto, txt, miniseed, saf, gcf)
+- MultiComponentTab: SAC/PEER format selector (3-file browser)
+- Degrees from north input for sensor orientation
+
+### Also Consider (Future)
+- ❌ **Generic CSV** - Flexible column mapping (basic support exists)
+- ✅ **Auto-detection** - Via FORMAT_INFO registry and can_load()
 
 ---
 
 ## Smoothing Methods
 
-### Currently Supported (1)
-1. ✅ Konno-Ohmachi (bandwidth=40)
+### All Methods Implemented (8) - COMPLETED
+1. ✅ Konno-Ohmachi (bandwidth=40, inverse width)
+2. ✅ Parzen (bandwidth=0.5 Hz, linear freq scale)
+3. ✅ Savitzky-Golay (bandwidth=9 points, odd integer)
+4. ✅ Linear Rectangular (bandwidth=0.5 Hz, boxcar)
+5. ✅ Log Rectangular (bandwidth=0.05 log10, boxcar)
+6. ✅ Linear Triangular (bandwidth=0.5 Hz, weighted)
+7. ✅ Log Triangular (bandwidth=0.05 log10, weighted)
+8. ✅ No Smoothing (interpolation only)
 
-### To Add from hvsrpy (6)
-2. ❌ **Parzen** - Linear freq scale, constant Hz width
-3. ❌ **Savitzky-Golay** - Polynomial filter (odd integer bandwidth)
-4. ❌ **Linear Rectangular** - Boxcar window, linear scale
-5. ❌ **Log Rectangular** - Boxcar window, log scale
-6. ❌ **Linear Triangular** - Triangular weights, linear scale
-7. ❌ **Log Triangular** - Triangular weights, log scale
+**Location:** `processing/smoothing/` package
+- `methods.py` - 8 smoothing functions
+- `settings.py` - SmoothingMethod enum, SmoothingConfig dataclass
+- `registry.py` - Dynamic method lookup
 
-### Also Consider
-8. ❌ **No Smoothing** - Raw spectra option
-
-**Implementation Note:** Each smoothing method has a `bandwidth` parameter with different meanings. Need settings dialog per method.
+**GUI Integration:** ProcessingSettingsPanel has method selector + advanced dialog.
 
 ---
 
@@ -111,8 +125,9 @@
 ### API (api/)
 - ✅ HVSRAnalysis class (basic)
 - ✅ batch_process function
+- ✅ configure_smoothing() method for smoothing selection
 - ❌ Need comprehensive processing options exposure
-- ❌ Need all smoothing/combination methods accessible
+- ❌ Need all combination methods accessible
 
 ### CLI (cli/)
 - ❌ No command-line interface yet
@@ -124,21 +139,23 @@
 
 ## Implementation Priority
 
-### Phase A: Core Infrastructure (Start Here)
-1. **Smoothing Module** - New methods with registry pattern
-2. **Statistics Module** - Lognormal functions
+### Phase A: Core Infrastructure (COMPLETED)
+1. ✅ **Smoothing Module** - 8 methods with registry pattern (DONE)
+2. ❌ **Statistics Module** - Lognormal functions (TODO)
 
-### Phase B: Data Loading
-1. New file format loaders (SAF, SAC, GCF, PEER)
-2. Auto-detection utility
+### Phase B: Data Loading (COMPLETED)
+1. ✅ New file format loaders (SAF, SAC, GCF, PEER)
+2. ✅ Auto-detection utility
+3. ✅ Orientation utilities (NEZ, XYZ, 123 patterns)
+4. ✅ GUI tabs: SingleFileTab, MultiComponentTab
 
 ### Phase C: Processing Enhancement
 1. Additional horizontal combination methods
 2. Diffuse field HVSR
 
 ### Phase D: API & CLI
-1. Enhanced HVSRAnalysis class
-2. CLI implementation
+1. ✅ Enhanced HVSRAnalysis.load_data() with format/orientation params
+2. ❌ CLI implementation
 
 ---
 

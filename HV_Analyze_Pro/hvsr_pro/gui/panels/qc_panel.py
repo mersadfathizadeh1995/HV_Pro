@@ -2,8 +2,8 @@
 Quality Control Settings Panel
 ==============================
 
-Standalone widget for HVSR quality control settings.
-Extracted from main_window.py for modularity.
+Unified widget for HVSR quality control settings.
+Uses QCSettings dataclass from processing/rejection/settings.py.
 """
 
 from typing import Dict, Any, Optional
@@ -20,6 +20,12 @@ try:
 except ImportError:
     HAS_PYQT5 = False
 
+from hvsr_pro.processing.rejection.settings import (
+    QCSettings,
+    PRESET_DESCRIPTIONS,
+    get_preset_names
+)
+
 
 if HAS_PYQT5:
     class QCSettingsPanel(QWidget):
@@ -30,30 +36,23 @@ if HAS_PYQT5:
         - QC enable/disable
         - Preset vs Custom mode selection
         - Preset dropdown (conservative, balanced, aggressive, sesame, publication)
-        - Custom algorithm checkboxes
-        - Cox FDWRA settings
+        - Custom algorithm checkboxes (quick toggles)
+        - Cox FDWRA quick settings
+        - Access to Advanced Settings dialog
         
         Signals:
-            qc_settings_changed: Emitted when any QC setting changes
+            settings_changed: Emitted when any QC setting changes (QCSettings)
             advanced_settings_requested: Emitted when Advanced Settings button clicked
         """
         
         # Signals
-        qc_settings_changed = pyqtSignal(dict)
+        settings_changed = pyqtSignal(object)  # QCSettings
         advanced_settings_requested = pyqtSignal()
-        
-        # Preset descriptions
-        PRESET_DESCRIPTIONS = {
-            "conservative": "Only rejects obvious problems (dead channels, clipping). Best for noisy data.",
-            "balanced": "Amplitude checks only. Recommended for most datasets.",
-            "aggressive": "Strict QC with STA/LTA, frequency, and statistical checks. For clean data.",
-            "sesame": "SESAME-compliant processing with Cox FDWRA for publication-quality results.",
-            "publication": "4-condition rejection: HVSR amplitude, peak consistency, flat peaks."
-        }
         
         def __init__(self, parent=None):
             super().__init__(parent)
-            self._custom_qc_settings = None
+            self._settings = QCSettings()
+            self._block_signals = False
             self._init_ui()
             self._connect_internal_signals()
         
@@ -76,6 +75,11 @@ if HAS_PYQT5:
             # === COX FDWRA GROUP ===
             cox_group = self._create_cox_section()
             layout.addWidget(cox_group)
+            
+            # === ADVANCED BUTTON ===
+            self.advanced_btn = QPushButton("Advanced Settings...")
+            self.advanced_btn.setToolTip("Open full QC configuration dialog")
+            layout.addWidget(self.advanced_btn)
         
         def _create_enable_section(self, layout: QVBoxLayout):
             """Create QC enable checkbox."""
@@ -145,7 +149,7 @@ if HAS_PYQT5:
             layout.addWidget(self.preset_widget)
         
         def _create_custom_section(self, layout: QVBoxLayout):
-            """Create custom mode widgets."""
+            """Create custom mode widgets with algorithm toggles."""
             self.custom_widget = QWidget()
             custom_layout = QVBoxLayout(self.custom_widget)
             custom_layout.setContentsMargins(0, 5, 0, 0)
@@ -188,24 +192,12 @@ if HAS_PYQT5:
             self.custom_flat_peak_check.setToolTip("Reject windows with flat/wide peaks or multiple peaks")
             custom_layout.addWidget(self.custom_flat_peak_check)
             
-            self.custom_cox_fdwra_check = QCheckBox("Cox FDWRA (Peak Consistency)")
-            self.custom_cox_fdwra_check.setToolTip(
-                "Cox et al. (2020) Frequency-Domain Window Rejection\n"
-                "Ensures peak frequency consistency across windows"
-            )
-            custom_layout.addWidget(self.custom_cox_fdwra_check)
-            
-            # Advanced settings button for custom mode
-            self.advanced_qc_btn = QPushButton("Advanced Settings...")
-            self.advanced_qc_btn.setToolTip("Fine-tune individual algorithm thresholds")
-            custom_layout.addWidget(self.advanced_qc_btn)
-            
             layout.addWidget(self.custom_widget)
             self.custom_widget.hide()  # Hidden by default (preset mode active)
         
         def _create_cox_section(self) -> QGroupBox:
             """Create Cox FDWRA settings group."""
-            cox_group = QGroupBox("Cox FDWRA (Frequency-Domain)")
+            cox_group = QGroupBox("Cox FDWRA (Peak Consistency)")
             cox_layout = QVBoxLayout(cox_group)
             
             # Cox Enable checkbox
@@ -219,7 +211,7 @@ if HAS_PYQT5:
             self.cox_fdwra_check.toggled.connect(self._on_cox_enable_toggled)
             cox_layout.addWidget(self.cox_fdwra_check)
             
-            # Cox parameters
+            # Cox parameters (quick settings)
             cox_params_layout = QGridLayout()
             cox_params_layout.setColumnStretch(1, 1)
             
@@ -235,15 +227,15 @@ if HAS_PYQT5:
             
             cox_params_layout.addWidget(QLabel("Max Iter:"), 1, 0)
             self.cox_iterations_spin = QSpinBox()
-            self.cox_iterations_spin.setRange(1, 50)
-            self.cox_iterations_spin.setValue(20)
+            self.cox_iterations_spin.setRange(1, 100)
+            self.cox_iterations_spin.setValue(50)
             self.cox_iterations_spin.setEnabled(False)
             self.cox_iterations_spin.setToolTip("Maximum iterations for convergence")
             cox_params_layout.addWidget(self.cox_iterations_spin, 1, 1)
             
             cox_params_layout.addWidget(QLabel("Min Iter:"), 2, 0)
             self.cox_min_iterations_spin = QSpinBox()
-            self.cox_min_iterations_spin.setRange(1, 20)
+            self.cox_min_iterations_spin.setRange(1, 50)
             self.cox_min_iterations_spin.setValue(1)
             self.cox_min_iterations_spin.setEnabled(False)
             self.cox_min_iterations_spin.setToolTip(
@@ -266,11 +258,11 @@ if HAS_PYQT5:
         def _connect_internal_signals(self):
             """Connect internal widget signals."""
             # Advanced settings button
-            self.advanced_qc_btn.clicked.connect(self.advanced_settings_requested.emit)
+            self.advanced_btn.clicked.connect(self.advanced_settings_requested.emit)
             
             # QC change signals
             self.qc_enable_check.toggled.connect(self._emit_settings_changed)
-            self.qc_combo.currentIndexChanged.connect(self._emit_settings_changed)
+            self.qc_combo.currentIndexChanged.connect(self._on_preset_changed)
             self.cox_fdwra_check.toggled.connect(self._emit_settings_changed)
             self.cox_n_spin.valueChanged.connect(self._emit_settings_changed)
             self.cox_iterations_spin.valueChanged.connect(self._emit_settings_changed)
@@ -285,11 +277,12 @@ if HAS_PYQT5:
             self.custom_stats_check.toggled.connect(self._emit_settings_changed)
             self.custom_hvsr_amp_check.toggled.connect(self._emit_settings_changed)
             self.custom_flat_peak_check.toggled.connect(self._emit_settings_changed)
-            self.custom_cox_fdwra_check.toggled.connect(self._emit_settings_changed)
         
         def _emit_settings_changed(self):
-            """Emit qc_settings_changed signal with current settings."""
-            self.qc_settings_changed.emit(self.get_qc_settings())
+            """Emit settings_changed signal with current settings."""
+            if not self._block_signals:
+                self._update_settings_from_ui()
+                self.settings_changed.emit(self._settings)
         
         def _on_qc_enable_toggled(self, checked: bool):
             """Handle QC enable checkbox toggle."""
@@ -298,7 +291,6 @@ if HAS_PYQT5:
             self.preset_widget.setEnabled(checked)
             self.custom_widget.setEnabled(checked)
             self.qc_combo.setEnabled(checked)
-            self.advanced_qc_btn.setEnabled(checked)
         
         def _on_qc_mode_changed(self, checked: bool):
             """Handle Preset/Custom radio button toggle."""
@@ -308,12 +300,25 @@ if HAS_PYQT5:
             else:
                 self.preset_widget.hide()
                 self.custom_widget.show()
+            self._emit_settings_changed()
+        
+        def _on_preset_changed(self, index: int):
+            """Handle preset selection change."""
+            if not self._block_signals and self.preset_radio.isChecked():
+                preset = self.qc_combo.currentData()
+                self._settings.apply_preset(preset)
+                # Update Cox checkbox based on preset
+                self._block_signals = True
+                self.cox_fdwra_check.setChecked(self._settings.cox_fdwra.enabled)
+                self._on_cox_enable_toggled(self._settings.cox_fdwra.enabled)
+                self._block_signals = False
+                self._emit_settings_changed()
         
         def _update_preset_description(self):
             """Update the preset description based on selected preset."""
             current_mode = self.qc_combo.currentData()
             self.preset_desc_label.setText(
-                self.PRESET_DESCRIPTIONS.get(current_mode, "")
+                PRESET_DESCRIPTIONS.get(current_mode, "")
             )
         
         def _on_cox_enable_toggled(self, checked: bool):
@@ -323,93 +328,90 @@ if HAS_PYQT5:
             self.cox_min_iterations_spin.setEnabled(checked)
             self.cox_dist_combo.setEnabled(checked)
         
+        def _update_settings_from_ui(self):
+            """Update internal settings from UI state."""
+            self._settings.enabled = self.qc_enable_check.isChecked()
+            
+            if self.preset_radio.isChecked():
+                self._settings.mode = 'preset'
+                self._settings.preset = self.qc_combo.currentData()
+                # Apply preset to get correct algorithm settings
+                self._settings.apply_preset(self._settings.preset)
+            else:
+                self._settings.mode = 'custom'
+                # Update from custom checkboxes
+                self._settings.amplitude.enabled = self.custom_amplitude_check.isChecked()
+                self._settings.quality_threshold.enabled = self.custom_quality_check.isChecked()
+                self._settings.sta_lta.enabled = self.custom_stalta_check.isChecked()
+                self._settings.frequency_domain.enabled = self.custom_freq_check.isChecked()
+                self._settings.statistical_outlier.enabled = self.custom_stats_check.isChecked()
+                self._settings.hvsr_amplitude.enabled = self.custom_hvsr_amp_check.isChecked()
+                self._settings.flat_peak.enabled = self.custom_flat_peak_check.isChecked()
+            
+            # Cox FDWRA settings (always available)
+            self._settings.cox_fdwra.enabled = self.cox_fdwra_check.isChecked()
+            self._settings.cox_fdwra.n = self.cox_n_spin.value()
+            self._settings.cox_fdwra.max_iterations = self.cox_iterations_spin.value()
+            self._settings.cox_fdwra.min_iterations = self.cox_min_iterations_spin.value()
+            self._settings.cox_fdwra.distribution_fn = self.cox_dist_combo.currentText()
+            self._settings.cox_fdwra.distribution_mc = self.cox_dist_combo.currentText()
+        
+        def _update_ui_from_settings(self):
+            """Update UI state from internal settings."""
+            self._block_signals = True
+            
+            self.qc_enable_check.setChecked(self._settings.enabled)
+            
+            if self._settings.mode == 'preset':
+                self.preset_radio.setChecked(True)
+                idx = self.qc_combo.findData(self._settings.preset)
+                if idx >= 0:
+                    self.qc_combo.setCurrentIndex(idx)
+            else:
+                self.custom_radio.setChecked(True)
+                self.custom_amplitude_check.setChecked(self._settings.amplitude.enabled)
+                self.custom_quality_check.setChecked(self._settings.quality_threshold.enabled)
+                self.custom_stalta_check.setChecked(self._settings.sta_lta.enabled)
+                self.custom_freq_check.setChecked(self._settings.frequency_domain.enabled)
+                self.custom_stats_check.setChecked(self._settings.statistical_outlier.enabled)
+                self.custom_hvsr_amp_check.setChecked(self._settings.hvsr_amplitude.enabled)
+                self.custom_flat_peak_check.setChecked(self._settings.flat_peak.enabled)
+            
+            # Cox FDWRA
+            self.cox_fdwra_check.setChecked(self._settings.cox_fdwra.enabled)
+            self.cox_n_spin.setValue(self._settings.cox_fdwra.n)
+            self.cox_iterations_spin.setValue(self._settings.cox_fdwra.max_iterations)
+            self.cox_min_iterations_spin.setValue(self._settings.cox_fdwra.min_iterations)
+            idx = self.cox_dist_combo.findText(self._settings.cox_fdwra.distribution_fn)
+            if idx >= 0:
+                self.cox_dist_combo.setCurrentIndex(idx)
+            
+            self._on_cox_enable_toggled(self._settings.cox_fdwra.enabled)
+            self._on_qc_mode_changed(True)
+            
+            self._block_signals = False
+        
         # === PUBLIC API ===
         
-        def get_qc_settings(self) -> Dict[str, Any]:
+        def get_settings(self) -> QCSettings:
             """
             Get current QC settings.
             
             Returns:
-                Dictionary with all QC parameters
+                QCSettings object with all QC parameters
             """
-            if self.preset_radio.isChecked():
-                # Preset mode
-                return {
-                    'enabled': self.qc_enable_check.isChecked(),
-                    'mode': 'preset',
-                    'preset': self.qc_combo.currentData(),
-                    'cox_fdwra': {
-                        'enabled': self.cox_fdwra_check.isChecked(),
-                        'n': self.cox_n_spin.value(),
-                        'max_iterations': self.cox_iterations_spin.value(),
-                        'distribution': self.cox_dist_combo.currentText(),
-                    }
-                }
-            else:
-                # Custom mode
-                return self.get_custom_settings()
+            self._update_settings_from_ui()
+            return self._settings
         
-        def get_custom_settings(self) -> Dict[str, Any]:
+        def set_settings(self, settings: QCSettings):
             """
-            Get custom QC settings from UI checkboxes.
+            Set QC settings.
             
-            Returns:
-                Dictionary with custom algorithm settings
+            Args:
+                settings: QCSettings object with values to apply
             """
-            return {
-                'enabled': self.qc_enable_check.isChecked(),
-                'mode': 'custom',
-                'algorithms': {
-                    'amplitude': {
-                        'enabled': self.custom_amplitude_check.isChecked(),
-                        'params': {}
-                    },
-                    'quality_threshold': {
-                        'enabled': self.custom_quality_check.isChecked(),
-                        'params': {'threshold': 0.5}
-                    },
-                    'sta_lta': {
-                        'enabled': self.custom_stalta_check.isChecked(),
-                        'params': {
-                            'sta_length': 1.0,
-                            'lta_length': 30.0,
-                            'min_ratio': 0.15,
-                            'max_ratio': 2.5
-                        }
-                    },
-                    'frequency_domain': {
-                        'enabled': self.custom_freq_check.isChecked(),
-                        'params': {'spike_threshold': 3.0}
-                    },
-                    'statistical_outlier': {
-                        'enabled': self.custom_stats_check.isChecked(),
-                        'params': {'method': 'iqr', 'threshold': 2.0}
-                    },
-                    'hvsr_amplitude': {
-                        'enabled': self.custom_hvsr_amp_check.isChecked(),
-                        'params': {'min_amplitude': 1.0}
-                    },
-                    'flat_peak': {
-                        'enabled': self.custom_flat_peak_check.isChecked(),
-                        'params': {'flatness_threshold': 0.15}
-                    },
-                    'cox_fdwra': {
-                        'enabled': self.custom_cox_fdwra_check.isChecked(),
-                        'params': {
-                            'n': self.cox_n_spin.value(),
-                            'max_iterations': self.cox_iterations_spin.value(),
-                            'min_iterations': self.cox_min_iterations_spin.value()
-                        }
-                    }
-                },
-                'cox_fdwra': {
-                    'enabled': self.cox_fdwra_check.isChecked(),
-                    'n': self.cox_n_spin.value(),
-                    'max_iterations': self.cox_iterations_spin.value(),
-                    'min_iterations': self.cox_min_iterations_spin.value(),
-                    'distribution': self.cox_dist_combo.currentText(),
-                }
-            }
+            self._settings = QCSettings.from_dict(settings.to_dict())  # Deep copy
+            self._update_ui_from_settings()
         
         def set_preset(self, preset: str):
             """
@@ -418,23 +420,8 @@ if HAS_PYQT5:
             Args:
                 preset: Preset name (conservative, balanced, aggressive, sesame, publication)
             """
-            index = self.qc_combo.findData(preset)
-            if index >= 0:
-                self.preset_radio.setChecked(True)
-                self.qc_combo.setCurrentIndex(index)
-        
-        def set_custom_qc_settings(self, settings: Optional[Dict]):
-            """
-            Store custom QC settings from Advanced dialog.
-            
-            Args:
-                settings: Custom settings dictionary or None
-            """
-            self._custom_qc_settings = settings
-        
-        def get_stored_custom_settings(self) -> Optional[Dict]:
-            """Get stored custom QC settings from Advanced dialog."""
-            return self._custom_qc_settings
+            self._settings.apply_preset(preset)
+            self._update_ui_from_settings()
         
         def is_qc_enabled(self) -> bool:
             """Check if QC is enabled."""
@@ -457,12 +444,23 @@ if HAS_PYQT5:
             return {
                 'n': self.cox_n_spin.value(),
                 'max_iterations': self.cox_iterations_spin.value(),
-                'distribution': self.cox_dist_combo.currentText(),
+                'min_iterations': self.cox_min_iterations_spin.value(),
+                'distribution_fn': self.cox_dist_combo.currentText(),
+                'distribution_mc': self.cox_dist_combo.currentText(),
             }
+        
+        # Backward compatibility methods
+        def get_qc_settings(self) -> Dict[str, Any]:
+            """Get QC settings as dictionary (backward compatibility)."""
+            return self.get_settings().to_dict()
+        
+        def get_custom_settings(self) -> Dict[str, Any]:
+            """Get custom settings (backward compatibility)."""
+            return self.get_settings().to_dict()
+
 
 else:
     class QCSettingsPanel:
         """Dummy class when PyQt5 not available."""
         def __init__(self, *args, **kwargs):
-            pass
-
+            raise ImportError("PyQt5 is required for GUI functionality")

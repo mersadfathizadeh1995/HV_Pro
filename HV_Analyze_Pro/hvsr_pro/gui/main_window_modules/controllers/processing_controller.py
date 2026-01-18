@@ -132,7 +132,8 @@ if HAS_PYQT5:
                 settings.n_cores,
                 settings.processing.manual_sampling_rate,
                 custom_qc_settings,
-                cox_fdwra_settings
+                cox_fdwra_settings,
+                getattr(settings.processing, 'smoothing_method', 'konno_ohmachi')
             )
             
             # Connect signals

@@ -9,6 +9,7 @@ Submodules:
     - rejection: Quality control and rejection algorithms
     - hvsr: HVSR processing engine
     - azimuthal: Azimuthal HVSR processing
+    - smoothing: Spectral smoothing methods
 """
 
 # Window management (new modular structure)
@@ -54,6 +55,15 @@ from hvsr_pro.processing.hvsr import (
     logspace_frequencies,
 )
 
+# Smoothing methods (new modular structure)
+from hvsr_pro.processing.smoothing import (
+    SmoothingMethod,
+    SmoothingConfig,
+    SMOOTHING_OPERATORS,
+    get_smoothing_function,
+    apply_smoothing,
+)
+
 __all__ = [
     # Window management
     'WindowManager',
@@ -80,4 +90,10 @@ __all__ = [
     'HVSRResult',
     'WindowSpectrum',
     'Peak',
+    # Smoothing
+    'SmoothingMethod',
+    'SmoothingConfig',
+    'SMOOTHING_OPERATORS',
+    'get_smoothing_function',
+    'apply_smoothing',
 ]

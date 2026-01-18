@@ -2,9 +2,14 @@
 Spectral Processing Functions
 ==============================
 
-FFT computation, Konno-Ohmachi smoothing, and spectral analysis.
+FFT computation, smoothing, and spectral analysis.
+
+Note: For new code, use the smoothing methods from 
+`hvsr_pro.processing.smoothing` which provides 7 different smoothing
+methods with a unified interface.
 """
 
+import warnings
 import numpy as np
 from typing import Optional, Tuple
 from scipy import signal as scipy_signal

@@ -5,7 +5,7 @@ Main data handler for HVSR Pro
 Unified interface for loading all supported seismic data formats.
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from pathlib import Path
 from datetime import datetime, timedelta
 import logging
@@ -16,6 +16,13 @@ from hvsr_pro.core.data_cache import DataCache
 from hvsr_pro.loaders.base_loader import BaseDataLoader
 from hvsr_pro.loaders.txt_loader import TxtDataLoader
 from hvsr_pro.loaders.miniseed_loader import MiniSeedLoader
+from hvsr_pro.loaders.saf_loader import SAFLoader
+from hvsr_pro.loaders.sac_loader import SACLoader
+from hvsr_pro.loaders.gcf_loader import GCFLoader
+from hvsr_pro.loaders.peer_loader import PEERLoader
+from hvsr_pro.loaders.minishark_loader import MiniSharkLoader
+from hvsr_pro.loaders.srecord3c_loader import SeismicRecording3CLoader
+from hvsr_pro.loaders import FORMAT_INFO
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -56,6 +63,12 @@ class HVSRDataHandler:
         self.loaders: Dict[str, BaseDataLoader] = {
             'txt': TxtDataLoader(),
             'miniseed': MiniSeedLoader(),
+            'saf': SAFLoader(),
+            'sac': SACLoader(),
+            'gcf': GCFLoader(),
+            'peer': PEERLoader(),
+            'minishark': MiniSharkLoader(),
+            'srecord3c': SeismicRecording3CLoader(),
         }
         
         logger.info(f"HVSR Data Handler initialized with loaders: {list(self.loaders.keys())}")
@@ -131,6 +144,62 @@ class HVSRDataHandler:
                 continue
         
         return results
+    
+    def load_multi_component(
+        self,
+        filepaths: List[str],
+        format: str = 'auto',
+        degrees_from_north: Optional[float] = None,
+        **kwargs
+    ) -> SeismicData:
+        """
+        Load data from multiple component files (SAC, PEER formats).
+        
+        Some formats store each component in a separate file.
+        This method handles loading and combining them.
+        
+        Args:
+            filepaths: List of 3 file paths (one per component)
+            format: Format name ('sac', 'peer') or 'auto'
+            degrees_from_north: Sensor orientation (optional)
+            **kwargs: Additional loader options
+            
+        Returns:
+            Single SeismicData object with all 3 components
+            
+        Raises:
+            ValueError: If format doesn't support multi-file loading
+        """
+        if len(filepaths) != 3:
+            raise ValueError(
+                f"Multi-component loading requires exactly 3 files, got {len(filepaths)}"
+            )
+        
+        # Auto-detect format from first file if needed
+        if format == 'auto':
+            format = self._detect_format(filepaths[0])
+            logger.info(f"Auto-detected format: {format}")
+        
+        # Check if format supports multi-file loading
+        format_info = FORMAT_INFO.get(format)
+        if format_info and format_info.get('multi_file') is not True:
+            raise ValueError(
+                f"Format '{format}' does not require multi-file loading. "
+                f"Use load_data() instead."
+            )
+        
+        # Get loader
+        loader = self._get_loader(format)
+        
+        # Load with all files
+        logger.info(f"Loading {len(filepaths)} component files with {loader.loader_name}")
+        data = loader.load_file(
+            filepaths,
+            degrees_from_north=degrees_from_north,
+            **kwargs
+        )
+        
+        return data
     
     def load_oscar_station(self, 
                           station_dir: str,
@@ -251,19 +320,22 @@ class HVSRDataHandler:
             filepath: Path to file
             
         Returns:
-            Format string ('txt', 'miniseed', etc.)
+            Format string ('txt', 'miniseed', 'saf', 'sac', 'gcf', 'peer')
         """
-        # Try each loader's can_load method
-        for format_name, loader in self.loaders.items():
-            if loader.can_load(filepath):
+        ext = Path(filepath).suffix.lower()
+        
+        # First, try extension-based detection using FORMAT_INFO
+        for format_name, info in FORMAT_INFO.items():
+            if ext in info['extensions']:
                 return format_name
         
-        # Fallback: use extension
-        ext = Path(filepath).suffix.lower()
-        if ext in ['.txt', '.dat', '.asc']:
-            return 'txt'
-        elif ext in ['.miniseed', '.mseed', '.ms']:
-            return 'miniseed'
+        # Try each loader's can_load method for more detailed detection
+        for format_name, loader in self.loaders.items():
+            try:
+                if loader.can_load(filepath):
+                    return format_name
+            except Exception:
+                continue
         
         raise ValueError(f"Unknown file format: {filepath}")
     

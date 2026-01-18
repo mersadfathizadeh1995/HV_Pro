@@ -36,12 +36,16 @@ class ProcessingThread(QThread):
                  qc_mode='balanced', apply_cox_fdwra=False,
                  use_parallel=False, n_cores=None, 
                  manual_sampling_rate=None, custom_qc_settings=None,
-                 cox_fdwra_settings=None):
+                 cox_fdwra_settings=None, smoothing_method='konno_ohmachi',
+                 file_format='auto', degrees_from_north=None):
         super().__init__()
         self.file_input = file_input  # Can be str, list, or dict
-        self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2'
+        self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2', 'multi_component'
+        self.format = file_format  # File format for multi-component loading
+        self.degrees_from_north = degrees_from_north  # Sensor orientation for multi-component
         self.window_length = window_length
         self.overlap = overlap
+        self.smoothing_method = smoothing_method  # Smoothing method name
         self.smoothing_bandwidth = smoothing_bandwidth
         self.time_range = time_range  # Optional time range filter
         self.freq_min = freq_min
@@ -75,6 +79,26 @@ class ProcessingThread(QThread):
                                  if 'E' in g and 'N' in g and 'Z' in g]
                 self.progress.emit(10, f"Loading {len(complete_groups)} file groups (Type 2)...")
                 data = handler.load_multi_miniseed_type2(self.file_input)
+            
+            elif self.load_mode == 'multi_component':
+                # Multi-component file loading (SAC, PEER formats)
+                # file_input can be dict {'N': path, 'E': path, 'Z': path} or list of paths
+                self.progress.emit(10, "Loading multi-component files...")
+                if isinstance(self.file_input, dict):
+                    # Extract files in order N, E, Z
+                    files = [str(self.file_input.get(c)) for c in ['N', 'E', 'Z'] if c in self.file_input]
+                else:
+                    files = self.file_input
+                
+                # Get format and orientation if available
+                file_format = getattr(self, 'format', 'auto')
+                degrees_from_north = getattr(self, 'degrees_from_north', None)
+                
+                data = handler.load_multi_component(
+                    files,
+                    format=file_format,
+                    degrees_from_north=degrees_from_north
+                )
             
             else:
                 raise ValueError(f"Unknown load mode: {self.load_mode}")
@@ -181,6 +205,7 @@ class ProcessingThread(QThread):
             # Note: n_cores is stored for future use when HVSRProcessor supports it
             # Currently, parallel processing uses all available cores
             processor = HVSRProcessor(
+                smoothing_method=self.smoothing_method,
                 smoothing_bandwidth=self.smoothing_bandwidth,
                 f_min=self.freq_min,
                 f_max=self.freq_max,

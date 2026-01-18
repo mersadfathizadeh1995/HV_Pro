@@ -9,6 +9,31 @@ from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 
 
+# Valid smoothing methods
+VALID_SMOOTHING_METHODS = [
+    'konno_ohmachi',
+    'parzen',
+    'savitzky_golay',
+    'linear_rectangular',
+    'log_rectangular',
+    'linear_triangular',
+    'log_triangular',
+    'none'
+]
+
+# Bandwidth ranges for each smoothing method
+SMOOTHING_BANDWIDTH_RANGES = {
+    'konno_ohmachi': (1.0, 200.0),
+    'parzen': (0.01, 10.0),
+    'savitzky_golay': (3, 51),
+    'linear_rectangular': (0.01, 10.0),
+    'log_rectangular': (0.001, 1.0),
+    'linear_triangular': (0.01, 10.0),
+    'log_triangular': (0.001, 1.0),
+    'none': (0, 0),
+}
+
+
 @dataclass
 class ValidationError:
     """Validation error details."""
@@ -62,11 +87,39 @@ def validate_processing_params(params: Dict[str, Any]) -> List[ValidationError]:
     """
     errors = []
     
-    # Smoothing bandwidth
-    if 'smoothing_bandwidth' in params:
-        err = validate_range(params['smoothing_bandwidth'], 1.0, 200.0, 'smoothing_bandwidth')
+    # Smoothing method
+    smoothing_method = params.get('smoothing_method', 'konno_ohmachi')
+    if 'smoothing_method' in params:
+        err = validate_choice(
+            params['smoothing_method'],
+            VALID_SMOOTHING_METHODS,
+            'smoothing_method'
+        )
         if err:
             errors.append(err)
+            smoothing_method = 'konno_ohmachi'  # Use default for bandwidth validation
+    
+    # Smoothing bandwidth (method-specific validation)
+    if 'smoothing_bandwidth' in params:
+        bandwidth_range = SMOOTHING_BANDWIDTH_RANGES.get(smoothing_method, (1.0, 200.0))
+        err = validate_range(
+            params['smoothing_bandwidth'],
+            bandwidth_range[0],
+            bandwidth_range[1],
+            'smoothing_bandwidth'
+        )
+        if err:
+            errors.append(err)
+        
+        # Savitzky-Golay specific: must be odd integer
+        if smoothing_method == 'savitzky_golay':
+            bw = params['smoothing_bandwidth']
+            if not isinstance(bw, int) or int(bw) % 2 != 1:
+                errors.append(ValidationError(
+                    field='smoothing_bandwidth',
+                    message="Savitzky-Golay bandwidth must be an odd integer",
+                    value=bw
+                ))
     
     # Frequency range
     if 'f_min' in params:
