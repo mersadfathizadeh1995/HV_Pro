@@ -29,7 +29,17 @@ def compute_fft(data: np.ndarray, sampling_rate: float,
     Returns:
         frequencies: Frequency array (Hz)
         spectrum: Amplitude spectrum
+        
+    Raises:
+        ValueError: If sampling_rate <= 0
     """
+    # Validate input - handle empty data gracefully
+    if len(data) == 0:
+        return np.array([]), np.array([])
+    
+    if sampling_rate <= 0:
+        raise ValueError("sampling_rate must be > 0")
+    
     n = len(data)
     
     # Remove mean
@@ -72,14 +82,27 @@ def konno_ohmachi_smoothing(frequencies: np.ndarray,
         Spectral Ratio between Horizontal and Vertical Components of Microtremor.
     
     Args:
-        frequencies: Frequency array (Hz)
+        frequencies: Frequency array (Hz), must be non-negative
         spectrum: Amplitude spectrum
-        bandwidth: Bandwidth parameter (typically 20-40)
+        bandwidth: Bandwidth parameter (typically 20-40), must be > 0
         normalize: Normalize smoothing window
         
     Returns:
         Smoothed spectrum
+        
+    Raises:
+        ValueError: If bandwidth <= 0 or frequencies contain negative values
     """
+    # Input validation
+    if bandwidth <= 0:
+        raise ValueError("bandwidth must be > 0")
+    
+    if len(frequencies) == 0:
+        return np.array([])
+    
+    if np.any(frequencies < 0):
+        raise ValueError("frequencies must be non-negative")
+    
     n_freq = len(frequencies)
     smoothed = np.zeros(n_freq)
     
@@ -129,15 +152,28 @@ def konno_ohmachi_smoothing_fast(frequencies: np.ndarray,
     Optimized Konno-Ohmachi smoothing using vectorized operations.
     
     Args:
-        frequencies: Frequency array (Hz)  
+        frequencies: Frequency array (Hz), must be non-negative
         spectrum: Amplitude spectrum
-        bandwidth: Bandwidth parameter
+        bandwidth: Bandwidth parameter, must be > 0
         normalize: Normalize smoothing window
         fc_array: Optional custom center frequencies (defaults to frequencies)
         
     Returns:
         Smoothed spectrum
+        
+    Raises:
+        ValueError: If bandwidth <= 0 or frequencies contain negative values
     """
+    # Input validation
+    if bandwidth <= 0:
+        raise ValueError("bandwidth must be > 0")
+    
+    if len(frequencies) == 0:
+        return np.array([])
+    
+    if np.any(frequencies < 0):
+        raise ValueError("frequencies must be non-negative")
+    
     if fc_array is None:
         fc_array = frequencies.copy()
     
@@ -192,16 +228,21 @@ def calculate_horizontal_spectrum(east_spectrum: np.ndarray,
         east_spectrum: East component spectrum
         north_spectrum: North component spectrum  
         method: Combination method:
-            - 'geometric_mean': sqrt(E * N) - SESAME 2004 recommendation
+            - 'geometric_mean': sqrt(|E| * |N|) - SESAME 2004 recommendation
             - 'arithmetic_mean': (E + N) / 2
             - 'quadratic': sqrt(E^2 + N^2) - vector sum
             - 'maximum': max(E, N)
             
     Returns:
         Combined horizontal spectrum
+        
+    Note:
+        For geometric_mean, absolute values are used to handle potential
+        negative values from numerical errors.
     """
     if method == 'geometric_mean':
-        return np.sqrt(east_spectrum * north_spectrum)
+        # Use absolute values to avoid NaN from negative spectrum values
+        return np.sqrt(np.abs(east_spectrum) * np.abs(north_spectrum))
     elif method == 'arithmetic_mean':
         return (east_spectrum + north_spectrum) / 2.0
     elif method == 'quadratic':

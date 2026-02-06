@@ -42,22 +42,20 @@ if HAS_PYQT5:
     from hvsr_pro.gui.tabs import DataLoadTab, AzimuthalTab, ProcessingTab
     from hvsr_pro.gui.workers import ProcessingThread
     
-    # Import modular controllers and panels for future use
+    # Import modular controllers and panels
     from hvsr_pro.gui.main_window_modules.controllers import (
         ProcessingController, PlottingController, 
         SessionController, WindowController, DataController,
         PeakController, ExportController
     )
     from hvsr_pro.gui.main_window_modules.panels import (
-        ProcessingSettings, QCSettings, CoxFDWRASettings
+        ProcessingSettings, UnifiedQCPanel
     )
     from hvsr_pro.gui.main_window_modules.ui_coordinator import UIUpdateCoordinator
-    from hvsr_pro.gui.main_window_modules.backward_compat import BackwardCompatMixin
 
 
 
-
-class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
+class HVSRMainWindow(QMainWindow):
     """
     Main application window for HVSR analysis.
     
@@ -201,9 +199,15 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
     
     def copy_info(self):
         """Copy info text to clipboard."""
-        if self.info_text.toPlainText():
+        info_text = None
+        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'info_text'):
+            info_text = self.processing_tab.info_text
+        elif hasattr(self, 'info_text'):
+            info_text = self.info_text
+        
+        if info_text and info_text.toPlainText():
             clipboard = QApplication.clipboard()
-            clipboard.setText(self.info_text.toPlainText())
+            clipboard.setText(info_text.toPlainText())
             self.statusBar().showMessage("Info copied to clipboard", 2000)
     
     def show_about(self):
@@ -415,7 +419,7 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
         self.current_time_range = None
         
         # Disable process button
-        self.process_btn.setEnabled(False)
+        self.processing_tab.process_btn.setEnabled(False)
         
         # Clear processing tab's collapsible data panel
         if hasattr(self, 'processing_data_panel') and self.processing_data_panel:
@@ -502,11 +506,11 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             self.add_info("Advanced QC settings updated")
             # Update QC mode combo to show "Custom"
             if self.custom_qc_settings and self.custom_qc_settings.get('enabled'):
-                custom_idx = self.qc_combo.findData("custom")
+                custom_idx = self.processing_tab.qc_combo.findData("custom")
                 if custom_idx == -1:
-                    self.qc_combo.addItem("Custom (Advanced)", "custom")
-                    custom_idx = self.qc_combo.count() - 1
-                self.qc_combo.setCurrentIndex(custom_idx)
+                    self.processing_tab.qc_combo.addItem("Custom (Advanced)", "custom")
+                    custom_idx = self.processing_tab.qc_combo.count() - 1
+                self.processing_tab.qc_combo.setCurrentIndex(custom_idx)
 
     def on_layer_visibility_changed(self, window_idx: int, is_visible: bool):
         """Handle layer visibility toggle from dock."""
@@ -579,7 +583,7 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             # For multi-component (SAC, PEER), store the list of files
             self.current_file = load_result.files
         
-        self.process_btn.setEnabled(True)
+        self.processing_tab.process_btn.setEnabled(True)
         
         # Update collapsible data panels in Processing and Azimuthal tabs
         if hasattr(self, 'processing_data_panel'):
@@ -698,7 +702,7 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             settings.freq_min,
             settings.freq_max,
             settings.n_frequencies,
-            settings.qc_preset if settings.qc_mode == 'preset' else 'custom',
+            settings.qc_mode,  # 'sesame' or 'custom'
             settings.cox_enabled,
             settings.use_parallel,
             settings.n_cores,
@@ -904,8 +908,8 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
 
     def on_processing_error(self, error_msg: str):
         """Handle processing error."""
-        self.progress_bar.setVisible(False)
-        self.process_btn.setEnabled(True)
+        self.processing_tab.progress_bar.setVisible(False)
+        self.processing_tab.process_btn.setEnabled(True)
         QMessageBox.critical(self, "Processing Error", error_msg)
         self.add_info(f"ERROR: {error_msg}")
     
@@ -963,14 +967,14 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
     def update_window_info(self):
         """Update window information display."""
         if self.windows is None:
-            self.window_info_label.setText("No windows")
+            self.processing_tab.window_info_label.setText("No windows")
             return
         
         info = (f"Total: {self.windows.n_windows}\n"
                 f"Active: {self.windows.n_active} "
                 f"({self.windows.acceptance_rate*100:.1f}%)\n"
                 f"Rejected: {self.windows.n_rejected}")
-        self.window_info_label.setText(info)
+        self.processing_tab.window_info_label.setText(info)
     
     def generate_report_plots(self):
         """Open advanced export dialog. Delegates to ExportController."""
@@ -1246,9 +1250,6 @@ class HVSRMainWindow(BackwardCompatMixin, QMainWindow):
             scrollbar = self.info_text.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
     
-    # === Backward compatibility properties ===
-    # Moved to BackwardCompatMixin (backward_compat.py)
-    # HVSRMainWindow inherits from BackwardCompatMixin to provide these properties
 
 
 if not HAS_PYQT5:

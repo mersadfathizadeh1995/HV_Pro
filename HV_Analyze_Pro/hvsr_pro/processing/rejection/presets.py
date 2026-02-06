@@ -7,10 +7,6 @@ Pre-configured QC pipelines for HVSR analysis.
 Presets:
     - sesame: SESAME-compliant with FDWRA (default, matches hvsrpy)
     - custom: User-defined settings (persisted across sessions)
-
-Legacy presets (deprecated):
-    - conservative, balanced, aggressive, publication, ml
-    These are kept for backward compatibility but SESAME is recommended.
 """
 
 import logging
@@ -41,59 +37,9 @@ SESAME_CONFIG = {
     }
 }
 
-# Preset configurations (SESAME is primary, others kept for backward compatibility)
+# Preset configurations
 PRESET_CONFIGS = {
     'sesame': SESAME_CONFIG,
-    # Legacy presets (deprecated - use SESAME or custom instead)
-    'conservative': {
-        'description': '[Deprecated] Only reject clear problems (use SESAME instead)',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-        ],
-        'post_hvsr': []
-    },
-    'balanced': {
-        'description': '[Deprecated] Balanced approach (use SESAME instead)',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-        ],
-        'post_hvsr': []
-    },
-    'aggressive': {
-        'description': '[Deprecated] Thorough quality control (use custom settings instead)',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-            {'type': 'STALTARejection', 'params': {
-                'sta_length': 1.0,
-                'lta_length': 30.0,
-                'min_ratio': 0.08,
-                'max_ratio': 3.5
-            }},
-            {'type': 'FrequencyDomainRejection', 'params': {'spike_threshold': 4.0}},
-            {'type': 'StatisticalOutlierRejection', 'params': {'method': 'iqr', 'threshold': 2.5}},
-        ],
-        'post_hvsr': []
-    },
-    'publication': {
-        'description': '[Deprecated] Publication-quality (use SESAME with custom settings)',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-        ],
-        'post_hvsr': [
-            {'type': 'HVSRAmplitudeRejection', 'params': {'min_amplitude': 1.0}},
-            {'type': 'FlatPeakRejection', 'params': {'flatness_threshold': 0.15}},
-        ],
-        'use_cox_fdwra': True
-    },
-    'ml': {
-        'description': '[Deprecated] Machine learning-based (requires sklearn)',
-        'algorithms': [
-            {'type': 'AmplitudeRejection', 'params': {}},
-            {'type': 'IsolationForestRejection', 'params': {'contamination': 0.1}},
-        ],
-        'post_hvsr': [],
-        'requires_sklearn': True
-    }
 }
 
 
@@ -142,7 +88,7 @@ def create_preset_pipeline(preset: str, engine=None):
     Create a rejection pipeline from a preset.
     
     Args:
-        preset: Preset name (conservative, balanced, aggressive, sesame, publication, ml)
+        preset: Preset name ('sesame')
         engine: Optional RejectionEngine instance to configure (creates new if None)
         
     Returns:
@@ -164,13 +110,6 @@ def create_preset_pipeline(preset: str, engine=None):
     
     config = PRESET_CONFIGS[preset]
     
-    # Check sklearn requirement
-    if config.get('requires_sklearn', False):
-        try:
-            from hvsr_pro.processing.rejection.algorithms.ml import IsolationForestRejection
-        except ImportError:
-            raise ImportError("ML preset requires scikit-learn. Install with: pip install scikit-learn")
-    
     # Create or clear engine
     if engine is None:
         engine = RejectionEngine(name=f"{preset.title()}Pipeline")
@@ -187,13 +126,6 @@ def create_preset_pipeline(preset: str, engine=None):
         'HVSRAmplitudeRejection': HVSRAmplitudeRejection,
         'FlatPeakRejection': FlatPeakRejection,
     }
-    
-    # Add ML algorithms if available
-    try:
-        from hvsr_pro.processing.rejection.algorithms.ml import IsolationForestRejection
-        algorithm_map['IsolationForestRejection'] = IsolationForestRejection
-    except ImportError:
-        pass
     
     # Add pre-HVSR algorithms
     for algo_config in config['algorithms']:
@@ -226,4 +158,3 @@ def create_preset_pipeline(preset: str, engine=None):
         logger.info("  Cox FDWRA will be applied after HVSR computation")
     
     return engine
-

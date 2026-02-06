@@ -281,10 +281,9 @@ class WindowLayersDock(QDockWidget):
         # Handle window lines
         window_idx = role_data
         
-        # Validate index
-        if window_idx < 0 or window_idx >= len(self.window_lines):
-            print(f"[LayersDock] Invalid window index: {window_idx}")
-            self.rebuild(self.window_lines, self.stat_lines)
+        # Validate index - window_lines is a dict keyed by window_index
+        if window_idx not in self.window_lines:
+            print(f"[LayersDock] Window index {window_idx} not in window_lines")
             return
         
         # Update matplotlib line visibility

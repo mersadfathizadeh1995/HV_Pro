@@ -66,8 +66,6 @@ if HAS_PYQT5:
     from hvsr_pro.gui.main_window_modules.panels import (
         ProcessingSettingsPanel, UnifiedQCPanel
     )
-    # Keep old imports for backward compatibility but mark as deprecated
-    from hvsr_pro.gui.main_window_modules.panels import QCSettingsPanel, CoxSettingsPanel
 
     class ProcessingTab(QWidget):
         """
@@ -158,13 +156,9 @@ if HAS_PYQT5:
             self.processing_panel = ProcessingSettingsPanel()
             layout.addWidget(self.processing_panel)
             
-            # Unified QC settings panel (replaces old qc_panel + cox_panel)
+            # Unified QC settings panel
             self.unified_qc_panel = UnifiedQCPanel()
             layout.addWidget(self.unified_qc_panel)
-            
-            # Backward compatibility aliases
-            self.qc_panel = self.unified_qc_panel
-            self.cox_panel = None  # Deprecated - use unified_qc_panel
             
             # Parallel processing group
             parallel_group = self._create_parallel_group()
@@ -408,96 +402,6 @@ if HAS_PYQT5:
         def clear_info(self):
             """Clear info text."""
             self.info_text.clear()
-        
-        # === Backward compatibility properties ===
-        # These allow main_window.py to access widgets via the old paths
-        
-        @property
-        def window_length_spin(self):
-            """Backward compatibility: access window length spin."""
-            return self.processing_panel.window_length_spin
-        
-        @property
-        def overlap_spin(self):
-            """Backward compatibility: access overlap spin."""
-            return self.processing_panel.overlap_spin
-        
-        @property
-        def smoothing_spin(self):
-            """Backward compatibility: access smoothing spin."""
-            return self.processing_panel.smoothing_spin
-        
-        @property
-        def freq_min_spin(self):
-            """Backward compatibility: access freq min spin."""
-            return self.processing_panel.freq_min_spin
-        
-        @property
-        def freq_max_spin(self):
-            """Backward compatibility: access freq max spin."""
-            return self.processing_panel.freq_max_spin
-        
-        @property
-        def n_freq_spin(self):
-            """Backward compatibility: access n freq spin."""
-            return self.processing_panel.n_freq_spin
-        
-        @property
-        def override_sampling_check(self):
-            """Backward compatibility: access override sampling check."""
-            return self.processing_panel.override_sampling_check
-        
-        @property
-        def sampling_rate_spin(self):
-            """Backward compatibility: access sampling rate spin."""
-            return self.processing_panel.sampling_rate_spin
-        
-        @property
-        def qc_enable_check(self):
-            """Backward compatibility: access QC enable check."""
-            return self.unified_qc_panel.master_enable
-        
-        @property
-        def preset_radio(self):
-            """Backward compatibility: access preset radio (SESAME)."""
-            return self.unified_qc_panel.sesame_radio
-        
-        @property
-        def custom_radio(self):
-            """Backward compatibility: access custom radio."""
-            return self.unified_qc_panel.custom_radio
-        
-        @property
-        def qc_combo(self):
-            """Backward compatibility: QC combo is deprecated - returns None."""
-            # No longer a combo box - SESAME/Custom only
-            return None
-        
-        @property
-        def cox_fdwra_check(self):
-            """Backward compatibility: access FDWRA enable check."""
-            return self.unified_qc_panel.fdwra_row['checkbox']
-        
-        @property
-        def cox_n_spin(self):
-            """Backward compatibility: Cox n spin is in dialog - returns None."""
-            # Parameters now in settings dialog
-            return None
-        
-        @property
-        def cox_iterations_spin(self):
-            """Backward compatibility: Cox iterations spin is in dialog - returns None."""
-            return None
-        
-        @property
-        def cox_min_iterations_spin(self):
-            """Backward compatibility: Cox min iterations spin is in dialog - returns None."""
-            return None
-        
-        @property
-        def cox_dist_combo(self):
-            """Backward compatibility: Cox distribution combo is in dialog - returns None."""
-            return None
 
 
 else:

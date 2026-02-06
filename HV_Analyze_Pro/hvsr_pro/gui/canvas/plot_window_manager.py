@@ -198,10 +198,19 @@ class PlotWindowManager:
         # Reset close flag
         self._user_closed = False
         
-        # Show window
-        self.plot_window.show()
+        # Show window - use showNormal() to ensure it's not minimized
+        self.plot_window.showNormal()
         self.plot_window.raise_()
         self.plot_window.activateWindow()
+        
+        # On Windows, sometimes need to set window flags to bring to front
+        self.plot_window.setWindowState(
+            self.plot_window.windowState() & ~Qt.WindowMinimized | Qt.WindowActive
+        )
+        
+        # Ensure canvas is redrawn after showing window
+        self.canvas.draw_idle()
+        
         self.mode = 'separate'
         
         print("[PlotWindowManager] Showing plot in separate window")

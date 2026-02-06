@@ -32,27 +32,32 @@ loaders/         → core/data_handler     → core/data_structures
 ### Data Loaders Package
 ```
 loaders/
-├── __init__.py       → FORMAT_INFO registry, exports
-├── config.py         → LoaderConfig, SAFConfig, SACConfig, GCFConfig, PEERConfig
-├── patterns.py       → Compiled regex for SAF/PEER parsing
-├── orientation.py    → orient_traces(), arrange_traces(), trim_traces()
-├── base_loader.py    → BaseDataLoader
-├── txt_loader.py     → ASCII/TXT format
-├── miniseed_loader.py → MiniSEED format (via ObsPy)
-├── saf_loader.py     → SESAME ASCII Format
-├── sac_loader.py     → SAC format (3 files, via ObsPy)
-├── gcf_loader.py     → Guralp Compressed Format (via ObsPy)
-└── peer_loader.py    → PEER NGA format (3 files)
+├── __init__.py           → FORMAT_INFO registry, exports
+├── config.py             → LoaderConfig, SAFConfig, SACConfig, GCFConfig, PEERConfig
+├── patterns.py           → Compiled regex for SAF/PEER/MiniShark parsing
+├── orientation.py        → orient_traces(), arrange_traces(), trim_traces()
+├── preview.py            → PreviewExtractor for all formats
+├── base_loader.py        → BaseDataLoader abstract base
+├── txt_loader.py         → ASCII/TXT format
+├── miniseed_loader.py    → MiniSEED format (via ObsPy)
+├── saf_loader.py         → SESAME ASCII Format
+├── sac_loader.py         → SAC format (3 files, via ObsPy)
+├── gcf_loader.py         → Guralp Compressed Format (via ObsPy)
+├── peer_loader.py        → PEER NGA format (3 files)
+├── minishark_loader.py   → MiniShark proprietary format
+└── srecord3c_loader.py   → HVSRPy JSON (SeismicRecording3C)
 
 Supported Formats:
-| Format   | Extensions           | Type       | Description                |
-|----------|---------------------|------------|----------------------------|
-| txt      | .txt, .dat, .asc    | Single     | OSCAR ASCII format         |
-| miniseed | .mseed, .miniseed   | Single/3   | Standard seismic format    |
-| saf      | .saf                | Single     | SESAME ASCII Format        |
-| sac      | .sac                | 3 files    | Seismic Analysis Code      |
-| gcf      | .gcf                | Single     | Guralp Compressed Format   |
-| peer     | .vt2, .at2, .dt2    | 3 files    | PEER ground motion         |
+| Format        | Extensions           | Type       | Description                    |
+|---------------|---------------------|------------|--------------------------------|
+| txt           | .txt, .dat, .asc    | Single     | OSCAR ASCII format             |
+| miniseed      | .mseed, .miniseed   | Single/3   | Standard seismic format        |
+| saf           | .saf                | Single     | SESAME ASCII Format            |
+| sac           | .sac                | 3 files    | Seismic Analysis Code          |
+| gcf           | .gcf                | Single     | Guralp Compressed Format       |
+| peer          | .vt2, .at2, .dt2    | 3 files    | PEER ground motion             |
+| minishark     | .minishark          | Single     | MiniShark proprietary format   |
+| srecord3c_json| .json               | Single     | HVSRPy native JSON format      |
 ```
 
 ### Processing Pipeline
@@ -144,7 +149,7 @@ HVSRMainWindow (main_window.py - 1204 lines)
 main_window.py ─────→ controllers/
                       ├── DataController        (data loading)
                       ├── ProcessingController  (HVSR processing)
-                      ├── PlottingController    (plot management)
+                      ├── PlottingController    (plot management, window indexing)
                       ├── SessionController     (save/load sessions)
                       ├── WindowController      (window state)
                       ├── PeakController        (peak detection)
@@ -153,9 +158,11 @@ main_window.py ─────→ controllers/
               ─────→ helpers/
                       ├── MenuBarHelper         (menu creation)
                       ├── ViewStateManager      (dock/tab visibility)
-                      ├── UIUpdateCoordinator   (post-processing updates)
-                      └── BackwardCompatMixin   (deprecated properties)
+                      └── UIUpdateCoordinator   (post-processing updates)
 ```
+
+Note: PlottingController uses spectra_by_index mapping to correctly match
+      window_spectra to windows (handles active-only processing).
 
 ### Dialog Structure
 ```

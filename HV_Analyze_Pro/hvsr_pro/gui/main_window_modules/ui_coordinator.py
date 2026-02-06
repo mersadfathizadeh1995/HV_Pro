@@ -93,8 +93,13 @@ if HAS_PYQT5:
                 # 6. Update window info display
                 self._update_window_info()
                 
-                # 7. Plot results
-                self._plot_results(result, windows, data)
+                # 7. Plot results (with error handling)
+                try:
+                    self._plot_results(result, windows, data)
+                except Exception as plot_error:
+                    self.info_message.emit(f"Warning: Plot failed: {str(plot_error)}")
+                    import traceback
+                    traceback.print_exc()
                 
                 # 8. Show completion info
                 if show_info:
@@ -303,6 +308,16 @@ if HAS_PYQT5:
         def _plot_results(self, result, windows, data):
             """Plot HVSR results in the plot window."""
             if not hasattr(self.parent, 'plotting_ctrl') or not hasattr(self.parent, 'plot_manager'):
+                self.info_message.emit("Warning: Plotting controller or plot manager not available")
+                return
+            
+            # Validate result data
+            if result is None:
+                self.info_message.emit("Warning: No HVSR result to plot")
+                return
+            
+            if windows is None:
+                self.info_message.emit("Warning: No windows data to plot")
                 return
             
             # Set data in plotting controller
@@ -311,14 +326,26 @@ if HAS_PYQT5:
             
             # Plot using controller
             lines = self.parent.plotting_ctrl.plot_hvsr_results(result, windows, data)
-            self.parent.window_lines = lines.get('window_lines', {})
-            self.parent.stat_lines = lines.get('stat_lines', {})
+            
+            # Extract lines with defensive checks
+            window_lines = lines.get('window_lines', {}) if lines else {}
+            stat_lines = lines.get('stat_lines', {}) if lines else {}
+            
+            # Log warnings if no lines generated
+            if not window_lines:
+                self.info_message.emit(f"Warning: No window lines generated (windows.n_active={windows.n_active})")
+            if not stat_lines:
+                self.info_message.emit("Warning: No stat lines generated")
+            
+            self.parent.window_lines = window_lines
+            self.parent.stat_lines = stat_lines
             
             # Rebuild layer dock with lines
             if hasattr(self.parent, 'layers_dock'):
-                self.parent.layers_dock.rebuild(
-                    self.parent.window_lines, self.parent.stat_lines
-                )
+                # Ensure layers_dock has windows reference before rebuild
+                if hasattr(self.parent.layers_dock, 'windows') and self.parent.layers_dock.windows is None:
+                    self.parent.layers_dock.set_references(self.parent.plot_manager, windows)
+                self.parent.layers_dock.rebuild(window_lines, stat_lines)
             
             # Show plot window
             self.parent.plot_manager.show_separate()

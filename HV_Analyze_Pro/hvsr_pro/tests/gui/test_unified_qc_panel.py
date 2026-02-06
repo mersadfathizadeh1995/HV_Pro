@@ -56,7 +56,7 @@ class TestUnifiedQCPanel:
         """Panel should be created with default SESAME settings."""
         assert unified_panel is not None
         assert unified_panel.master_enable.isChecked()  # Master enabled by default
-        assert unified_panel.sesame_radio.isChecked()  # SESAME mode by default
+        assert unified_panel._sesame_radio.isChecked()  # SESAME mode by default
     
     def test_master_checkbox_disables_all(self, unified_panel):
         """Master 'Enable QC' checkbox should disable all phases when unchecked."""
@@ -150,7 +150,7 @@ class TestUnifiedQCPanel:
     def test_sesame_preset_matches_hvsrpy_defaults(self, unified_panel):
         """SESAME preset should have same defaults as hvsrpy."""
         # Set to SESAME mode
-        unified_panel.sesame_radio.setChecked(True)
+        unified_panel._sesame_radio.setChecked(True)
         
         settings = unified_panel.get_settings()
         algos = settings['algorithms']
@@ -178,7 +178,7 @@ class TestUnifiedQCPanel:
     def test_active_count_updates_correctly(self, unified_panel):
         """Active algorithm count should update when checkboxes change."""
         # In SESAME mode: 2 active in Phase 1, 1 in Phase 2
-        unified_panel.sesame_radio.setChecked(True)
+        unified_panel._sesame_radio.setChecked(True)
         
         assert "[2 active]" in unified_panel.phase1_count_label.text()
         assert "[1 active]" in unified_panel.phase2_count_label.text()
@@ -194,17 +194,17 @@ class TestUnifiedQCPanel:
     def test_mode_switching(self, unified_panel):
         """Switching between SESAME and Custom modes should work correctly."""
         # Start in SESAME
-        unified_panel.sesame_radio.setChecked(True)
+        unified_panel._sesame_radio.setChecked(True)
         assert unified_panel.get_settings()['mode'] == 'sesame'
         assert not unified_panel.save_custom_btn.isEnabled()
         
         # Switch to Custom
-        unified_panel.custom_radio.setChecked(True)
+        unified_panel._custom_radio.setChecked(True)
         assert unified_panel.get_settings()['mode'] == 'custom'
         assert unified_panel.save_custom_btn.isEnabled()
         
         # Switch back to SESAME
-        unified_panel.sesame_radio.setChecked(True)
+        unified_panel._sesame_radio.setChecked(True)
         assert unified_panel.get_settings()['mode'] == 'sesame'
     
     def test_get_settings_returns_complete_dict(self, unified_panel):
@@ -217,7 +217,7 @@ class TestUnifiedQCPanel:
         assert 'phase1_enabled' in settings
         assert 'phase2_enabled' in settings
         assert 'algorithms' in settings
-        assert 'cox_fdwra' in settings  # Backward compatibility
+        assert 'cox_fdwra' in settings  # FDWRA settings
         
         # Check all algorithms present
         algos = settings['algorithms']
@@ -229,21 +229,10 @@ class TestUnifiedQCPanel:
         assert 'hvsr_amplitude' in algos
         assert 'flat_peak' in algos
     
-    def test_backward_compatibility_properties(self, unified_panel):
-        """Backward compatibility properties should work."""
-        # enable_check should return master_enable
-        assert unified_panel.enable_check == unified_panel.master_enable
-        
-        # preset_radio should return sesame_radio
-        assert unified_panel.preset_radio == unified_panel.sesame_radio
-        
-        # custom_radio should return custom_radio
-        assert unified_panel.custom_radio == unified_panel.custom_radio
-    
     def test_is_fdwra_enabled(self, unified_panel):
         """is_fdwra_enabled() should check all required conditions."""
         # In SESAME mode, FDWRA should be enabled
-        unified_panel.sesame_radio.setChecked(True)
+        unified_panel._sesame_radio.setChecked(True)
         assert unified_panel.is_fdwra_enabled() == True
         
         # Disable Phase 2 -> FDWRA disabled

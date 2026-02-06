@@ -25,10 +25,13 @@ Enhance hvsr_pro to have feature parity with hvsrpy while maintaining:
 | SAC | ✅ | ✅ | **Done** |
 | GCF (Guralp) | ✅ | ✅ | **Done** |
 | PEER | ✅ | ✅ | **Done** |
+| MiniShark | ✅ | ✅ | **Done** |
+| SeismicRecording3C JSON | ✅ | ✅ | **Done** |
 | Auto-detection | ✅ | ✅ | **Done** |
 | Multi-file mapping | ✅ | ✅ | Done |
 
 **Implementation:** `loaders/` package with registry pattern, config dataclasses, GUI tabs.
+8 formats supported with preview extraction for all.
 
 ### 2. Smoothing Methods (Priority: HIGH) - COMPLETED
 | Method | hvsrpy | hvsr_pro | Status |

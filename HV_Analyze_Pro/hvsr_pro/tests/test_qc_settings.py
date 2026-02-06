@@ -94,10 +94,16 @@ class TestQCSettings:
         settings = QCSettings()
         settings.apply_preset('sesame')
         
-        # SESAME enables amplitude, quality threshold, and cox_fdwra
+        # SESAME enables amplitude, sta_lta, and cox_fdwra (matches hvsrpy)
         assert settings.amplitude.enabled == True
-        assert settings.quality_threshold.enabled == True
+        assert settings.sta_lta.enabled == True
+        assert settings.sta_lta.params['sta_length'] == 1.0
+        assert settings.sta_lta.params['lta_length'] == 30.0
+        assert settings.sta_lta.params['min_ratio'] == 0.2
+        assert settings.sta_lta.params['max_ratio'] == 2.5
         assert settings.cox_fdwra.enabled == True
+        assert settings.cox_fdwra.n == 2.0
+        assert settings.cox_fdwra.max_iterations == 50
         assert settings.preset == 'sesame'
     
     def test_get_enabled_pre_hvsr_algorithms(self):

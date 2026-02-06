@@ -306,7 +306,15 @@ class CoxFDWRARejection(BaseRejectionAlgorithm):
             return float(np.mean(values))
     
     def _calculate_std(self, values: np.ndarray, distribution: str) -> float:
-        """Calculate standard deviation according to distribution assumption."""
+        """
+        Calculate standard deviation according to distribution assumption.
+        
+        Returns 0.0 if fewer than 2 values are provided (ddof=1 requires at least 2).
+        """
+        # Handle edge case: need at least 2 values for ddof=1
+        if len(values) < 2:
+            return 0.0
+        
         if distribution == "lognormal":
             log_values = np.log(values + 1e-10)
             return float(np.std(log_values, ddof=1))

@@ -88,7 +88,23 @@ if HAS_PYQT5:
             Returns:
                 Dict with {'window_lines': {...}, 'stat_lines': {...}}
             """
+            # Diagnostic logging
+            print(f"\n=== PlottingController.plot_hvsr_results() ===")
+            print(f"  hvsr_result: {hvsr_result is not None}")
+            print(f"  windows: {windows is not None}")
+            if windows:
+                print(f"  windows.n_active: {windows.n_active}")
+                print(f"  windows.n_windows: {windows.n_windows}")
+            if hvsr_result:
+                print(f"  window_spectra count: {len(hvsr_result.window_spectra)}")
+                print(f"  frequencies count: {len(hvsr_result.frequencies)}")
+                print(f"  mean_hvsr: {hvsr_result.mean_hvsr is not None}")
+                if hasattr(hvsr_result, 'metadata'):
+                    print(f"  metadata: {hvsr_result.metadata}")
+            print(f"  plot_manager: {self.plot_manager is not None}")
+            
             if self.plot_manager is None:
+                print("[PlottingController] ERROR: plot_manager is None!")
                 return {}
             
             self._hvsr_result = hvsr_result
@@ -97,6 +113,18 @@ if HAS_PYQT5:
             
             # Check for QC failure
             if hasattr(hvsr_result, 'metadata') and hvsr_result.metadata.get('qc_failure', False):
+                print("[PlottingController] QC failure detected in metadata - showing failure message")
+                # Show QC failure message on plot instead of empty
+                self.plot_manager._create_axes()
+                ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
+                
+                ax_hvsr.text(0.5, 0.5, 'QC Failure: No windows passed quality control\n\nPlease adjust QC settings or check data quality.', 
+                             ha='center', va='center', fontsize=12, color='red',
+                             transform=ax_hvsr.transAxes, wrap=True)
+                ax_hvsr.set_title('HVSR Curve (QC Failed)', color='red')
+                
+                self.plot_manager.fig.tight_layout()
+                self.plot_manager.canvas.draw()
                 return {}
             
             # Recreate axes
@@ -142,12 +170,32 @@ if HAS_PYQT5:
         
         def _plot_hvsr_curves(self, ax, hvsr_result, windows, properties=None):
             """Plot HVSR curves on axis."""
+            print(f"\n=== _plot_hvsr_curves() ===")
+            print(f"  windows.windows count: {len(windows.windows)}")
+            print(f"  window_spectra count: {len(hvsr_result.window_spectra)}")
+            
             self.window_lines = {}
             color_palette = self.get_color_palette()
             
+            # Build a mapping from window_index to spectrum for efficient lookup
+            # This handles the case where only active windows have spectra
+            spectra_by_index = {}
+            for spectrum in hvsr_result.window_spectra:
+                spectra_by_index[spectrum.window_index] = spectrum
+            
+            print(f"  Spectra indices available: {sorted(spectra_by_index.keys())[:10]}...")
+            
             # Plot individual windows
+            plotted_count = 0
             for i, window in enumerate(windows.windows):
-                if i < len(hvsr_result.window_spectra):
+                window_idx = window.index
+                
+                # Look up spectrum by window index, not loop index
+                if window_idx in spectra_by_index:
+                    plotted_count += 1
+                    window_spectrum = spectra_by_index[window_idx]
+                    window_hvsr = window_spectrum.hvsr
+                    
                     # Color based on active state
                     if window.is_active():
                         color = color_palette[i % len(color_palette)]
@@ -156,18 +204,18 @@ if HAS_PYQT5:
                         color = 'gray'
                         alpha = 0.3
                     
-                    window_spectrum = hvsr_result.window_spectra[i]
-                    window_hvsr = window_spectrum.hvsr
-                    
                     line, = ax.plot(
                         hvsr_result.frequencies, window_hvsr,
                         color=color, linewidth=0.8, alpha=alpha,
                         visible=window.is_active() and window.visible,
-                        label=f'W{i+1}' if i < 5 else ''
+                        label=f'W{window_idx+1}' if plotted_count <= 5 else ''
                     )
-                    self.window_lines[i] = line
+                    self.window_lines[window_idx] = line
+            
+            print(f"  Plotted {plotted_count} window curves, {len(self.window_lines)} lines stored")
             
             # Plot mean and std
+            print(f"  Plotting mean curve (freq range: {hvsr_result.frequencies[0]:.3f} - {hvsr_result.frequencies[-1]:.3f} Hz)")
             mean_line, = ax.plot(
                 hvsr_result.frequencies, hvsr_result.mean_hvsr,
                 'k-', linewidth=2.5, label='Mean', zorder=100
@@ -263,12 +311,16 @@ if HAS_PYQT5:
             if not self._hvsr_result or not self._windows or not self.stat_lines:
                 return
             
+            # Build index map for spectra
+            spectra_by_index = {s.window_index: s for s in self._hvsr_result.window_spectra}
+            
             # Collect visible window HVSR curves
             visible_hvsr_curves = []
             
-            for i, window in enumerate(self._windows.windows):
-                if window.should_include_in_hvsr() and i < len(self._hvsr_result.window_spectra):
-                    window_spectrum = self._hvsr_result.window_spectra[i]
+            for window in self._windows.windows:
+                window_idx = window.index
+                if window.should_include_in_hvsr() and window_idx in spectra_by_index:
+                    window_spectrum = spectra_by_index[window_idx]
                     visible_hvsr_curves.append(window_spectrum.hvsr)
             
             if not visible_hvsr_curves:
@@ -346,8 +398,13 @@ if HAS_PYQT5:
             
             # Plot windows if enabled
             if properties.show_windows:
+                # Build index map for spectra
+                spectra_by_index = {s.window_index: s for s in result.window_spectra}
+                
                 for i, window in enumerate(windows.windows):
-                    if i < len(result.window_spectra):
+                    window_idx = window.index
+                    
+                    if window_idx in spectra_by_index:
                         if window.is_active():
                             color = color_palette[i % len(color_palette)]
                             alpha = properties.window_alpha
@@ -355,7 +412,7 @@ if HAS_PYQT5:
                             color = 'gray'
                             alpha = properties.window_alpha * 0.6
                         
-                        window_spectrum = result.window_spectra[i]
+                        window_spectrum = spectra_by_index[window_idx]
                         window_hvsr = window_spectrum.hvsr
                         
                         line, = ax_hvsr.plot(
@@ -363,7 +420,7 @@ if HAS_PYQT5:
                             color=color, linewidth=0.8, alpha=alpha,
                             visible=window.is_active() and window.visible
                         )
-                        self.window_lines[i] = line
+                        self.window_lines[window_idx] = line
             
             # Plot percentile shading if enabled
             if properties.show_percentile_shading and result.percentile_16 is not None:

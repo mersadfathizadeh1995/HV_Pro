@@ -676,29 +676,6 @@ if HAS_PYQT5:
         def get_fdwra_params(self) -> Dict[str, Any]:
             """Get FDWRA parameters."""
             return self._get_algorithm_params('fdwra')
-        
-        # === BACKWARD COMPATIBILITY ===
-        # These properties/methods allow existing code to work with the new panel
-        
-        @property
-        def enable_check(self):
-            """Backward compatibility: access master enable checkbox."""
-            return self.master_enable
-        
-        @property
-        def preset_radio(self):
-            """Backward compatibility: SESAME acts as preset."""
-            return self._sesame_radio
-        
-        @property
-        def custom_radio(self):
-            """Backward compatibility: custom radio button."""
-            return self._custom_radio
-        
-        @property
-        def sesame_radio(self):
-            """Access SESAME radio button."""
-            return self._sesame_radio
 
 
 else:

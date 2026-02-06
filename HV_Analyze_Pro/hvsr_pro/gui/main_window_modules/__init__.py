@@ -10,8 +10,7 @@ This package provides:
 - Panel widgets (settings panels)
 - Controller modules for specific functionality
 
-The main HVSRMainWindow class remains in hvsr_pro.gui.main_window
-for backward compatibility.
+The main HVSRMainWindow class remains in hvsr_pro.gui.main_window.
 """
 
 # Import component modules
@@ -21,7 +20,6 @@ from . import controllers
 from . import panels
 from . import view_state
 from . import ui_coordinator
-from . import backward_compat
 
 # Re-export helpers for convenience
 from .menu_bar import MenuBarHelper, show_about_dialog, show_shortcuts_dialog
@@ -40,12 +38,10 @@ from .controllers import (
 )
 from .panels import (
     ProcessingSettingsPanel,
-    QCSettingsPanel,
-    CoxSettingsPanel,
+    UnifiedQCPanel,
 )
 from .view_state import ViewStateManager
 from .ui_coordinator import UIUpdateCoordinator
-from .backward_compat import BackwardCompatMixin
 
 __all__ = [
     # Modules
@@ -55,7 +51,6 @@ __all__ = [
     'panels',
     'view_state',
     'ui_coordinator',
-    'backward_compat',
     # Menu bar
     'MenuBarHelper',
     'show_about_dialog',
@@ -67,14 +62,11 @@ __all__ = [
     'ParallelSettingsGroup',
     # Panels (new modular panels)
     'ProcessingSettingsPanel',
-    'QCSettingsPanel',
-    'CoxSettingsPanel',
+    'UnifiedQCPanel',
     # View state
     'ViewStateManager',
     # UI update coordination
     'UIUpdateCoordinator',
-    # Backward compatibility
-    'BackwardCompatMixin',
     # Controllers
     'DataController',
     'SessionController',

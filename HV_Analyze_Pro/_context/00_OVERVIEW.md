@@ -19,10 +19,14 @@ hvsr_pro/
 ├── config/                  # Settings, schemas, session management
 ├── core/                    # Data structures (SeismicData, ComponentData)
 ├── gui/                     # PyQt5 GUI components
+│   ├── canvas/              # Plot canvases
 │   ├── components/          # Reusable UI components
 │   ├── dialogs/             # Dialog windows
-│   ├── mixins/              # Mixin classes for main window
-│   ├── panels/              # QC panel, settings panel
+│   ├── docks/               # Dock widget packages
+│   ├── main_window_modules/ # Controllers, helpers, panels
+│   ├── panels/              # Standalone panels (QC, settings)
+│   ├── tabs/                # Main window tabs
+│   ├── widgets/             # Reusable widgets
 │   └── workers/             # Background processing threads
 ├── loaders/                 # Data loaders (txt, miniseed)
 ├── processing/              # Core processing algorithms

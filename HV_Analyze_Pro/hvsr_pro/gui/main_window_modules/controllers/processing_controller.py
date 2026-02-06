@@ -16,9 +16,8 @@ try:
 except ImportError:
     HAS_PYQT5 = False
 
-from hvsr_pro.gui.main_window_modules.panels import (
-    ProcessingSettings, QCSettings, CoxFDWRASettings
-)
+from hvsr_pro.gui.main_window_modules.panels import ProcessingSettings
+from hvsr_pro.processing.rejection.settings import QCSettings, CoxFDWRASettings
 
 
 @dataclass

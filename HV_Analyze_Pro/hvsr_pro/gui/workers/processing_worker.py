@@ -161,15 +161,24 @@ class ProcessingThread(QThread):
             elif not self.phase1_enabled:
                 self.progress.emit(50, "Phase 1 QC disabled (skipping pre-HVSR rejection)...")
                 # Skip Phase 1 but Phase 2 (FDWRA) may still run after HVSR
-            elif self.custom_qc_settings and self.qc_mode == 'custom':
+            elif self.qc_mode == 'sesame':
+                # Use SESAME preset (industry standard)
+                self.progress.emit(50, "Applying quality control (SESAME standard)...")
+                engine.create_default_pipeline(mode='sesame')
+                engine.evaluate(windows, auto_apply=True)
+            elif self.qc_mode == 'custom' and self.custom_qc_settings:
                 # Use custom QC settings (Phase 1 algorithms)
                 self.progress.emit(50, "Applying quality control (custom settings)...")
                 self._apply_custom_qc(engine, self.custom_qc_settings)
                 engine.evaluate(windows, auto_apply=True)
+            elif self.qc_mode == 'custom':
+                # Custom mode but no settings provided - skip pre-HVSR QC
+                self.progress.emit(50, "Custom QC mode with no settings (skipping pre-HVSR)...")
+                # Phase 2 (FDWRA) may still run after HVSR if enabled
             else:
-                # Use default pipeline
-                self.progress.emit(50, f"Applying quality control ({self.qc_mode} mode)...")
-                engine.create_default_pipeline(mode=self.qc_mode)
+                # Unknown mode - use SESAME as fallback
+                self.progress.emit(50, f"Unknown QC mode '{self.qc_mode}', using SESAME standard...")
+                engine.create_default_pipeline(mode='sesame')
                 engine.evaluate(windows, auto_apply=True)
             
             # Log QC results

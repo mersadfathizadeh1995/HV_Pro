@@ -306,10 +306,10 @@ class QCSettings:
     
     def apply_preset(self, preset: str) -> None:
         """
-        Apply a preset configuration.
+        Apply SESAME preset configuration.
         
         Args:
-            preset: Preset name (conservative, balanced, aggressive, sesame, publication)
+            preset: Preset name ('sesame' is the standard preset)
         """
         # Reset all to defaults
         self.amplitude = AmplitudeSettings()
@@ -322,46 +322,26 @@ class QCSettings:
         self.cox_fdwra = CoxFDWRASettings()
         self.isolation_forest = IsolationForestSettings()
         
-        # Apply preset-specific settings
-        if preset == 'conservative':
+        # Apply SESAME settings (industry standard, matches hvsrpy defaults)
+        if preset == 'sesame':
+            # Phase 1: Pre-HVSR
             self.amplitude.enabled = True
-            self.quality_threshold.enabled = True
-            self.quality_threshold.params['threshold'] = 0.2
-            
-        elif preset == 'balanced':
-            self.amplitude.enabled = True
-            
-        elif preset == 'aggressive':
-            self.amplitude.enabled = True
-            self.quality_threshold.enabled = True
-            self.quality_threshold.params['threshold'] = 0.35
             self.sta_lta.enabled = True
             self.sta_lta.params = {
                 'sta_length': 1.0,
                 'lta_length': 30.0,
-                'min_ratio': 0.08,
-                'max_ratio': 3.5
+                'min_ratio': 0.2,
+                'max_ratio': 2.5
             }
-            self.frequency_domain.enabled = True
-            self.frequency_domain.params['spike_threshold'] = 4.0
-            self.statistical_outlier.enabled = True
-            self.statistical_outlier.params['threshold'] = 2.5
-            
-        elif preset == 'sesame':
-            self.amplitude.enabled = True
-            self.quality_threshold.enabled = True
-            self.quality_threshold.params['threshold'] = 0.3
+            # Phase 2: Post-HVSR
             self.cox_fdwra.enabled = True
-            
-        elif preset == 'publication':
-            self.amplitude.enabled = True
-            self.hvsr_amplitude.enabled = True
-            self.hvsr_amplitude.params['min_amplitude'] = 1.0
-            self.flat_peak.enabled = True
-            self.flat_peak.params['flatness_threshold'] = 0.15
-            self.cox_fdwra.enabled = True
+            self.cox_fdwra.n = 2.0
+            self.cox_fdwra.max_iterations = 50
+            self.cox_fdwra.min_iterations = 1
+            self.cox_fdwra.distribution_fn = 'lognormal'
+            self.cox_fdwra.distribution_mc = 'lognormal'
         
-        self.mode = 'preset'
+        self.mode = 'sesame'
         self.preset = preset
     
     def get_enabled_pre_hvsr_algorithms(self) -> list:
@@ -426,22 +406,12 @@ class QCSettings:
 PRESET_DESCRIPTIONS = {
     "sesame": "SESAME standard with Amplitude + STA/LTA + Peak Frequency Consistency (FDWRA). Recommended for publication-quality results.",
     "custom": "User-defined settings. Configure each algorithm individually and save for future sessions.",
-    # Legacy presets (deprecated)
-    "conservative": "[Deprecated] Use SESAME or custom settings instead.",
-    "balanced": "[Deprecated] Use SESAME or custom settings instead.",
-    "aggressive": "[Deprecated] Use custom settings instead.",
-    "publication": "[Deprecated] Use SESAME with custom settings instead."
 }
 
 
 def get_preset_names() -> list:
-    """Get list of available preset names (primary presets only)."""
+    """Get list of available preset names."""
     return ['sesame', 'custom']
-
-
-def get_all_preset_names() -> list:
-    """Get all preset names including deprecated ones."""
-    return list(PRESET_DESCRIPTIONS.keys())
 
 
 def get_preset_description(preset: str) -> str:

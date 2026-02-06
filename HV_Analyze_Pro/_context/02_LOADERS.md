@@ -70,13 +70,76 @@ data = handler.load_multi_miniseed_type2(file_groups)
 sliced = handler.slice_by_time(data, start_time, end_time, timezone_offset_hours=-5)
 ```
 
-## GAPS - Missing Loaders
-The following file formats are NOT currently supported:
+### 3. SAFLoader (SESAME ASCII Format)
+**File:** `saf_loader.py`
 
-1. **SAC format** - Common seismic format
-2. **GCF format** - Güralp format
-3. **SEG-Y format** - Industry standard
-4. **SEGY/SGY** - Exploration seismology
-5. **CSV with flexible column mapping** - User-defined columns
-6. **Reftek format** - Reftek instruments
-7. **Raw binary formats** - Vendor-specific
+**Supported Extensions:** `.saf`
+
+**Features:**
+- Single file with 3 components
+- Header parsing (SESAME standard metadata)
+- Automatic component detection
+
+### 4. SACLoader (Seismic Analysis Code)
+**File:** `sac_loader.py`
+
+**Supported Extensions:** `.sac`
+
+**Requires:** ObsPy
+
+**Features:**
+- 3 separate files (N, E, Z components)
+- Big and little endian support
+- Automatic component detection from filename
+
+### 5. GCFLoader (Guralp Compressed Format)
+**File:** `gcf_loader.py`
+
+**Supported Extensions:** `.gcf`
+
+**Requires:** ObsPy
+
+**Features:**
+- Single file with 3 components
+- Automatic channel detection
+
+### 6. PEERLoader (PEER NGA Format)
+**File:** `peer_loader.py`
+
+**Supported Extensions:** `.vt2`, `.at2`, `.dt2`
+
+**Features:**
+- 3 separate files (acceleration format)
+- Custom parser (no ObsPy required)
+- Supports PEER NGA database format
+
+### 7. MiniSharkLoader
+**File:** `minishark_loader.py`
+
+**Supported Extensions:** `.minishark`
+
+**Features:**
+- Single file with 3 components (VT, NS, EW)
+- Proprietary format parsing
+- Gain and conversion factor correction
+
+### 8. SeismicRecording3CLoader (HVSRPy JSON)
+**File:** `srecord3c_loader.py`
+
+**Supported Extensions:** `.json`
+
+**Features:**
+- HVSRPy native JSON serialization format
+- Preserves metadata and degrees_from_north
+- Direct SeismicData construction
+
+---
+
+## Future Formats to Consider
+The following file formats could be added:
+
+1. **SEG-Y format** - Industry standard
+2. **SEGY/SGY** - Exploration seismology
+3. **CSV with flexible column mapping** - User-defined columns
+4. **Reftek format** - Reftek instruments
+5. **Raw binary formats** - Vendor-specific

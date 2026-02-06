@@ -5,6 +5,7 @@ Peak Detection
 Peak identification and characterization for HVSR curves.
 """
 
+import warnings
 import numpy as np
 from typing import List, Tuple, Optional, Dict
 from scipy import signal as scipy_signal
@@ -59,12 +60,25 @@ def detect_peaks(frequencies: np.ndarray,
         # Get prominence
         prom = properties['prominences'][len(peaks)]
         
-        # Get width information
-        widths, width_heights, left_ips, right_ips = scipy_signal.peak_widths(
-            hvsr_subset, [idx], rel_height=0.5
-        )
+        # Get width information (suppress warnings for narrow peaks)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # Ignore all warnings (PeakPropertyWarning, etc.)
+            try:
+                widths, width_heights, left_ips, right_ips = scipy_signal.peak_widths(
+                    hvsr_subset, [idx], rel_height=0.5
+                )
+            except Exception:
+                # Fall back to default values if peak_widths fails
+                widths = np.array([0.0])
+                width_heights = np.array([0.0])
+                left_ips = np.array([float(idx)])
+                right_ips = np.array([float(idx)])
         
-        width_hz = widths[0] * (freq_subset[1] - freq_subset[0])
+        # Handle edge case where width is 0 or invalid
+        if widths[0] <= 0 or np.isnan(widths[0]):
+            width_hz = 0.0
+        else:
+            width_hz = widths[0] * (freq_subset[1] - freq_subset[0])
         
         # Get left and right base frequencies
         left_idx = int(left_ips[0])

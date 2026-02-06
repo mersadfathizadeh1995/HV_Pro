@@ -9,26 +9,32 @@
 
 ## File Import Methods
 
-### All Formats Implemented (6) - COMPLETED
+### All Formats Implemented (8) - COMPLETED
 1. ✅ ASCII/TXT (OSCAR format, 4-column)
 2. ✅ MiniSEED (via ObsPy) - single file or 3 files
 3. ✅ SAF (SESAME ASCII Format) - single file
 4. ✅ SAC (Seismic Analysis Code) - 3 files via ObsPy
 5. ✅ GCF (Guralp Compressed Format) - single file via ObsPy
 6. ✅ PEER (Pacific Earthquake Engineering Research) - 3 files custom parser
+7. ✅ MiniShark - proprietary format (single file, 3 components)
+8. ✅ HVSRPy JSON (SeismicRecording3C) - native JSON serialization
 
 **Location:** `loaders/` package
 - `config.py` - LoaderConfig dataclasses per format
-- `patterns.py` - Compiled regex for SAF/PEER parsing
+- `patterns.py` - Compiled regex for SAF/PEER/MiniShark parsing
 - `orientation.py` - Trace orientation utilities (NEZ, XYZ, 123)
+- `preview.py` - PreviewExtractor for all formats
+- `base_loader.py` - BaseDataLoader abstract base
 - `saf_loader.py` - SESAME ASCII Format loader
 - `sac_loader.py` - SAC format (3 separate files)
 - `gcf_loader.py` - Guralp Compressed Format
 - `peer_loader.py` - PEER NGA format (3 separate files)
+- `minishark_loader.py` - MiniShark proprietary format
+- `srecord3c_loader.py` - HVSRPy JSON format
 - `__init__.py` - FORMAT_INFO registry, get_file_filter(), detect_format()
 
 **GUI Integration:**
-- SingleFileTab: Format selector (auto, txt, miniseed, saf, gcf)
+- SingleFileTab: Format selector (auto, txt, miniseed, saf, gcf, minishark, srecord3c_json)
 - MultiComponentTab: SAC/PEER format selector (3-file browser)
 - Degrees from north input for sensor orientation
 
@@ -144,18 +150,25 @@
 2. ❌ **Statistics Module** - Lognormal functions (TODO)
 
 ### Phase B: Data Loading (COMPLETED)
-1. ✅ New file format loaders (SAF, SAC, GCF, PEER)
+1. ✅ New file format loaders (SAF, SAC, GCF, PEER, MiniShark, SeismicRecording3C)
 2. ✅ Auto-detection utility
 3. ✅ Orientation utilities (NEZ, XYZ, 123 patterns)
 4. ✅ GUI tabs: SingleFileTab, MultiComponentTab
+5. ✅ Preview extraction for all formats
 
-### Phase C: Processing Enhancement
-1. Additional horizontal combination methods
-2. Diffuse field HVSR
+### Phase C: Processing Enhancement (NEXT PRIORITY)
+1. ❌ **Additional Horizontal Combination Methods**
+   - Total Horizontal Energy: sqrt(N² + E²)
+   - Single Azimuth: N*cos(θ) + E*sin(θ)
+   - RotDpp: Percentile across azimuths
+2. ❌ **Lognormal Statistics** - exp(mean(log(x))), geometric std
+3. ❌ **SESAME Criteria Automation** - 3 reliability + 6 clarity checks
+4. ❌ **Diffuse Field HVSR** - PSD-based method (Sánchez-Sesma et al. 2011)
 
-### Phase D: API & CLI
+### Phase D: API & CLI (FUTURE)
 1. ✅ Enhanced HVSRAnalysis.load_data() with format/orientation params
-2. ❌ CLI implementation
+2. ❌ CLI implementation (`hvsr_pro process`, `hvsr_pro batch`)
+3. ❌ Config file support for batch processing
 
 ---
 
@@ -171,3 +184,29 @@
 | Settings | `hvsrpy/settings.py` |
 
 **Rule:** Do NOT directly import from hvsrpy. Adapt and rewrite for hvsr_pro architecture.
+
+---
+
+## Recommended Next Step
+
+**Priority 1: Additional Horizontal Combination Methods**
+
+This is the most impactful improvement because:
+1. Relatively simple to implement (pure functions in `processing/hvsr/`)
+2. Enables RotDpp for directional analysis
+3. Aligns with hvsrpy feature parity
+4. Direct user value for research applications
+
+**Implementation approach:**
+1. Add new methods to `processing/hvsr/spectral.py` or create `horizontal_methods.py`
+2. Add enum values to processing settings
+3. Update `HVSRProcessor` to use selected method
+4. Add GUI selector in ProcessingSettingsPanel
+
+**Priority 2: Lognormal Statistics**
+
+Enhances statistical accuracy for HVSR which often follows lognormal distribution.
+
+**Priority 3: SESAME Criteria Automation**
+
+Provides automated reliability/clarity assessment - important for standardized reporting.
