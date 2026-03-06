@@ -78,6 +78,11 @@ if HAS_PYQT5:
             self.export_json_btn.clicked.connect(lambda: self._emit_export("json"))
             btn_layout.addWidget(self.export_json_btn)
             
+            self.export_excel_btn = QPushButton("Excel")
+            self.export_excel_btn.setToolTip("Export HVSR results as Excel (.xlsx) with multiple sheets")
+            self.export_excel_btn.clicked.connect(lambda: self._emit_export("xlsx"))
+            btn_layout.addWidget(self.export_excel_btn)
+            
             self.add_widget(btn_container)
             
             # Info label
@@ -102,6 +107,7 @@ if HAS_PYQT5:
             """Enable or disable export buttons."""
             self.export_csv_btn.setEnabled(enabled)
             self.export_json_btn.setEnabled(enabled)
+            self.export_excel_btn.setEnabled(enabled)
 
 
 else:

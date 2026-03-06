@@ -2,14 +2,14 @@
 Appearance Section
 ==================
 
-Colors, line widths, and visual style controls.
+Colors, line widths, font sizes, and visual style controls.
 """
 
 from typing import Dict, Any
 
 try:
     from PyQt5.QtWidgets import (
-        QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QDoubleSpinBox
+        QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QDoubleSpinBox, QSpinBox
     )
     from PyQt5.QtCore import pyqtSignal
     HAS_PYQT5 = True
@@ -150,6 +150,44 @@ if HAS_PYQT5:
             self.alpha_spin.valueChanged.connect(self._on_settings_changed)
             alpha_layout.addWidget(self.alpha_spin)
             self.add_layout(alpha_layout)
+            
+            # Font sizes section
+            fonts_label = QLabel("Font Sizes:")
+            fonts_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            self.add_widget(fonts_label)
+            
+            # Title font size
+            title_fs_layout = QHBoxLayout()
+            title_fs_layout.addWidget(QLabel("  Title:"))
+            self.title_fontsize_spin = QSpinBox()
+            self.title_fontsize_spin.setRange(8, 24)
+            self.title_fontsize_spin.setValue(12)
+            self.title_fontsize_spin.setSuffix(" pt")
+            self.title_fontsize_spin.valueChanged.connect(self._on_settings_changed)
+            title_fs_layout.addWidget(self.title_fontsize_spin)
+            self.add_layout(title_fs_layout)
+            
+            # Axis label font size
+            axis_fs_layout = QHBoxLayout()
+            axis_fs_layout.addWidget(QLabel("  Axis Labels:"))
+            self.axis_fontsize_spin = QSpinBox()
+            self.axis_fontsize_spin.setRange(8, 18)
+            self.axis_fontsize_spin.setValue(10)
+            self.axis_fontsize_spin.setSuffix(" pt")
+            self.axis_fontsize_spin.valueChanged.connect(self._on_settings_changed)
+            axis_fs_layout.addWidget(self.axis_fontsize_spin)
+            self.add_layout(axis_fs_layout)
+            
+            # Tick label font size
+            tick_fs_layout = QHBoxLayout()
+            tick_fs_layout.addWidget(QLabel("  Tick Labels:"))
+            self.tick_fontsize_spin = QSpinBox()
+            self.tick_fontsize_spin.setRange(6, 14)
+            self.tick_fontsize_spin.setValue(8)
+            self.tick_fontsize_spin.setSuffix(" pt")
+            self.tick_fontsize_spin.valueChanged.connect(self._on_settings_changed)
+            tick_fs_layout.addWidget(self.tick_fontsize_spin)
+            self.add_layout(tick_fs_layout)
         
         def _on_color_changed(self, color: str):
             """Handle color change."""
@@ -172,6 +210,9 @@ if HAS_PYQT5:
                 'median_linewidth': self.median_lw_spin.value(),
                 'std_linewidth': self.std_lw_spin.value(),
                 'window_alpha': self.alpha_spin.value(),
+                'title_fontsize': self.title_fontsize_spin.value(),
+                'axis_fontsize': self.axis_fontsize_spin.value(),
+                'tick_fontsize': self.tick_fontsize_spin.value(),
             }
         
         def set_settings(self, settings: Dict[str, Any]):
@@ -200,6 +241,13 @@ if HAS_PYQT5:
                 self.std_lw_spin.setValue(settings['std_linewidth'])
             if 'window_alpha' in settings:
                 self.alpha_spin.setValue(settings['window_alpha'])
+            
+            if 'title_fontsize' in settings:
+                self.title_fontsize_spin.setValue(settings['title_fontsize'])
+            if 'axis_fontsize' in settings:
+                self.axis_fontsize_spin.setValue(settings['axis_fontsize'])
+            if 'tick_fontsize' in settings:
+                self.tick_fontsize_spin.setValue(settings['tick_fontsize'])
 
 else:
     class AppearanceSection:

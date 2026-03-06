@@ -212,8 +212,6 @@ class PlotWindowManager:
         self.canvas.draw_idle()
         
         self.mode = 'separate'
-        
-        print("[PlotWindowManager] Showing plot in separate window")
     
     def show_embedded(self):
         """Embed plot in main window."""
@@ -225,7 +223,6 @@ class PlotWindowManager:
             self.canvas.setParent(None)
         
         self.mode = 'embedded'
-        print("[PlotWindowManager] Switching to embedded mode")
         
         # Note: Parent window should add canvas to its layout
         # This is done in main_window.py when mode changes
@@ -268,7 +265,6 @@ class PlotWindowManager:
     def toggle_timeline(self):
         """Toggle timeline panel visibility."""
         self.show_timeline = not self.show_timeline
-        print(f"[PlotWindowManager] Timeline: {'ON' if self.show_timeline else 'OFF'}")
         
         # Update menu action if it exists
         if self.action_show_timeline:
@@ -280,7 +276,6 @@ class PlotWindowManager:
     def toggle_quality_stats(self):
         """Toggle quality statistics panel visibility."""
         self.show_quality_stats = not self.show_quality_stats
-        print(f"[PlotWindowManager] Quality Stats: {'ON' if self.show_quality_stats else 'OFF'}")
         
         # Update menu action if it exists
         if self.action_show_stats:
@@ -293,7 +288,6 @@ class PlotWindowManager:
         """Reset to default view (only HVSR curve)."""
         self.show_timeline = False
         self.show_quality_stats = False
-        print("[PlotWindowManager] View reset to default (HVSR only)")
         
         # Update menu actions
         if self.action_show_timeline:
@@ -357,7 +351,6 @@ class PlotWindowManager:
             peaks: List of peak dicts with 'frequency', 'amplitude', 'source', 'is_f0'
         """
         if self.ax_hvsr is None:
-            print("[PlotWindowManager] Cannot add peaks: HVSR axis not available")
             return
         
         # Clear existing peak markers
@@ -366,8 +359,6 @@ class PlotWindowManager:
         if not peaks:
             self.canvas.draw_idle()
             return
-        
-        print(f"[PlotWindowManager] Adding {len(peaks)} peak markers to plot")
         
         # Find f0 peak if any
         f0_peak_idx = None
@@ -468,7 +459,6 @@ class PlotWindowManager:
         
         # Redraw canvas
         self.canvas.draw_idle()
-        print(f"[PlotWindowManager] Peak markers added successfully")
     
     def _get_peak_label_text(self, freq: float, amp: float, style: str) -> str:
         """
@@ -513,7 +503,6 @@ class PlotWindowManager:
             artist.remove()
         
         if artists_to_remove:
-            print(f"[PlotWindowManager] Removed {len(artists_to_remove)} peak markers")
             self.canvas.draw_idle()
     
     def enable_manual_picking(self, callback):
@@ -529,8 +518,6 @@ class PlotWindowManager:
         # Change cursor to crosshair
         if self.plot_window:
             self.plot_window.setCursor(Qt.CrossCursor)
-        
-        print("[PlotWindowManager] Manual peak picking ENABLED - Click on HVSR curve to add peak")
     
     def disable_manual_picking(self):
         """Disable manual peak picking mode."""
@@ -540,8 +527,6 @@ class PlotWindowManager:
         # Reset cursor
         if self.plot_window:
             self.plot_window.setCursor(Qt.ArrowCursor)
-        
-        print("[PlotWindowManager] Manual peak picking DISABLED")
     
     def on_canvas_click(self, event):
         """
@@ -564,8 +549,6 @@ class PlotWindowManager:
         
         if freq_clicked is None or amp_clicked is None:
             return
-        
-        print(f"[PlotWindowManager] Click detected: f={freq_clicked:.2f} Hz, A={amp_clicked:.2f}")
         
         # Call callback if set
         if self.pick_callback:
@@ -592,7 +575,6 @@ class PlotWindowManager:
             properties: PlotProperties object from properties_dock
         """
         if self.hvsr_result is None:
-            print("[PlotWindowManager] No data to plot")
             return
         
         self.current_properties = properties
@@ -615,12 +597,22 @@ class PlotWindowManager:
         import numpy as np
         
         if properties.y_mode == "auto":
-            # Auto: based on all data
-            all_vals = []
-            all_vals.extend(hvsr_result.mean_hvsr)
+            # Smart auto: use 95th percentile of accepted H/V values
+            # This prevents outlier spikes from stretching the plot
+            all_vals = list(hvsr_result.mean_hvsr)
             if hvsr_result.std_hvsr is not None:
                 all_vals.extend(hvsr_result.mean_hvsr + hvsr_result.std_hvsr)
-            y_max = np.max(all_vals) * 1.1
+            if hasattr(hvsr_result, 'percentile_84') and hvsr_result.percentile_84 is not None:
+                all_vals.extend(hvsr_result.percentile_84)
+            
+            all_vals = np.array(all_vals)
+            all_vals = all_vals[np.isfinite(all_vals)]
+            
+            if len(all_vals) > 0:
+                y_max = float(np.percentile(all_vals, 95)) * 1.05
+                y_max = max(y_max, 1.0)
+            else:
+                y_max = 10.0
             return (0.0, y_max)
         
         elif properties.y_mode == "mean_std":

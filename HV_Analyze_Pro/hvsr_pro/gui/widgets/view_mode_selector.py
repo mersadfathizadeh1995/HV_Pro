@@ -94,4 +94,4 @@ class ViewModeSelector(QGroupBox):
         elif mode == 'both':
             self.rb_both.setChecked(True)
         else:
-            print(f"[ViewModeSelector] Unknown mode: {mode}")
+            pass

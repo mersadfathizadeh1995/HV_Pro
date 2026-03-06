@@ -494,17 +494,6 @@ if HAS_PYQT5:
                     'end': time_end_sec
                 }
 
-                # Debug output
-                print(f"DEBUG Export Dialog: User entered (in {self.selected_timezone}):")
-                print(f"  Start: {start_dt_from_picker}")
-                print(f"  End: {end_dt_from_picker}")
-                print(f"DEBUG: Converted to UTC:")
-                print(f"  Start: {start_dt_utc}")
-                print(f"  End: {end_dt_utc}")
-                print(f"DEBUG: Seconds from data start:")
-                print(f"  time_start: {time_start_sec}s ({time_start_sec/3600:.2f}h)")
-                print(f"  time_end: {time_end_sec}s ({time_end_sec/3600:.2f}h)")
-
             return {
                 'format': file_format,
                 'apply_time_window': self.apply_time_window_cb.isChecked(),

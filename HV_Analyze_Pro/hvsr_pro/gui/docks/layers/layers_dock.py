@@ -169,20 +169,11 @@ class WindowLayersDock(QDockWidget):
             stat_lines: Dict mapping stat name to matplotlib Line2D
                 Keys: 'mean', 'std_plus', 'std_minus'
         """
-        print(f"\n=== LayersDock.rebuild() called ===")
-        print(f"  self.windows: {self.windows}")
-        print(f"  window_lines: {type(window_lines)}, length={len(window_lines) if window_lines else 0}")
-        print(f"  stat_lines: {type(stat_lines)}, length={len(stat_lines) if stat_lines else 0}")
-        
         if self.windows is None:
-            print("[LayersDock] ERROR: self.windows is None! Cannot rebuild.")
             return
         
         if not window_lines:
-            print("[LayersDock] ERROR: window_lines is empty! Cannot rebuild.")
             return
-        
-        print(f"[LayersDock] Starting rebuild with {len(window_lines)} windows")
         
         # Store references
         self.window_lines = window_lines
@@ -242,8 +233,10 @@ class WindowLayersDock(QDockWidget):
             
             stats_entries = [
                 ("Mean H/V", "mean", 'black'),
+                ("Median H/V", "median", '#1565C0'),
                 ("+1σ", "std_plus", 'black'),
                 ("-1σ", "std_minus", 'black'),
+                ("16th-84th Percentile", "percentile_fill", '#9C27B0'),
             ]
             
             for label, data_id, color in stats_entries:
@@ -257,8 +250,6 @@ class WindowLayersDock(QDockWidget):
         
         # Reconnect signal
         self.model.itemChanged.connect(self._on_item_changed)
-        
-        print(f"[LayersDock] Rebuild complete: {self.model.rowCount()} items")
     
     def _on_item_changed(self, item):
         """
@@ -271,8 +262,6 @@ class WindowLayersDock(QDockWidget):
         role_data = item.data(Qt.UserRole)
         is_checked = (item.checkState() == Qt.Checked)
         
-        print(f"[LayersDock] Item changed: {role_data}, checked={is_checked}")
-        
         # Handle statistics lines
         if isinstance(role_data, str):
             self._toggle_stat_line(role_data, is_checked)
@@ -283,7 +272,6 @@ class WindowLayersDock(QDockWidget):
         
         # Validate index - window_lines is a dict keyed by window_index
         if window_idx not in self.window_lines:
-            print(f"[LayersDock] Window index {window_idx} not in window_lines")
             return
         
         # Update matplotlib line visibility
@@ -305,9 +293,10 @@ class WindowLayersDock(QDockWidget):
             self.canvas_manager.fig.canvas.draw_idle()
     
     def _toggle_stat_line(self, stat_id, visible):
-        """Toggle statistics line visibility."""
+        """Toggle statistics line or fill visibility."""
         if stat_id in self.stat_lines:
-            self.stat_lines[stat_id].set_visible(visible)
+            artist = self.stat_lines[stat_id]
+            artist.set_visible(visible)
             if self.canvas_manager:
                 self.canvas_manager.fig.canvas.draw_idle()
     
@@ -320,8 +309,6 @@ class WindowLayersDock(QDockWidget):
         """
         if not self.window_lines:
             return
-        
-        print(f"[LayersDock] Setting all layers to {visible}")
         
         # Block signals
         self.model.blockSignals(True)
@@ -353,14 +340,10 @@ class WindowLayersDock(QDockWidget):
         if self.canvas_manager:
             self.canvas_manager.fig.canvas.draw_idle()
         
-        print(f"[LayersDock] Batch update complete")
-    
     def _invert_selection(self):
         """Invert all checkbox states."""
         if not self.window_lines:
             return
-        
-        print("[LayersDock] Inverting selection")
         
         # Block signals
         self.model.blockSignals(True)

@@ -64,6 +64,7 @@ if HAS_PYQT5:
             self._build_file_menu()
             self._build_edit_menu()
             self._build_view_menu()
+            self._build_tools_menu()
             self._build_mode_menu()
             self._build_help_menu()
         
@@ -219,6 +220,20 @@ if HAS_PYQT5:
             self.actions['plot_window'] = plot_action
             
             return view_menu
+        
+        def _build_tools_menu(self) -> QMenu:
+            """Build the Tools menu."""
+            tools_menu = self.menubar.addMenu('&Tools')
+            self.menus['tools'] = tools_menu
+            
+            batch_action = tools_menu.addAction('&Batch Processing...')
+            batch_action.setShortcut('Ctrl+B')
+            batch_action.setStatusTip('Open batch HVSR processing for multiple stations')
+            batch_action.setToolTip('Process multiple stations with time windows (Ctrl+B)')
+            batch_action.triggered.connect(self.parent.open_batch_processing)
+            self.actions['batch_processing'] = batch_action
+            
+            return tools_menu
         
         def _build_mode_menu(self) -> QMenu:
             """Build the Mode menu."""

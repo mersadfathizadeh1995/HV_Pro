@@ -31,6 +31,7 @@ class ProcessingSettings:
     overlap: float = 0.5
     smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
+    horizontal_method: str = 'geometric_mean'
     freq_min: float = 0.2
     freq_max: float = 20.0
     n_frequencies: int = 100
@@ -131,6 +132,27 @@ if HAS_PYQT5:
             # Store smoothing config
             self._smoothing_config = SmoothingConfig()
             
+            # Horizontal combination method section
+            horiz_label = QLabel("<b>Horizontal Combination:</b>")
+            layout.addWidget(horiz_label)
+            
+            horiz_layout = QHBoxLayout()
+            horiz_layout.addWidget(QLabel("Method:"))
+            self.horizontal_method_combo = QComboBox()
+            self.horizontal_method_combo.addItem("Geometric Mean (recommended)", "geometric_mean")
+            self.horizontal_method_combo.addItem("Arithmetic Mean", "arithmetic_mean")
+            self.horizontal_method_combo.addItem("Quadratic Mean (RMS)", "quadratic")
+            self.horizontal_method_combo.addItem("Maximum Horizontal Value", "maximum")
+            self.horizontal_method_combo.setToolTip(
+                "Method for combining E and N horizontal spectra.\n"
+                "Geometric Mean: sqrt(E*N) — SESAME 2004 recommendation\n"
+                "Arithmetic Mean: (E+N)/2\n"
+                "Quadratic Mean: sqrt(E²+N²)\n"
+                "Maximum: max(E,N)"
+            )
+            horiz_layout.addWidget(self.horizontal_method_combo)
+            layout.addLayout(horiz_layout)
+            
             # Frequency range section
             freq_label = QLabel("<b>Frequency Range (HVSR Computation):</b>")
             layout.addWidget(freq_label)
@@ -213,6 +235,7 @@ if HAS_PYQT5:
             self.overlap_spin.valueChanged.connect(self._emit_settings_changed)
             self.smoothing_method_combo.currentIndexChanged.connect(self._emit_settings_changed)
             self.smoothing_spin.valueChanged.connect(self._emit_settings_changed)
+            self.horizontal_method_combo.currentIndexChanged.connect(self._emit_settings_changed)
             self.freq_min_spin.valueChanged.connect(self._emit_settings_changed)
             self.freq_max_spin.valueChanged.connect(self._emit_settings_changed)
             self.n_freq_spin.valueChanged.connect(self._emit_settings_changed)
@@ -309,11 +332,14 @@ if HAS_PYQT5:
             override = self.override_sampling_check.isChecked()
             method_value = self.smoothing_method_combo.currentData() or 'konno_ohmachi'
             
+            horizontal_method = self.horizontal_method_combo.currentData() or 'geometric_mean'
+            
             return ProcessingSettings(
                 window_length=self.window_length_spin.value(),
                 overlap=self.overlap_spin.value() / 100.0,
                 smoothing_method=method_value,
                 smoothing_bandwidth=self.smoothing_spin.value(),
+                horizontal_method=horizontal_method,
                 freq_min=self.freq_min_spin.value(),
                 freq_max=self.freq_max_spin.value(),
                 n_frequencies=self.n_freq_spin.value(),

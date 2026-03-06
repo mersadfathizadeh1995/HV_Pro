@@ -1,0 +1,9 @@
+# HVSR Pro - Required Dependencies
+# Install with: pip install -r requirements.txt
+
+setuptools>=75.0.0,<82
+numpy==2.2.4
+scipy==1.15.2
+matplotlib==3.10.1
+PyQt5==5.15.11
+obspy==1.4.2

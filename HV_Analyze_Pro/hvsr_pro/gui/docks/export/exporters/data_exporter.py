@@ -173,3 +173,117 @@ def export_json(filename: str, result: Any, windows: Any, options: dict) -> None
     # Write JSON
     with open(filename, 'w') as f:
         json.dump(data, f, indent=2)
+
+
+def export_excel(filename: str, result: Any, windows: Any, options: dict) -> None:
+    """
+    Export HVSR results to Excel (.xlsx) file with multiple sheets.
+    
+    Sheets:
+        HVSR Curve: frequency, mean, median, std, percentile_16, percentile_84
+        Peaks: frequency, amplitude, type, prominence
+        Metadata: station, processing parameters, window stats
+    
+    Args:
+        filename: Output file path (.xlsx)
+        result: HVSRResult object
+        windows: WindowCollection object (optional)
+        options: Export options (may contain 'n_points' for interpolation)
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        raise ImportError(
+            "openpyxl is required for Excel export. "
+            "Install with: pip install openpyxl"
+        )
+    
+    wb = openpyxl.Workbook()
+    
+    # --- Sheet 1: HVSR Curve ---
+    ws_curve = wb.active
+    ws_curve.title = "HVSR Curve"
+    
+    # Get data
+    orig_frequencies = result.frequencies if hasattr(result, 'frequencies') else getattr(result, 'frequency', None)
+    mean_curve = getattr(result, 'mean_hvsr', getattr(result, 'mean_curve', None))
+    std_curve = getattr(result, 'std_hvsr', getattr(result, 'std_curve', None))
+    median_curve = getattr(result, 'median_hvsr', getattr(result, 'median_curve', None))
+    p16 = getattr(result, 'percentile_16', None)
+    p84 = getattr(result, 'percentile_84', None)
+    
+    # Interpolate if requested
+    n_points = options.get('n_points')
+    if n_points and n_points != len(orig_frequencies):
+        frequencies, mean_curve = interpolate_curve(orig_frequencies, mean_curve, n_points)
+        _, std_curve = interpolate_curve(orig_frequencies, std_curve, n_points)
+        if median_curve is not None:
+            _, median_curve = interpolate_curve(orig_frequencies, median_curve, n_points)
+        if p16 is not None:
+            _, p16 = interpolate_curve(orig_frequencies, p16, n_points)
+        if p84 is not None:
+            _, p84 = interpolate_curve(orig_frequencies, p84, n_points)
+    else:
+        frequencies = orig_frequencies
+    
+    # Header
+    header = ['Frequency (Hz)', 'Mean H/V', 'Std H/V']
+    if median_curve is not None:
+        header.append('Median H/V')
+    if p16 is not None:
+        header.append('Percentile 16')
+    if p84 is not None:
+        header.append('Percentile 84')
+    ws_curve.append(header)
+    
+    # Data
+    for i, freq in enumerate(frequencies):
+        row = [float(freq)]
+        row.append(float(mean_curve[i]) if mean_curve is not None else None)
+        row.append(float(std_curve[i]) if std_curve is not None else None)
+        if median_curve is not None:
+            row.append(float(median_curve[i]))
+        if p16 is not None:
+            row.append(float(p16[i]))
+        if p84 is not None:
+            row.append(float(p84[i]))
+        ws_curve.append(row)
+    
+    # --- Sheet 2: Peaks ---
+    ws_peaks = wb.create_sheet("Peaks")
+    ws_peaks.append(['Frequency (Hz)', 'Amplitude', 'Type', 'Prominence', 'Width'])
+    
+    if hasattr(result, 'peaks') and result.peaks:
+        for peak in result.peaks:
+            ws_peaks.append([
+                float(peak.frequency),
+                float(peak.amplitude),
+                getattr(peak, 'peak_type', 'F0'),
+                float(getattr(peak, 'prominence', 0)),
+                float(getattr(peak, 'width', 0)),
+            ])
+    
+    # --- Sheet 3: Metadata ---
+    ws_meta = wb.create_sheet("Metadata")
+    ws_meta.append(['Parameter', 'Value'])
+    
+    ws_meta.append(['Export Date', datetime.now().isoformat()])
+    ws_meta.append(['Frequency Points', len(frequencies)])
+    ws_meta.append(['Valid Windows', getattr(result, 'valid_windows', '')])
+    ws_meta.append(['Total Windows', getattr(result, 'total_windows', '')])
+    
+    if windows:
+        ws_meta.append(['Active Windows', windows.n_active])
+        ws_meta.append(['Rejected Windows', windows.n_rejected])
+        ws_meta.append(['Acceptance Rate', f"{windows.acceptance_rate:.1%}"])
+    
+    # Processing params
+    params = getattr(result, 'processing_params', {})
+    if params:
+        ws_meta.append([])
+        ws_meta.append(['Processing Parameters', ''])
+        for key, value in params.items():
+            ws_meta.append([key, str(value)])
+    
+    # Save
+    wb.save(filename)

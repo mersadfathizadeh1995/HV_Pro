@@ -30,6 +30,7 @@ class FullProcessingSettings:
     overlap: float = 0.5
     smoothing_method: str = 'konno_ohmachi'
     smoothing_bandwidth: float = 40.0
+    horizontal_method: str = 'geometric_mean'
     freq_min: float = 0.2
     freq_max: float = 20.0
     n_frequencies: int = 100
@@ -347,6 +348,7 @@ if HAS_PYQT5:
                 overlap=proc.overlap,
                 smoothing_method=getattr(proc, 'smoothing_method', 'konno_ohmachi'),
                 smoothing_bandwidth=proc.smoothing_bandwidth,
+                horizontal_method=getattr(proc, 'horizontal_method', 'geometric_mean'),
                 freq_min=proc.freq_min,
                 freq_max=proc.freq_max,
                 n_frequencies=proc.n_frequencies,

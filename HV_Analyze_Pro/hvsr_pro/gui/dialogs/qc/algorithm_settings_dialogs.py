@@ -22,7 +22,13 @@ except ImportError:
 
 # Default parameters for each algorithm (SESAME/hvsrpy compatible)
 ALGORITHM_DEFAULTS = {
-    'amplitude': {},
+    'amplitude': {
+        'preset': 'Moderate',
+        'max_amplitude': None,
+        'min_rms': 1e-10,
+        'clipping_threshold': 0.95,
+        'clipping_max_percent': 0.01,
+    },
     'sta_lta': {
         'sta_length': 1.0,
         'lta_length': 30.0,
@@ -44,7 +50,8 @@ ALGORITHM_DEFAULTS = {
         'distribution_mc': 'lognormal'
     },
     'hvsr_amplitude': {
-        'min_amplitude': 1.0
+        'min_amplitude': 1.0,
+        'max_amplitude': 15.0
     },
     'flat_peak': {
         'flatness_threshold': 0.15
@@ -130,33 +137,167 @@ if HAS_PYQT5:
 
 
     class AmplitudeSettingsDialog(BaseAlgorithmDialog):
-        """Settings dialog for Amplitude Check algorithm."""
+        """Settings dialog for Amplitude Check algorithm with presets."""
+        
+        # Preset values matching processing/rejection/algorithms/amplitude.py
+        PRESETS = {
+            'Strict': {
+                'max_amplitude': 1e6, 'min_rms': 1e-8,
+                'clipping_threshold': 0.90, 'clipping_max_percent': 0.005
+            },
+            'Moderate': {
+                'max_amplitude': None, 'min_rms': 1e-10,
+                'clipping_threshold': 0.95, 'clipping_max_percent': 0.01
+            },
+            'Lenient': {
+                'max_amplitude': None, 'min_rms': 1e-12,
+                'clipping_threshold': 0.99, 'clipping_max_percent': 0.05
+            },
+        }
         
         def __init__(self, parent, current_params: Dict[str, Any]):
             super().__init__(
                 parent,
                 "Amplitude Check",
                 "Rejects windows with clipping, dead channels, or extreme amplitudes.\n"
-                "This algorithm uses internal heuristics and has no configurable parameters.",
+                "Choose a preset or configure custom thresholds.",
                 current_params
             )
+            self.setMinimumWidth(420)
         
         def _setup_parameters(self):
-            label = QLabel("No configurable parameters.\n\nThis algorithm automatically detects:\n"
-                          "- Clipped signals\n"
-                          "- Dead channels (zero or near-zero amplitude)\n"
-                          "- Extreme amplitude values")
-            label.setWordWrap(True)
-            self.params_layout.addWidget(label, 0, 0)
+            from PyQt5.QtWidgets import QCheckBox
+            
+            row = 0
+            
+            # Preset selector
+            self.params_layout.addWidget(QLabel("Preset:"), row, 0)
+            self.preset_combo = QComboBox()
+            self.preset_combo.addItems(['Strict', 'Moderate', 'Lenient', 'Custom'])
+            preset = self._current_params.get('preset', 'Moderate')
+            idx = self.preset_combo.findText(preset)
+            self.preset_combo.setCurrentIndex(idx if idx >= 0 else 1)
+            self.preset_combo.currentTextChanged.connect(self._on_preset_changed)
+            self.preset_combo.setToolTip(
+                "Strict: Tight thresholds, rejects aggressively\n"
+                "Moderate: Balanced (recommended)\n"
+                "Lenient: Relaxed thresholds\n"
+                "Custom: Set your own values"
+            )
+            self.params_layout.addWidget(self.preset_combo, row, 1)
+            row += 1
+            
+            # Separator
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            self.params_layout.addWidget(sep, row, 0, 1, 2)
+            row += 1
+            
+            # Max amplitude (optional, with checkbox)
+            self.max_amp_check = QCheckBox("Limit Max Amplitude:")
+            max_amp = self._current_params.get('max_amplitude')
+            self.max_amp_check.setChecked(max_amp is not None)
+            self.max_amp_check.toggled.connect(lambda c: self.max_amp_spin.setEnabled(c))
+            self.params_layout.addWidget(self.max_amp_check, row, 0)
+            
+            self.max_amp_spin = QDoubleSpinBox()
+            self.max_amp_spin.setRange(1.0, 1e12)
+            self.max_amp_spin.setDecimals(0)
+            self.max_amp_spin.setSingleStep(1e5)
+            self.max_amp_spin.setValue(max_amp if max_amp is not None else 1e7)
+            self.max_amp_spin.setEnabled(max_amp is not None)
+            self.max_amp_spin.setToolTip("Maximum acceptable absolute amplitude (counts or m/s)")
+            self.params_layout.addWidget(self.max_amp_spin, row, 1)
+            row += 1
+            
+            # Min RMS
+            self.params_layout.addWidget(QLabel("Min RMS (dead channel):"), row, 0)
+            self.min_rms_spin = QDoubleSpinBox()
+            self.min_rms_spin.setRange(1e-14, 1e-4)
+            self.min_rms_spin.setDecimals(14)
+            self.min_rms_spin.setValue(self._current_params.get('min_rms', 1e-10))
+            self.min_rms_spin.setToolTip(
+                "Minimum RMS amplitude for a channel to be considered alive.\n"
+                "Channels below this are flagged as dead."
+            )
+            self.params_layout.addWidget(self.min_rms_spin, row, 1)
+            row += 1
+            
+            # Clipping threshold
+            self.params_layout.addWidget(QLabel("Clipping Threshold:"), row, 0)
+            self.clip_thresh_spin = QDoubleSpinBox()
+            self.clip_thresh_spin.setRange(0.50, 1.00)
+            self.clip_thresh_spin.setDecimals(2)
+            self.clip_thresh_spin.setSingleStep(0.05)
+            self.clip_thresh_spin.setValue(self._current_params.get('clipping_threshold', 0.95))
+            self.clip_thresh_spin.setToolTip(
+                "Fraction of peak amplitude above which samples are considered near-clipping.\n"
+                "0.95 = samples above 95% of max are clipping"
+            )
+            self.params_layout.addWidget(self.clip_thresh_spin, row, 1)
+            row += 1
+            
+            # Clipping max percent
+            self.params_layout.addWidget(QLabel("Clipping Max % :"), row, 0)
+            self.clip_pct_spin = QDoubleSpinBox()
+            self.clip_pct_spin.setRange(0.1, 50.0)
+            self.clip_pct_spin.setDecimals(1)
+            self.clip_pct_spin.setSingleStep(0.5)
+            self.clip_pct_spin.setSuffix(" %")
+            self.clip_pct_spin.setValue(self._current_params.get('clipping_max_percent', 1.0) * 100)
+            self.clip_pct_spin.setToolTip(
+                "Maximum percentage of samples allowed near clipping level.\n"
+                "Windows exceeding this are rejected."
+            )
+            self.params_layout.addWidget(self.clip_pct_spin, row, 1)
+            
+            # Apply initial preset state
+            self._on_preset_changed(self.preset_combo.currentText())
+        
+        def _on_preset_changed(self, preset_name: str):
+            """Update fields when preset changes."""
+            is_custom = (preset_name == 'Custom')
+            self.max_amp_check.setEnabled(is_custom)
+            self.max_amp_spin.setEnabled(is_custom and self.max_amp_check.isChecked())
+            self.min_rms_spin.setEnabled(is_custom)
+            self.clip_thresh_spin.setEnabled(is_custom)
+            self.clip_pct_spin.setEnabled(is_custom)
+            
+            if not is_custom and preset_name in self.PRESETS:
+                p = self.PRESETS[preset_name]
+                has_max = p['max_amplitude'] is not None
+                self.max_amp_check.setChecked(has_max)
+                if has_max:
+                    self.max_amp_spin.setValue(p['max_amplitude'])
+                self.min_rms_spin.setValue(p['min_rms'])
+                self.clip_thresh_spin.setValue(p['clipping_threshold'])
+                self.clip_pct_spin.setValue(p['clipping_max_percent'] * 100)
         
         def _get_defaults(self) -> Dict[str, Any]:
-            return {}
+            return {'preset': 'Moderate', 'max_amplitude': None, 'min_rms': 1e-10,
+                    'clipping_threshold': 0.95, 'clipping_max_percent': 0.01}
         
         def _collect_params(self) -> Dict[str, Any]:
-            return {}
+            return {
+                'preset': self.preset_combo.currentText(),
+                'max_amplitude': self.max_amp_spin.value() if self.max_amp_check.isChecked() else None,
+                'min_rms': self.min_rms_spin.value(),
+                'clipping_threshold': self.clip_thresh_spin.value(),
+                'clipping_max_percent': self.clip_pct_spin.value() / 100.0,
+            }
         
         def _apply_params(self, params: Dict[str, Any]):
-            pass
+            preset = params.get('preset', 'Moderate')
+            idx = self.preset_combo.findText(preset)
+            if idx >= 0:
+                self.preset_combo.setCurrentIndex(idx)
+            max_amp = params.get('max_amplitude')
+            self.max_amp_check.setChecked(max_amp is not None)
+            if max_amp is not None:
+                self.max_amp_spin.setValue(max_amp)
+            self.min_rms_spin.setValue(params.get('min_rms', 1e-10))
+            self.clip_thresh_spin.setValue(params.get('clipping_threshold', 0.95))
+            self.clip_pct_spin.setValue(params.get('clipping_max_percent', 0.01) * 100)
 
 
     class STALTASettingsDialog(BaseAlgorithmDialog):
@@ -421,39 +562,61 @@ if HAS_PYQT5:
 
 
     class HVSRAmplitudeSettingsDialog(BaseAlgorithmDialog):
-        """Settings dialog for HVSR Peak Amplitude algorithm."""
+        """Settings dialog for HVSR Peak Amplitude Bounds algorithm."""
         
         def __init__(self, parent, current_params: Dict[str, Any]):
             super().__init__(
                 parent,
-                "HVSR Peak Amplitude > 1.0",
-                "Rejects windows where the H/V ratio peak is below the threshold.\n"
-                "An HVSR peak < 1.0 indicates poor site response or data quality issues.",
+                "HVSR Peak Amplitude Bounds",
+                "Rejects windows where the H/V ratio peak is outside acceptable bounds.\n"
+                "Peak < min indicates poor response. Peak > max indicates sensor issues.",
                 current_params
             )
         
         def _setup_parameters(self):
-            self.params_layout.addWidget(QLabel("Minimum Peak Amplitude:"), 0, 0)
-            self.threshold_spin = QDoubleSpinBox()
-            self.threshold_spin.setRange(0.1, 5.0)
-            self.threshold_spin.setDecimals(1)
-            self.threshold_spin.setSingleStep(0.1)
-            self.threshold_spin.setValue(self._current_params.get('min_amplitude', 1.0))
-            self.threshold_spin.setToolTip(
+            row = 0
+            
+            # Min amplitude
+            self.params_layout.addWidget(QLabel("Minimum Peak Amplitude:"), row, 0)
+            self.min_spin = QDoubleSpinBox()
+            self.min_spin.setRange(0.1, 10.0)
+            self.min_spin.setDecimals(1)
+            self.min_spin.setSingleStep(0.1)
+            self.min_spin.setValue(self._current_params.get('min_amplitude', 1.0))
+            self.min_spin.setToolTip(
                 "Minimum acceptable HVSR peak amplitude.\n"
                 "Windows with peak < this value are rejected.\n"
                 "Default: 1.0 (H/V should be > 1 at resonance)"
             )
-            self.params_layout.addWidget(self.threshold_spin, 0, 1)
+            self.params_layout.addWidget(self.min_spin, row, 1)
+            row += 1
+            
+            # Max amplitude
+            self.params_layout.addWidget(QLabel("Maximum Peak Amplitude:"), row, 0)
+            self.max_spin = QDoubleSpinBox()
+            self.max_spin.setRange(1.0, 100.0)
+            self.max_spin.setDecimals(1)
+            self.max_spin.setSingleStep(1.0)
+            self.max_spin.setValue(self._current_params.get('max_amplitude', 15.0))
+            self.max_spin.setToolTip(
+                "Maximum acceptable HVSR peak amplitude.\n"
+                "Windows with peak > this value are rejected.\n"
+                "Default: 15.0 (very high H/V suggests sensor issues)"
+            )
+            self.params_layout.addWidget(self.max_spin, row, 1)
         
         def _get_defaults(self) -> Dict[str, Any]:
             return ALGORITHM_DEFAULTS['hvsr_amplitude'].copy()
         
         def _collect_params(self) -> Dict[str, Any]:
-            return {'min_amplitude': self.threshold_spin.value()}
+            return {
+                'min_amplitude': self.min_spin.value(),
+                'max_amplitude': self.max_spin.value()
+            }
         
         def _apply_params(self, params: Dict[str, Any]):
-            self.threshold_spin.setValue(params.get('min_amplitude', 1.0))
+            self.min_spin.setValue(params.get('min_amplitude', 1.0))
+            self.max_spin.setValue(params.get('max_amplitude', 15.0))
 
 
     class FlatPeakSettingsDialog(BaseAlgorithmDialog):

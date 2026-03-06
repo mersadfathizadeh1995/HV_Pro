@@ -17,13 +17,13 @@ from hvsr_pro.processing.windows import Window
 
 class HVSRAmplitudeRejection(BaseRejectionAlgorithm):
     """
-    Reject windows where HVSR peak amplitude < threshold.
+    Reject windows where HVSR peak amplitude is outside acceptable bounds.
     
-    Based on publication-quality QC Condition 1: PeakAmp > 1
+    Rejects if peak amplitude < min_amplitude OR > max_amplitude.
     
-    Rationale: HVSR values < 1 indicate vertical motion dominates,
-    which is physically unrealistic for site response and suggests
-    either noise contamination or non-resonant conditions.
+    Rationale: HVSR values < 1 indicate vertical motion dominates
+    (noise contamination). HVSR values > 15 typically indicate
+    sensor issues or unrealistic amplification.
     
     NOTE: This algorithm requires HVSR curves to be computed first.
     It should be applied as a POST-HVSR rejection step.
@@ -31,6 +31,7 @@ class HVSRAmplitudeRejection(BaseRejectionAlgorithm):
     
     def __init__(self,
                  min_amplitude: float = 1.0,
+                 max_amplitude: float = 15.0,
                  freq_range: Optional[Tuple[float, float]] = None,
                  name: str = "HVSR Amplitude"):
         """
@@ -38,12 +39,14 @@ class HVSRAmplitudeRejection(BaseRejectionAlgorithm):
         
         Args:
             min_amplitude: Minimum acceptable HVSR peak amplitude (default: 1.0)
+            max_amplitude: Maximum acceptable HVSR peak amplitude (default: 15.0)
             freq_range: Frequency range (f_min, f_max) in Hz for peak search
                        None = use full frequency range
             name: Algorithm name
         """
         super().__init__(name, threshold=min_amplitude)
         self.min_amplitude = min_amplitude
+        self.max_amplitude = max_amplitude
         self.freq_range = freq_range
     
     def evaluate_window(self, window: Window) -> RejectionResult:
@@ -78,18 +81,19 @@ class HVSRAmplitudeRejection(BaseRejectionAlgorithm):
         peak_idx = np.argmax(hvsr_curve)
         peak_frequency = frequencies[peak_idx] if frequencies is not None else None
         
-        # Check if peak amplitude meets threshold
-        should_reject = peak_amplitude < self.min_amplitude
+        # Check if peak amplitude is within acceptable bounds
+        too_low = peak_amplitude < self.min_amplitude
+        too_high = peak_amplitude > self.max_amplitude
+        should_reject = too_low or too_high
         
-        if should_reject:
-            reason = f"HVSR peak amplitude ({peak_amplitude:.2f}) < {self.min_amplitude:.1f}"
+        if too_low:
+            reason = f"HVSR peak amplitude too low ({peak_amplitude:.2f}) < {self.min_amplitude:.1f}"
+            rejection_score = 1.0 - (peak_amplitude / self.min_amplitude) if self.min_amplitude > 0 else 1.0
+        elif too_high:
+            reason = f"HVSR peak amplitude too high ({peak_amplitude:.2f}) > {self.max_amplitude:.1f}"
+            rejection_score = min(1.0, (peak_amplitude - self.max_amplitude) / self.max_amplitude)
         else:
             reason = f"HVSR peak amplitude OK ({peak_amplitude:.2f})"
-        
-        # Rejection score
-        if peak_amplitude < self.min_amplitude:
-            rejection_score = 1.0 - (peak_amplitude / self.min_amplitude)
-        else:
             rejection_score = 0.0
         
         return RejectionResult(
@@ -100,6 +104,7 @@ class HVSRAmplitudeRejection(BaseRejectionAlgorithm):
                 'peak_amplitude': float(peak_amplitude),
                 'peak_frequency': float(peak_frequency) if peak_frequency else None,
                 'min_amplitude_threshold': self.min_amplitude,
+                'max_amplitude_threshold': self.max_amplitude,
                 'freq_range': self.freq_range
             }
         )

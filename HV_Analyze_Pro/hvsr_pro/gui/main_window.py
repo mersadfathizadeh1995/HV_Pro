@@ -234,18 +234,13 @@ class HVSRMainWindow(QMainWindow):
     # See gui/tabs/processing_tab.py and gui/main_window_modules/panels/
     
     def _get_custom_qc_settings_from_ui(self):
-        """Get custom QC settings from the UI (via ProcessingTab's QCSettingsPanel)."""
-        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'qc_panel'):
-            qc_settings = self.processing_tab.qc_panel.get_settings()
-            return {
-                'enabled': qc_settings.enabled,
-                'mode': qc_settings.mode,
-                'algorithms': qc_settings.custom_algorithms
-            }
-        # Fallback for direct access (shouldn't happen after refactor)
+        """Get custom QC settings from the UI (via ProcessingTab's UnifiedQCPanel)."""
+        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'unified_qc_panel'):
+            return self.processing_tab.unified_qc_panel.get_settings()
+        # Fallback
         return {
             'enabled': True,
-            'mode': 'preset',
+            'mode': 'sesame',
             'algorithms': {}
         }
 
@@ -497,20 +492,42 @@ class HVSRMainWindow(QMainWindow):
     # === REMOVED: _on_override_sampling_toggled ===
     # Now handled internally by ProcessingSettingsPanel
 
+    def open_batch_processing(self):
+        """Open the Batch Processing window."""
+        try:
+            from hvsr_pro.packages.batch_processing import BatchProcessingWindow
+            
+            if not hasattr(self, '_batch_window') or self._batch_window is None:
+                self._batch_window = BatchProcessingWindow(self)
+            
+            self._batch_window.show()
+            self._batch_window.raise_()
+            self._batch_window.activateWindow()
+        except ImportError as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Not Available",
+                f"Batch Processing package not available:\n{str(e)}")
+    
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
         from hvsr_pro.gui.dialogs import AdvancedQCDialog
-        dialog = AdvancedQCDialog(self, self.custom_qc_settings)
+        
+        # Get current settings from unified panel
+        current_settings = None
+        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'unified_qc_panel'):
+            current_settings = self.processing_tab.unified_qc_panel.get_settings()
+        
+        dialog = AdvancedQCDialog(self, current_settings)
         if dialog.exec_():
-            self.custom_qc_settings = dialog.get_settings()
+            new_settings = dialog.get_settings()
+            self.custom_qc_settings = new_settings
             self.add_info("Advanced QC settings updated")
-            # Update QC mode combo to show "Custom"
-            if self.custom_qc_settings and self.custom_qc_settings.get('enabled'):
-                custom_idx = self.processing_tab.qc_combo.findData("custom")
-                if custom_idx == -1:
-                    self.processing_tab.qc_combo.addItem("Custom (Advanced)", "custom")
-                    custom_idx = self.processing_tab.qc_combo.count() - 1
-                self.processing_tab.qc_combo.setCurrentIndex(custom_idx)
+            
+            # Switch unified panel to custom mode with the new settings
+            if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'unified_qc_panel'):
+                panel = self.processing_tab.unified_qc_panel
+                if hasattr(panel, 'apply_advanced_settings'):
+                    panel.apply_advanced_settings(new_settings)
 
     def on_layer_visibility_changed(self, window_idx: int, is_visible: bool):
         """Handle layer visibility toggle from dock."""
@@ -712,29 +729,53 @@ class HVSRMainWindow(QMainWindow):
             getattr(settings, 'smoothing_method', 'konno_ohmachi'),
             qc_enabled=settings.qc_enabled,
             phase1_enabled=getattr(settings, 'phase1_enabled', True),
-            phase2_enabled=getattr(settings, 'phase2_enabled', True)
+            phase2_enabled=getattr(settings, 'phase2_enabled', True),
+            horizontal_method=getattr(settings, 'horizontal_method', 'geometric_mean')
         )
         self.thread.progress.connect(self.on_progress)
         self.thread.finished.connect(self.on_processing_finished)
         self.thread.error.connect(self.on_processing_error)
         self.thread.start()
     
-    def _build_custom_qc_dict(self, custom_algorithms):
-        """Build custom QC settings dictionary from panel settings."""
+    def _build_custom_qc_dict(self, custom_settings):
+        """Build custom QC settings dictionary from panel settings.
+        
+        Handles both old format (algorithms at top level) and new format
+        (algorithms inside 'algorithms' sub-dict). Also maps spectral_spike
+        to frequency_domain for worker compatibility.
+        """
+        # Extract algorithms from either nested or flat structure
+        if isinstance(custom_settings, dict) and 'algorithms' in custom_settings:
+            algos = custom_settings['algorithms']
+        else:
+            algos = custom_settings if isinstance(custom_settings, dict) else {}
+        
+        # Map spectral_spike -> frequency_domain for worker compatibility
+        if 'spectral_spike' in algos and 'frequency_domain' not in algos:
+            algos['frequency_domain'] = algos['spectral_spike']
+        
+        def _get_algo(key, default_params=None):
+            """Extract algorithm settings with fallback."""
+            algo = algos.get(key, {})
+            enabled = algo.get('enabled', False)
+            params = algo.get('params', default_params or {})
+            return {'enabled': enabled, 'params': params}
+        
         return {
-            'enabled': True,
+            'enabled': custom_settings.get('enabled', True) if isinstance(custom_settings, dict) else True,
             'mode': 'custom',
             'algorithms': {
-                'amplitude': {'enabled': custom_algorithms.get('amplitude', {}).get('enabled', False), 'params': {}},
-                'quality_threshold': {'enabled': custom_algorithms.get('quality_threshold', {}).get('enabled', False), 'params': {'threshold': 0.5}},
-                'sta_lta': {'enabled': custom_algorithms.get('sta_lta', {}).get('enabled', False), 'params': {
-                    'sta_length': 1.0, 'lta_length': 30.0, 'min_ratio': 0.15, 'max_ratio': 2.5
-                }},
-                'frequency_domain': {'enabled': custom_algorithms.get('frequency_domain', {}).get('enabled', False), 'params': {'spike_threshold': 3.0}},
-                'statistical_outlier': {'enabled': custom_algorithms.get('statistical_outlier', {}).get('enabled', False), 'params': {'method': 'iqr', 'threshold': 2.0}},
-                'hvsr_amplitude': {'enabled': custom_algorithms.get('hvsr_amplitude', {}).get('enabled', False), 'params': {'min_amplitude': 1.0}},
-                'flat_peak': {'enabled': custom_algorithms.get('flat_peak', {}).get('enabled', False), 'params': {'flatness_threshold': 0.15}},
-                'cox_fdwra': {'enabled': custom_algorithms.get('cox_fdwra', {}).get('enabled', False), 'params': {'n': 2.0, 'max_iterations': 20}}
+                'amplitude': _get_algo('amplitude', {}),
+                'quality_threshold': _get_algo('quality_threshold', {'threshold': 0.5}),
+                'sta_lta': _get_algo('sta_lta', {
+                    'sta_length': 1.0, 'lta_length': 30.0, 'min_ratio': 0.2, 'max_ratio': 2.5
+                }),
+                'frequency_domain': _get_algo('frequency_domain', {'spike_threshold': 3.0}),
+                'statistical_outlier': _get_algo('statistical_outlier', {'method': 'iqr', 'threshold': 2.0}),
+                'hvsr_amplitude': _get_algo('hvsr_amplitude', {'min_amplitude': 1.0}),
+                'flat_peak': _get_algo('flat_peak', {'flatness_threshold': 0.15}),
+                'cox_fdwra': _get_algo('cox_fdwra', {'n': 2.0, 'max_iterations': 50}),
+                'fdwra': _get_algo('fdwra', {'n': 2.0, 'max_iterations': 50}),
             }
         }
     
@@ -826,10 +867,7 @@ class HVSRMainWindow(QMainWindow):
     def refresh_plot(self):
         """Refresh plot with current panel visibility settings."""
         if not self.hvsr_result or not self.windows or not self.data:
-            print("[Main] Cannot refresh: no data available")
             return
-        
-        print(f"[Main] Refreshing plot (timeline={self.plot_manager.show_timeline}, stats={self.plot_manager.show_quality_stats})")
         
         # Replot with current settings via controller
         self.plotting_ctrl.refresh_plot()
@@ -854,57 +892,6 @@ class HVSRMainWindow(QMainWindow):
         """
         # Delegate to plotting controller
         self.plotting_ctrl.recalculate_mean_from_visible()
-
-    def _validate_processing_results(self, result, windows):
-        """
-        Validate HVSR processing results before plotting.
-        
-        .. deprecated::
-            Use self.processing_ctrl.validate_results() instead.
-
-        Returns:
-            tuple: (is_valid: bool, error_message: str)
-        """
-        # Delegate to ProcessingController
-        return self.processing_ctrl.validate_results(result, windows)
-
-    def _show_qc_failure_dialog(self, windows, error_msg):
-        """
-        Show detailed QC failure dialog with diagnostic information.
-        
-        .. deprecated::
-            Use self.processing_ctrl._show_qc_failure_dialog() instead.
-
-        Args:
-            windows: WindowCollection object
-            error_msg: Primary error message
-        """
-        # Delegate to ProcessingController
-        self.processing_ctrl._show_qc_failure_dialog(windows, error_msg)
-        
-        # Also log to info panel (controller doesn't have access to this)
-        report = self.processing_ctrl._generate_qc_report(windows)
-        self.add_info("=" * 60)
-        self.add_info("QC FAILURE - No windows passed quality control")
-        self.add_info("=" * 60)
-        self.add_info(report)
-        self.add_info("=" * 60)
-
-    def _generate_qc_diagnostic_report(self, windows):
-        """
-        Generate diagnostic report showing why windows failed QC.
-        
-        .. deprecated::
-            Use self.processing_ctrl._generate_qc_report() instead.
-
-        Args:
-            windows: WindowCollection object
-
-        Returns:
-            str: Formatted diagnostic report
-        """
-        # Delegate to ProcessingController
-        return self.processing_ctrl._generate_qc_report(windows)
 
     def on_processing_error(self, error_msg: str):
         """Handle processing error."""
@@ -946,9 +933,22 @@ class HVSRMainWindow(QMainWindow):
         self.status_bar.showMessage("Recomputing HVSR...")
         
         try:
-            # Recompute with current windows
-            smoothing = self.smoothing_spin.value()
-            processor = HVSRProcessor(smoothing_bandwidth=smoothing)
+            # Read settings from processing tab panels
+            proc_panel = self.processing_tab.processing_panel
+            smoothing = proc_panel.smoothing_spin.value()
+            smoothing_method = getattr(proc_panel, 'smoothing_method_combo', None)
+            method_name = smoothing_method.currentData() if smoothing_method else 'konno_ohmachi'
+            freq_min = proc_panel.freq_min_spin.value()
+            freq_max = proc_panel.freq_max_spin.value()
+            n_frequencies = proc_panel.n_freq_spin.value()
+            
+            processor = HVSRProcessor(
+                smoothing_method=method_name,
+                smoothing_bandwidth=smoothing,
+                f_min=freq_min,
+                f_max=freq_max,
+                n_frequencies=n_frequencies
+            )
             self.hvsr_result = processor.process(self.windows, detect_peaks_flag=True, save_window_spectra=True)
             
             # Update canvas

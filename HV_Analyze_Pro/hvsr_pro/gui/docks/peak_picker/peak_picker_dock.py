@@ -97,6 +97,10 @@ class PeakPickerDock(QDockWidget):
         table_group = self._create_peak_table()
         main_layout.addWidget(table_group)
         
+        # SESAME criteria section
+        sesame_group = self._create_sesame_section()
+        main_layout.addWidget(sesame_group)
+        
         # Export buttons
         export_layout = self._create_export_buttons()
         main_layout.addLayout(export_layout)
@@ -306,7 +310,7 @@ class PeakPickerDock(QDockWidget):
         
         self.peak_table = QTableWidget(0, 6)
         self.peak_table.setHorizontalHeaderLabels([
-            '#', 'Freq (Hz)', 'Amp', 'Source', 'f₀', 'Del'
+            '#', 'Freq (Hz)', 'Amp', 'Source', 'Type', 'Del'
         ])
         
         # Configure columns
@@ -319,7 +323,7 @@ class PeakPickerDock(QDockWidget):
         header.setSectionResizeMode(5, QHeaderView.Fixed)
         
         self.peak_table.setColumnWidth(0, 30)   # #
-        self.peak_table.setColumnWidth(4, 40)   # f₀ checkbox
+        self.peak_table.setColumnWidth(4, 55)   # Type combo
         self.peak_table.setColumnWidth(5, 40)   # Delete button
         
         # Make read-only except delete buttons
@@ -333,6 +337,121 @@ class PeakPickerDock(QDockWidget):
         layout.addWidget(self.peak_table)
         
         return group
+    
+    def _create_sesame_section(self) -> QGroupBox:
+        """Create SESAME criteria display section."""
+        group = QGroupBox("SESAME Criteria")
+        layout = QVBoxLayout(group)
+        
+        self.sesame_info_label = QLabel("Select a peak to see SESAME criteria")
+        self.sesame_info_label.setWordWrap(True)
+        self.sesame_info_label.setStyleSheet("color: gray; font-style: italic;")
+        layout.addWidget(self.sesame_info_label)
+        
+        # Criteria table (hidden until peak selected)
+        self.sesame_table = QTableWidget(0, 2)
+        self.sesame_table.setHorizontalHeaderLabels(['Criterion', 'Status'])
+        self.sesame_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.sesame_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.sesame_table.verticalHeader().setVisible(False)
+        self.sesame_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.sesame_table.setMaximumHeight(200)
+        self.sesame_table.setVisible(False)
+        layout.addWidget(self.sesame_table)
+        
+        # Overall verdict
+        self.sesame_verdict = QLabel("")
+        self.sesame_verdict.setAlignment(Qt.AlignCenter)
+        self.sesame_verdict.setStyleSheet("font-weight: bold; font-size: 11px; padding: 3px;")
+        self.sesame_verdict.setVisible(False)
+        layout.addWidget(self.sesame_verdict)
+        
+        return group
+    
+    def update_sesame_criteria(self, peak=None, frequencies=None, hvsr=None):
+        """
+        Update SESAME criteria display for the selected peak.
+        
+        Args:
+            peak: Peak object to evaluate (None to clear)
+            frequencies: Frequency array
+            hvsr: HVSR curve
+        """
+        if peak is None or frequencies is None or hvsr is None:
+            self.sesame_info_label.setVisible(True)
+            self.sesame_info_label.setText("Select a peak to see SESAME criteria")
+            self.sesame_table.setVisible(False)
+            self.sesame_verdict.setVisible(False)
+            return
+        
+        try:
+            from hvsr_pro.processing.windows.peaks import sesame_peak_criteria
+            from hvsr_pro.processing.hvsr.structures import Peak as PeakStruct
+            
+            # Ensure peak is the right type
+            if not hasattr(peak, 'frequency'):
+                return
+            
+            # Run SESAME criteria evaluation
+            criteria = sesame_peak_criteria(peak, frequencies, hvsr)
+            
+            # Build display
+            self.sesame_info_label.setVisible(False)
+            self.sesame_table.setVisible(True)
+            self.sesame_verdict.setVisible(True)
+            
+            # Populate table
+            display_names = {
+                'f0_gt_10/lw': 'f₀ > 10/window_length',
+                'nc_gt_200': 'n_cycles > 200',
+                'sigma_A_lt_threshold': 'σ_A < threshold',
+                'A0_gt_2': 'Peak amplitude > 2',
+                'prominent': 'Peak is prominent',
+                'stable': 'Peak is stable',
+            }
+            
+            self.sesame_table.setRowCount(len(criteria))
+            
+            pass_count = 0
+            total = len(criteria)
+            
+            for row, (key, passed) in enumerate(criteria.items()):
+                name = display_names.get(key, key)
+                
+                name_item = QTableWidgetItem(name)
+                self.sesame_table.setItem(row, 0, name_item)
+                
+                status_text = "PASS" if passed else "FAIL"
+                status_item = QTableWidgetItem(status_text)
+                
+                if passed:
+                    status_item.setForeground(Qt.darkGreen)
+                    pass_count += 1
+                else:
+                    status_item.setForeground(Qt.red)
+                
+                status_item.setTextAlignment(Qt.AlignCenter)
+                self.sesame_table.setItem(row, 1, status_item)
+            
+            # Overall verdict
+            if pass_count == total:
+                self.sesame_verdict.setText(f"PASS ({pass_count}/{total} criteria met)")
+                self.sesame_verdict.setStyleSheet(
+                    "font-weight: bold; font-size: 11px; padding: 3px; "
+                    "background-color: #E8F5E9; color: #2E7D32; border-radius: 3px;"
+                )
+            else:
+                self.sesame_verdict.setText(f"FAIL ({pass_count}/{total} criteria met)")
+                self.sesame_verdict.setStyleSheet(
+                    "font-weight: bold; font-size: 11px; padding: 3px; "
+                    "background-color: #FFEBEE; color: #C62828; border-radius: 3px;"
+                )
+                
+        except Exception as e:
+            self.sesame_info_label.setVisible(True)
+            self.sesame_info_label.setText(f"SESAME evaluation error: {str(e)}")
+            self.sesame_table.setVisible(False)
+            self.sesame_verdict.setVisible(False)
     
     def _create_export_buttons(self) -> QHBoxLayout:
         """Create export button layout."""
@@ -586,20 +705,16 @@ class PeakPickerDock(QDockWidget):
             
             self.peak_table.setItem(row, 3, source_item)
             
-            # Column 4: f₀ checkbox
-            f0_checkbox = QCheckBox()
-            f0_checkbox.setChecked(peak.get('is_f0', False))
-            f0_checkbox.setStyleSheet("QCheckBox { margin-left: 12px; }")
-            f0_checkbox.setToolTip("Mark as fundamental frequency (f₀)")
-            f0_checkbox.stateChanged.connect(lambda state, r=i: self.on_f0_toggled(r, state))
-            
-            # Center the checkbox
-            checkbox_widget = QWidget()
-            checkbox_layout = QHBoxLayout(checkbox_widget)
-            checkbox_layout.addWidget(f0_checkbox)
-            checkbox_layout.setAlignment(Qt.AlignCenter)
-            checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            self.peak_table.setCellWidget(row, 4, checkbox_widget)
+            # Column 4: Peak type combo (F0/F1/F2/-)
+            type_combo = QComboBox()
+            type_combo.addItems(['-', 'F0', 'F1', 'F2'])
+            peak_type = peak.get('peak_type', 'F0' if peak.get('is_f0', False) else '-')
+            idx_type = type_combo.findText(peak_type)
+            if idx_type >= 0:
+                type_combo.setCurrentIndex(idx_type)
+            type_combo.setToolTip("Peak type: F0=fundamental, F1/F2=higher modes")
+            type_combo.currentTextChanged.connect(lambda t, r=i: self._on_peak_type_changed(r, t))
+            self.peak_table.setCellWidget(row, 4, type_combo)
             
             # Column 5: Delete button
             delete_btn = QPushButton('×')
@@ -610,34 +725,40 @@ class PeakPickerDock(QDockWidget):
         
         self.peak_table.setSortingEnabled(True)
     
-    def on_f0_toggled(self, peak_index: int, state: int):
+    def _on_peak_type_changed(self, peak_index: int, peak_type: str):
         """
-        Handle f₀ checkbox toggle.
-        Only one peak can be f₀ at a time.
+        Handle peak type change from combo box.
+        
+        Each type (F0, F1, F2) can only be assigned to one peak at a time.
         
         Args:
             peak_index: Index of peak in self.peaks list
-            state: Qt.CheckState value (0=unchecked, 2=checked)
+            peak_type: New type ('-', 'F0', 'F1', 'F2')
         """
-        if state == 2:  # Checked
-            # Uncheck all other peaks
+        if peak_index >= len(self.peaks):
+            return
+        
+        # If assigning a named type, unset it from any other peak
+        if peak_type in ('F0', 'F1', 'F2'):
             for i, peak in enumerate(self.peaks):
-                if i != peak_index:
-                    peak['is_f0'] = False
-                else:
-                    peak['is_f0'] = True
-            
-            # Rebuild table to reflect changes
-            self._update_table()
-            
-            # Emit signal to update plot
-            self.peaks_changed.emit(self.peaks)
-            
-            freq = self.peaks[peak_index]['frequency']
-            print(f"[PeakPickerDock] f₀ set to {freq:.2f} Hz")
-        else:  # Unchecked
-            self.peaks[peak_index]['is_f0'] = False
-            self.peaks_changed.emit(self.peaks)
+                if i != peak_index and peak.get('peak_type') == peak_type:
+                    peak['peak_type'] = '-'
+        
+        self.peaks[peak_index]['peak_type'] = peak_type
+        self.peaks[peak_index]['is_f0'] = (peak_type == 'F0')
+        
+        # Rebuild table to reflect changes
+        self._update_table()
+        
+        # Emit signal to update plot
+        self.peaks_changed.emit(self.peaks)
+    
+    def on_f0_toggled(self, peak_index: int, state: int):
+        """Legacy compatibility for f0 checkbox toggle."""
+        if state == 2:
+            self._on_peak_type_changed(peak_index, 'F0')
+        else:
+            self._on_peak_type_changed(peak_index, '-')
     
     def export_to_csv(self):
         """Export peaks to CSV file."""

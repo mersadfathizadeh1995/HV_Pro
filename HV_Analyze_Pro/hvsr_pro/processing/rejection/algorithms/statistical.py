@@ -3,10 +3,11 @@ Statistical Rejection Algorithms
 =================================
 
 Quality threshold and statistical outlier detection methods.
+Supports IQR, Z-score, and MAD (Median Absolute Deviation) methods.
 """
 
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from hvsr_pro.processing.rejection.base import BaseRejectionAlgorithm, RejectionResult
 from hvsr_pro.processing.windows import Window, WindowCollection
@@ -23,14 +24,6 @@ class QualityThresholdRejection(BaseRejectionAlgorithm):
                  metric: str = 'overall',
                  threshold: float = 0.5,
                  name: str = "QualityThreshold"):
-        """
-        Initialize quality threshold rejection.
-        
-        Args:
-            metric: Quality metric to use
-            threshold: Minimum acceptable quality
-            name: Algorithm name
-        """
         super().__init__(name, threshold)
         self.metric = metric
     
@@ -46,7 +39,6 @@ class QualityThresholdRejection(BaseRejectionAlgorithm):
                 metadata={'metric': self.metric}
             )
         
-        # Invert score (high quality = low rejection score)
         rejection_score = 1.0 - score
         should_reject = score < self.threshold
         
@@ -64,9 +56,20 @@ class QualityThresholdRejection(BaseRejectionAlgorithm):
 
 class StatisticalOutlierRejection(BaseRejectionAlgorithm):
     """
-    Statistical outlier rejection using IQR or Z-score method.
+    Statistical outlier rejection using IQR, Z-score, or MAD methods.
     
     Rejects windows that are statistical outliers based on quality metrics.
+    
+    Methods:
+        iqr: Interquartile Range - uses Q1 - k*IQR, Q3 + k*IQR bounds
+        zscore: Z-score - uses mean +/- k*std bounds
+        mad: Median Absolute Deviation - uses median +/- k*MAD bounds
+    
+    Metrics:
+        overall: Use overall quality score (default)
+        max_deviation: Use maximum deviation from collection mean
+        mean_deviation: Use mean deviation from collection mean
+        area: Use area under HVSR curve
     """
     
     def __init__(self,
@@ -78,9 +81,9 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
         Initialize statistical outlier rejection.
         
         Args:
-            metric: Quality metric to use
-            method: 'iqr' (Interquartile Range) or 'zscore'
-            threshold: IQR multiplier or Z-score threshold
+            metric: Quality metric to use ('overall', 'max_deviation', 'mean_deviation', 'area')
+            method: Detection method ('iqr', 'zscore', 'mad')
+            threshold: Multiplier for bounds (IQR multiplier, Z-score, or MAD multiplier)
             name: Algorithm name
         """
         super().__init__(name, threshold)
@@ -90,9 +93,8 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
         self._lower_bound = None
         self._upper_bound = None
     
-    def evaluate_collection(self, collection: WindowCollection):
+    def evaluate_collection(self, collection: WindowCollection) -> List[RejectionResult]:
         """Evaluate collection with statistical outlier detection."""
-        # Get all quality scores
         scores = []
         for window in collection.windows:
             score = window.get_quality_score(self.metric)
@@ -105,7 +107,7 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
         
         scores_array = np.array(scores)
         
-        # Compute bounds
+        # Compute bounds based on method
         if self.method == 'iqr':
             q1 = np.percentile(scores_array, 25)
             q3 = np.percentile(scores_array, 75)
@@ -117,8 +119,15 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
             std = np.std(scores_array)
             self._lower_bound = mean - self.threshold * std
             self._upper_bound = mean + self.threshold * std
+        elif self.method == 'mad':
+            median = np.median(scores_array)
+            mad = np.median(np.abs(scores_array - median))
+            # Scale MAD to be consistent with std (for normal distributions)
+            mad_scaled = mad * 1.4826
+            self._lower_bound = median - self.threshold * mad_scaled
+            self._upper_bound = median + self.threshold * mad_scaled
         else:
-            raise ValueError(f"Unknown method: {self.method}")
+            raise ValueError(f"Unknown method: {self.method}. Use 'iqr', 'zscore', or 'mad'.")
         
         self._stats_computed = True
         
@@ -150,15 +159,13 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
                 metadata={'metric': self.metric}
             )
         
-        # Check if outlier
         is_outlier = score < self._lower_bound or score > self._upper_bound
         
-        # Rejection score based on distance from bounds
         if score < self._lower_bound:
-            rejection_score = min(1.0, (self._lower_bound - score) / self._lower_bound)
+            rejection_score = min(1.0, abs(self._lower_bound - score) / max(abs(self._lower_bound), 1e-10))
             reason = f"Low outlier: {score:.3f} < {self._lower_bound:.3f}"
         elif score > self._upper_bound:
-            rejection_score = min(1.0, (score - self._upper_bound) / (1.0 - self._upper_bound))
+            rejection_score = min(1.0, abs(score - self._upper_bound) / max(abs(self._upper_bound), 1e-10))
             reason = f"High outlier: {score:.3f} > {self._upper_bound:.3f}"
         else:
             rejection_score = 0.0
@@ -176,4 +183,3 @@ class StatisticalOutlierRejection(BaseRejectionAlgorithm):
                 'method': self.method
             }
         )
-

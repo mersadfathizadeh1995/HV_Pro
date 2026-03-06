@@ -38,7 +38,8 @@ class ProcessingThread(QThread):
                  manual_sampling_rate=None, custom_qc_settings=None,
                  cox_fdwra_settings=None, smoothing_method='konno_ohmachi',
                  file_format='auto', degrees_from_north=None,
-                 qc_enabled=True, phase1_enabled=True, phase2_enabled=True):
+                 qc_enabled=True, phase1_enabled=True, phase2_enabled=True,
+                 horizontal_method='geometric_mean'):
         super().__init__()
         self.file_input = file_input  # Can be str, list, or dict
         self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2', 'multi_component'
@@ -48,6 +49,7 @@ class ProcessingThread(QThread):
         self.overlap = overlap
         self.smoothing_method = smoothing_method  # Smoothing method name
         self.smoothing_bandwidth = smoothing_bandwidth
+        self.horizontal_method = horizontal_method  # Horizontal combination method
         self.time_range = time_range  # Optional time range filter
         self.freq_min = freq_min
         self.freq_max = freq_max
@@ -230,6 +232,7 @@ class ProcessingThread(QThread):
             processor = HVSRProcessor(
                 smoothing_method=self.smoothing_method,
                 smoothing_bandwidth=self.smoothing_bandwidth,
+                horizontal_method=self.horizontal_method,
                 f_min=self.freq_min,
                 f_max=self.freq_max,
                 n_frequencies=self.n_frequencies,
@@ -314,6 +317,49 @@ class ProcessingThread(QThread):
                     # No rejection, raw and final are the same
                     result.metadata['raw_window_spectra'] = raw_window_spectra
             
+            # Step 6: Apply post-HVSR algorithms (HVSR amplitude, flat peak)
+            if self.qc_enabled and self.phase2_enabled and self.custom_qc_settings:
+                algos = self.custom_qc_settings.get('algorithms', {})
+                
+                hvsr_amp = algos.get('hvsr_amplitude', {})
+                flat_peak = algos.get('flat_peak', {})
+                
+                has_post_hvsr = (
+                    hvsr_amp.get('enabled', False) or 
+                    flat_peak.get('enabled', False)
+                )
+                
+                if has_post_hvsr and windows.n_active > 0:
+                    from hvsr_pro.processing.rejection import HVSRAmplitudeRejection, FlatPeakRejection
+                    
+                    self.progress.emit(95, "Applying post-HVSR rejection algorithms...")
+                    
+                    # Add post-HVSR algorithms to engine
+                    engine.post_hvsr_algorithms = []
+                    
+                    if hvsr_amp.get('enabled', False):
+                        params = hvsr_amp.get('params', {})
+                        engine.post_hvsr_algorithms.append(
+                            HVSRAmplitudeRejection(min_amplitude=params.get('min_amplitude', 1.0))
+                        )
+                    
+                    if flat_peak.get('enabled', False):
+                        params = flat_peak.get('params', {})
+                        engine.post_hvsr_algorithms.append(
+                            FlatPeakRejection(flatness_threshold=params.get('flatness_threshold', 0.15))
+                        )
+                    
+                    # Run post-HVSR evaluation
+                    post_result = engine.evaluate_post_hvsr(windows, result, auto_apply=True)
+                    n_post_rejected = post_result.get('n_rejected', 0)
+                    
+                    if n_post_rejected > 0:
+                        self.progress.emit(97, f"Post-HVSR: {n_post_rejected} windows rejected, recomputing...")
+                        if windows.n_active > 0:
+                            result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+                    
+                    self.progress.emit(98, f"Post-HVSR QC complete ({windows.n_active} windows remaining)")
+            
             self.progress.emit(100, "Complete!")
             self.finished.emit(result, windows, data)
             
@@ -323,34 +369,57 @@ class ProcessingThread(QThread):
             self.error.emit(error_detail)
 
     def _apply_custom_qc(self, engine, settings):
-        """Apply custom QC settings to rejection engine."""
+        """Apply custom QC settings to rejection engine.
+        
+        Handles both key naming conventions:
+        - 'spectral_spike' (from unified panel) and 'frequency_domain' (legacy)
+        - 'fdwra' and 'cox_fdwra' (different naming in different panels)
+        """
         from hvsr_pro.processing.rejection import QualityThresholdRejection, StatisticalOutlierRejection
         from hvsr_pro.processing.rejection import STALTARejection, FrequencyDomainRejection, AmplitudeRejection
 
         algorithms = settings.get('algorithms', {})
 
-        # Add algorithms based on settings
-        if algorithms.get('amplitude', {}).get('enabled', False):
-            engine.add_algorithm(AmplitudeRejection())
+        # Amplitude rejection
+        amp_settings = algorithms.get('amplitude', {})
+        if amp_settings.get('enabled', False):
+            params = amp_settings.get('params', {})
+            engine.add_algorithm(AmplitudeRejection(
+                max_amplitude=params.get('max_amplitude'),
+                min_rms=params.get('min_rms', 1e-10),
+                clipping_threshold=params.get('clipping_threshold', 0.95)
+            ))
 
-        if algorithms.get('quality_threshold', {}).get('enabled', False):
-            threshold = algorithms['quality_threshold']['params'].get('threshold', 0.5)
+        # Quality threshold
+        qt_settings = algorithms.get('quality_threshold', {})
+        if qt_settings.get('enabled', False):
+            params = qt_settings.get('params', {})
+            threshold = params.get('threshold', 0.5)
             engine.add_algorithm(QualityThresholdRejection(threshold=threshold))
 
-        if algorithms.get('sta_lta', {}).get('enabled', False):
-            params = algorithms['sta_lta']['params']
+        # STA/LTA
+        stalta_settings = algorithms.get('sta_lta', {})
+        if stalta_settings.get('enabled', False):
+            params = stalta_settings.get('params', {})
             engine.add_algorithm(STALTARejection(
                 sta_length=params.get('sta_length', 1.0),
                 lta_length=params.get('lta_length', 30.0),
-                min_ratio=params.get('min_ratio', 0.15),
+                min_ratio=params.get('min_ratio', 0.2),
                 max_ratio=params.get('max_ratio', 2.5)
             ))
 
-        if algorithms.get('frequency_domain', {}).get('enabled', False):
-            spike_threshold = algorithms['frequency_domain']['params'].get('spike_threshold', 3.0)
+        # Frequency domain / spectral spike (check both keys)
+        freq_settings = algorithms.get('frequency_domain', algorithms.get('spectral_spike', {}))
+        if freq_settings.get('enabled', False):
+            params = freq_settings.get('params', {})
+            spike_threshold = params.get('spike_threshold', 3.0)
             engine.add_algorithm(FrequencyDomainRejection(spike_threshold=spike_threshold))
 
-        if algorithms.get('statistical_outlier', {}).get('enabled', False):
-            threshold = algorithms['statistical_outlier']['params'].get('threshold', 2.0)
-            engine.add_algorithm(StatisticalOutlierRejection(method='iqr', threshold=threshold))
+        # Statistical outlier
+        stat_settings = algorithms.get('statistical_outlier', {})
+        if stat_settings.get('enabled', False):
+            params = stat_settings.get('params', {})
+            method = params.get('method', 'iqr')
+            threshold = params.get('threshold', 2.0)
+            engine.add_algorithm(StatisticalOutlierRejection(method=method, threshold=threshold))
 

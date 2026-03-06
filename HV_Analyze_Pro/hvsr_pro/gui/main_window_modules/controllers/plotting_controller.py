@@ -88,23 +88,7 @@ if HAS_PYQT5:
             Returns:
                 Dict with {'window_lines': {...}, 'stat_lines': {...}}
             """
-            # Diagnostic logging
-            print(f"\n=== PlottingController.plot_hvsr_results() ===")
-            print(f"  hvsr_result: {hvsr_result is not None}")
-            print(f"  windows: {windows is not None}")
-            if windows:
-                print(f"  windows.n_active: {windows.n_active}")
-                print(f"  windows.n_windows: {windows.n_windows}")
-            if hvsr_result:
-                print(f"  window_spectra count: {len(hvsr_result.window_spectra)}")
-                print(f"  frequencies count: {len(hvsr_result.frequencies)}")
-                print(f"  mean_hvsr: {hvsr_result.mean_hvsr is not None}")
-                if hasattr(hvsr_result, 'metadata'):
-                    print(f"  metadata: {hvsr_result.metadata}")
-            print(f"  plot_manager: {self.plot_manager is not None}")
-            
             if self.plot_manager is None:
-                print("[PlottingController] ERROR: plot_manager is None!")
                 return {}
             
             self._hvsr_result = hvsr_result
@@ -113,7 +97,6 @@ if HAS_PYQT5:
             
             # Check for QC failure
             if hasattr(hvsr_result, 'metadata') and hvsr_result.metadata.get('qc_failure', False):
-                print("[PlottingController] QC failure detected in metadata - showing failure message")
                 # Show QC failure message on plot instead of empty
                 self.plot_manager._create_axes()
                 ax_timeline, ax_hvsr, ax_stats = self.plot_manager.get_axes()
@@ -170,10 +153,6 @@ if HAS_PYQT5:
         
         def _plot_hvsr_curves(self, ax, hvsr_result, windows, properties=None):
             """Plot HVSR curves on axis."""
-            print(f"\n=== _plot_hvsr_curves() ===")
-            print(f"  windows.windows count: {len(windows.windows)}")
-            print(f"  window_spectra count: {len(hvsr_result.window_spectra)}")
-            
             self.window_lines = {}
             color_palette = self.get_color_palette()
             
@@ -182,8 +161,6 @@ if HAS_PYQT5:
             spectra_by_index = {}
             for spectrum in hvsr_result.window_spectra:
                 spectra_by_index[spectrum.window_index] = spectrum
-            
-            print(f"  Spectra indices available: {sorted(spectra_by_index.keys())[:10]}...")
             
             # Plot individual windows
             plotted_count = 0
@@ -212,38 +189,61 @@ if HAS_PYQT5:
                     )
                     self.window_lines[window_idx] = line
             
-            print(f"  Plotted {plotted_count} window curves, {len(self.window_lines)} lines stored")
+            # Plot percentile shading (16th-84th) - behind other curves
+            percentile_fill = None
+            if (hasattr(hvsr_result, 'percentile_16') and hvsr_result.percentile_16 is not None
+                    and hasattr(hvsr_result, 'percentile_84') and hvsr_result.percentile_84 is not None):
+                percentile_fill = ax.fill_between(
+                    hvsr_result.frequencies,
+                    hvsr_result.percentile_16,
+                    hvsr_result.percentile_84,
+                    color='#9C27B0', alpha=0.15, zorder=50,
+                    label='16th-84th percentile'
+                )
             
-            # Plot mean and std
-            print(f"  Plotting mean curve (freq range: {hvsr_result.frequencies[0]:.3f} - {hvsr_result.frequencies[-1]:.3f} Hz)")
+            # Plot mean
             mean_line, = ax.plot(
                 hvsr_result.frequencies, hvsr_result.mean_hvsr,
                 'k-', linewidth=2.5, label='Mean', zorder=100
             )
             
+            # Plot median
+            median_line = None
+            if hasattr(hvsr_result, 'median_hvsr') and hvsr_result.median_hvsr is not None:
+                median_line, = ax.plot(
+                    hvsr_result.frequencies, hvsr_result.median_hvsr,
+                    color='#1565C0', linewidth=2.0, linestyle='--',
+                    label='Median', zorder=100
+                )
+            
+            # Plot std bands
             std_plus, = ax.plot(
                 hvsr_result.frequencies,
                 hvsr_result.mean_hvsr + hvsr_result.std_hvsr,
-                'k--', linewidth=1.5, label='+1σ', zorder=99
+                'k--', linewidth=1.0, alpha=0.7, label='+1σ', zorder=99
             )
             
             std_minus, = ax.plot(
                 hvsr_result.frequencies,
                 hvsr_result.mean_hvsr - hvsr_result.std_hvsr,
-                'k--', linewidth=1.5, label='-1σ', zorder=99
+                'k--', linewidth=1.0, alpha=0.7, label='-1σ', zorder=99
             )
             
             self.stat_lines = {
                 'mean': mean_line,
                 'std_plus': std_plus,
-                'std_minus': std_minus
+                'std_minus': std_minus,
             }
+            if median_line is not None:
+                self.stat_lines['median'] = median_line
+            if percentile_fill is not None:
+                self.stat_lines['percentile_fill'] = percentile_fill
             
             # Axis settings
             ax.set_xscale('log')
             ax.set_xlabel('Frequency (Hz)')
             ax.set_ylabel('H/V Ratio')
-            ax.set_title('HVSR Curve - Individual Windows Mode')
+            ax.set_title('HVSR Curve')
             ax.grid(True, which='both', alpha=0.3)
             ax.legend(loc='upper right', fontsize=8)
         

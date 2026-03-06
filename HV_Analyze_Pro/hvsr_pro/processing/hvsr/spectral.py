@@ -24,7 +24,7 @@ def compute_fft(data: np.ndarray, sampling_rate: float,
     Args:
         data: Time series data
         sampling_rate: Sampling rate in Hz
-        taper: Taper window ('hann', 'hamming', 'blackman', None)
+        taper: Taper window ('hann', 'hamming', 'blackman', 'tukey', None)
         
     Returns:
         frequencies: Frequency array (Hz)
@@ -53,8 +53,10 @@ def compute_fft(data: np.ndarray, sampling_rate: float,
             window = np.hamming(n)
         elif taper == 'blackman':
             window = np.blackman(n)
+        elif taper == 'tukey':
+            window = scipy_signal.windows.tukey(n, alpha=0.1)
         else:
-            raise ValueError(f"Unknown taper: {taper}")
+            raise ValueError(f"Unknown taper: {taper}. Use 'hann', 'hamming', 'blackman', 'tukey', or None.")
         data = data * window
     
     # Compute FFT (positive frequencies only)

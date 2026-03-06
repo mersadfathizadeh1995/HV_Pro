@@ -1,0 +1,775 @@
+"""
+Batch Processing Window
+=======================
+
+Main window for batch HVSR processing of multiple stations.
+Adapted from HVSR_old's NewTab0_Automatic.py.
+
+Uses HV_Pro's HVSRProcessor directly instead of subprocesses.
+Opens as a separate window from the main app via Tools > Batch Processing.
+"""
+
+from PyQt5.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+    QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog, QMessageBox,
+    QProgressBar, QDialog, QTableWidget, QHeaderView, QTabWidget, QSplitter,
+    QStatusBar
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+from datetime import datetime
+import multiprocessing
+import os
+
+# Package-local imports
+from hvsr_pro.packages.batch_processing.dialogs.hvsr_settings import HVSRSettingsDialog
+from hvsr_pro.packages.batch_processing.dialogs.time_windows import TimeWindowsDialog
+from hvsr_pro.packages.batch_processing.workers.data_worker import DataProcessWorker
+from hvsr_pro.packages.batch_processing.workers.hvsr_worker import BatchHVSRWorker, BatchTask
+from hvsr_pro.packages.batch_processing.station_manager import StationManager
+from hvsr_pro.packages.batch_processing import report_export
+from hvsr_pro.packages.batch_processing import results_handler
+
+try:
+    from hvsr_pro.packages.batch_processing.processing import (
+        StationResult, PeakStatistics, AutomaticWorkflowResult,
+        run_automatic_peak_detection, OutputOrganizer, organize_by_topic,
+        Peak, detect_peaks, find_top_n_peaks
+    )
+    PROCESSING_AVAILABLE = True
+except ImportError:
+    PROCESSING_AVAILABLE = False
+
+
+class BatchProcessingWindow(QMainWindow):
+    """
+    Separate window for batch HVSR processing.
+    
+    Features:
+    - Station-based file management (table view)
+    - Time window configuration with timezone support
+    - HVSR settings dialog (QC, smoothing, frequency range)
+    - Parallel processing using HV_Pro's HVSRProcessor
+    - Results display with table, canvas, layer tree, histogram
+    - Report generation (Excel, CSV, figures)
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("HVSR Pro - Batch Processing")
+        self.resize(1200, 800)
+        self.setMinimumSize(900, 600)
+        
+        # State
+        self.hvsr_settings = {}
+        self.data_worker = None
+        self.hvsr_worker = None
+        self.processed_results = []
+        self.hvsr_task_status = {}
+        self._workflow_result = None
+        self._manual_median_peaks = []
+        self._time_windows_data = {'timezone': 'CST', 'windows': []}
+        self._fig_export_settings = None
+        
+        # Build UI
+        self._build_ui()
+        self._init_hvsr_defaults()
+        
+        # Status bar
+        self.statusBar().showMessage("Ready")
+
+    def _build_ui(self):
+        """Build the main window UI."""
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Top-level tab widget: Analysis | Results & Summary
+        self.mode_tabs = QTabWidget()
+        main_layout.addWidget(self.mode_tabs)
+
+        # Tab A: Analysis
+        self._analysis_tab = QWidget()
+        self.mode_tabs.addTab(self._analysis_tab, "Analysis")
+
+        # Tab B: Results & Summary
+        self._results_tab = QWidget()
+        self.mode_tabs.addTab(self._results_tab, "Results && Summary")
+        self.mode_tabs.setTabEnabled(1, False)
+
+        self._build_analysis_tab()
+        self._build_results_tab()
+
+    # ==================================================================
+    #  Tab B - Results & Summary
+    # ==================================================================
+
+    def _build_results_tab(self):
+        """Build the Results & Summary tab."""
+        try:
+            from hvsr_pro.packages.batch_processing.widgets import (
+                ResultsTableWidget, ResultsCanvasWidget,
+                ResultsLayerTree, ResultsHistogramWidget,
+            )
+        except ImportError:
+            layout = QVBoxLayout(self._results_tab)
+            layout.addWidget(QLabel("Results widgets not available."))
+            return
+
+        layout = QVBoxLayout(self._results_tab)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        h_splitter = QSplitter(Qt.Horizontal)
+
+        # LEFT column: table + histogram
+        left_splitter = QSplitter(Qt.Vertical)
+        self.results_table = ResultsTableWidget()
+        left_splitter.addWidget(self.results_table)
+        self.results_histogram = ResultsHistogramWidget()
+        left_splitter.addWidget(self.results_histogram)
+        left_splitter.setStretchFactor(0, 6)
+        left_splitter.setStretchFactor(1, 4)
+        h_splitter.addWidget(left_splitter)
+
+        # CENTER column: HVSR curve canvas
+        self.results_canvas = ResultsCanvasWidget()
+        h_splitter.addWidget(self.results_canvas)
+
+        # RIGHT column: layer tree
+        self.results_layer_tree = ResultsLayerTree()
+        h_splitter.addWidget(self.results_layer_tree)
+
+        h_splitter.setStretchFactor(0, 32)
+        h_splitter.setStretchFactor(1, 50)
+        h_splitter.setStretchFactor(2, 18)
+        layout.addWidget(h_splitter)
+
+        # Export toolbar
+        export_bar = QHBoxLayout()
+        self.btn_generate_report = QPushButton("Generate Report (Excel + Figures)")
+        self.btn_generate_report.setMinimumHeight(30)
+        self.btn_generate_report.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.btn_generate_report.clicked.connect(self._generate_report)
+        export_bar.addWidget(self.btn_generate_report)
+        export_bar.addStretch()
+        layout.addLayout(export_bar)
+
+        # Wire signals
+        self.results_table.selection_changed.connect(self._on_results_selection_changed)
+        self.results_layer_tree.station_visibility_changed.connect(
+            self.results_canvas.set_station_visible)
+        self.results_layer_tree.array_median_visibility_changed.connect(
+            self.results_canvas.set_array_median_visible)
+        self.results_layer_tree.grand_median_visibility_changed.connect(
+            self.results_canvas.set_grand_median_visible)
+        self.results_layer_tree.std_band_visibility_changed.connect(
+            self.results_canvas.set_std_band_visible)
+        self.results_layer_tree.combined_std_visibility_changed.connect(
+            self.results_canvas.set_combined_std_visible)
+        self.results_layer_tree.peak_group_visibility_changed.connect(
+            self.results_canvas.set_peak_group_visible)
+        self.results_canvas.manual_peaks_changed.connect(
+            self._on_manual_peaks_changed)
+
+    def _on_manual_peaks_changed(self, peaks):
+        self._manual_median_peaks = peaks
+
+    def _populate_results_tab(self, workflow_result):
+        """Fill the Results tab from an AutomaticWorkflowResult."""
+        self._workflow_result = workflow_result
+
+        if not hasattr(self, 'results_table'):
+            return
+
+        station_results = workflow_result.station_results
+        array_names = sorted(set(s.topic for s in station_results))
+
+        self.results_table.populate(station_results)
+        self.results_canvas.plot_all(station_results, array_names)
+        
+        n_peaks = self.hvsr_settings.get('auto_npeaks', 3)
+        self.results_canvas.pick_max_spin.setValue(n_peaks)
+        self._manual_median_peaks = []
+        self.results_canvas.clear_manual_peaks()
+
+        station_colors = {}
+        for sr in station_results:
+            line = self.results_canvas.get_station_line(sr.topic, sr.station_name)
+            if line:
+                station_colors[(sr.topic, sr.station_name)] = line.get_color()
+
+        self.results_layer_tree.build(station_results, array_names, station_colors)
+        self.results_histogram.set_data(station_results, array_names)
+
+        self.mode_tabs.setTabEnabled(1, True)
+        self.mode_tabs.setCurrentIndex(1)
+
+    def _on_results_selection_changed(self):
+        if not hasattr(self, 'results_table'):
+            return
+        checked = self.results_table.get_checked_results()
+        self.results_canvas.replot_grand_median(checked)
+        if hasattr(self, 'results_histogram'):
+            self.results_histogram.refresh(checked)
+
+    def _generate_report(self):
+        """Export combined report."""
+        if not hasattr(self, 'results_table'):
+            return
+
+        checked = self.results_table.get_checked_results()
+        if not checked:
+            QMessageBox.warning(self, "No Stations", "No stations selected for report.")
+            return
+
+        from hvsr_pro.packages.batch_processing.dialogs.figure_export_settings import (
+            FigureExportSettingsDialog, DEFAULT_SETTINGS,
+        )
+        dlg = FigureExportSettingsDialog(self, self._fig_export_settings)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        fig_settings = dlg.get_settings()
+        self._fig_export_settings = fig_settings
+
+        output_dir = self.output_dir_edit.text().strip()
+        if not output_dir:
+            output_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+            if not output_dir:
+                return
+
+        report_dir = os.path.join(output_dir, "Report")
+
+        try:
+            import csv as csv_mod
+            
+            curves_dir = os.path.join(report_dir, "curves")
+            hist_dir = os.path.join(report_dir, "histogram")
+            table_dir = os.path.join(report_dir, "table")
+            median_dir = os.path.join(report_dir, "median")
+            for d in (curves_dir, hist_dir, table_dir, median_dir):
+                os.makedirs(d, exist_ok=True)
+
+            # Table export
+            csv_path = os.path.join(table_dir, "HVSR_Results_Table.csv")
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv_mod.writer(f)
+                writer.writerow(["Array", "Station", "Valid/Total",
+                                 "F0_Hz", "A0", "F1_Hz", "A1", "F2_Hz", "A2"])
+                for sr in checked:
+                    peaks_sorted = sorted(sr.peaks, key=lambda p: p.frequency) if sr.peaks else []
+                    row = [sr.topic, sr.station_name,
+                           f"{sr.valid_windows}/{sr.total_windows}"]
+                    for i in range(3):
+                        if i < len(peaks_sorted):
+                            row.extend([f"{peaks_sorted[i].frequency:.3f}",
+                                        f"{peaks_sorted[i].amplitude:.3f}"])
+                        else:
+                            row.extend(["", ""])
+                    writer.writerow(row)
+            self._log(f"  table/  -> {csv_path}")
+
+            # Canvas figure export
+            fig_path = os.path.join(curves_dir, "HVSR_AllMedians.png")
+            self.results_canvas.fig.savefig(fig_path, dpi=300, bbox_inches='tight')
+            self._log(f"  curves/ -> {fig_path}")
+
+            report_export.export_enhanced_curve(curves_dir, checked, fig_settings)
+            self._log("  curves/ -> enhanced publication figure")
+
+            hist_path = os.path.join(hist_dir, "HVSR_F0_Histogram.png")
+            self.results_histogram.fig.savefig(hist_path, dpi=300, bbox_inches='tight')
+            self._log(f"  histogram/ -> {hist_path}")
+
+            report_export.export_enhanced_histogram(hist_dir, checked, fig_settings)
+            report_export.export_median_data(median_dir, checked, log_fn=self._log)
+
+            n_peaks = self.hvsr_settings.get('auto_npeaks', 3)
+            manual_pks = self._manual_median_peaks
+            json_hvsr_path = os.path.join(median_dir, "HVSR_Median_Result.json")
+            report_export.export_median_json_hvsr_format(
+                json_hvsr_path, checked,
+                n_peaks=n_peaks,
+                hvsr_settings=self.hvsr_settings,
+                manual_peaks=manual_pks or None,
+                log_fn=self._log,
+            )
+
+            QMessageBox.information(self, "Report Generated",
+                f"Report exported to:\n{report_dir}\n\n"
+                f"Stations included: {len(checked)}")
+
+        except Exception as e:
+            import traceback
+            self._log(f"Report error: {e}\n{traceback.format_exc()}")
+            QMessageBox.warning(self, "Error", f"Report generation failed:\n{e}")
+
+    # ==================================================================
+    #  Tab A - Analysis
+    # ==================================================================
+
+    def _build_analysis_tab(self):
+        analysis_layout = QVBoxLayout(self._analysis_tab)
+        analysis_layout.setContentsMargins(10, 10, 10, 10)
+
+        title = QLabel("Batch HVSR Processing")
+        title.setFont(QFont("Arial", 14, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        analysis_layout.addWidget(title)
+
+        # 1. Station Files Section
+        input_group = QGroupBox("1. Station Data Files")
+        input_layout = QVBoxLayout(input_group)
+
+        self.station_table = QTableWidget(0, 4)
+        self.station_table.setHorizontalHeaderLabels(["Station #", "Filename", "Files", "Actions"])
+        self.station_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.station_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.station_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.station_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.station_table.setColumnWidth(1, 200)
+        self.station_table.setMinimumHeight(120)
+        input_layout.addWidget(self.station_table)
+
+        self._station_mgr = StationManager(self.station_table, log_fn=self._log)
+
+        stn_btn_layout = QHBoxLayout()
+        btn = QPushButton("Add Station")
+        btn.clicked.connect(self._station_mgr.add_station_row)
+        stn_btn_layout.addWidget(btn)
+
+        btn = QPushButton("Remove Selected")
+        btn.clicked.connect(self._station_mgr.remove_selected_rows)
+        stn_btn_layout.addWidget(btn)
+
+        btn = QPushButton("Batch Import")
+        btn.clicked.connect(self._station_mgr.batch_import_files)
+        btn.setToolTip("Select files and auto-group by station pattern")
+        stn_btn_layout.addWidget(btn)
+
+        btn = QPushButton("Auto-Detect")
+        btn.clicked.connect(self._station_mgr.auto_detect_stations)
+        stn_btn_layout.addWidget(btn)
+
+        btn = QPushButton("Clear All")
+        btn.clicked.connect(self._station_mgr.clear_all)
+        stn_btn_layout.addWidget(btn)
+
+        stn_btn_layout.addStretch()
+        input_layout.addLayout(stn_btn_layout)
+
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(QLabel("Output Directory:"))
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.setPlaceholderText("Select output directory...")
+        output_layout.addWidget(self.output_dir_edit)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_output_dir)
+        output_layout.addWidget(browse_btn)
+        input_layout.addLayout(output_layout)
+        analysis_layout.addWidget(input_group)
+
+        # 2. Time Windows
+        time_group = QGroupBox("2. Time Windows (Applied to ALL Stations)")
+        time_layout = QHBoxLayout(time_group)
+        self.time_windows_btn = QPushButton("Configure Time Windows...")
+        self.time_windows_btn.clicked.connect(self._open_time_windows_dialog)
+        time_layout.addWidget(self.time_windows_btn)
+        self.time_windows_status = QLabel("(No windows configured)")
+        self.time_windows_status.setStyleSheet("color: gray; font-style: italic;")
+        time_layout.addWidget(self.time_windows_status)
+        time_layout.addStretch()
+        analysis_layout.addWidget(time_group)
+
+        # 3. HVSR Settings
+        hvsr_group = QGroupBox("3. HVSR Settings")
+        hvsr_layout = QHBoxLayout(hvsr_group)
+        self.hvsr_settings_btn = QPushButton("Configure HVSR Settings...")
+        self.hvsr_settings_btn.clicked.connect(self._open_hvsr_settings)
+        hvsr_layout.addWidget(self.hvsr_settings_btn)
+        self.hvsr_status_label = QLabel("(Using defaults)")
+        self.hvsr_status_label.setStyleSheet("color: gray; font-style: italic;")
+        hvsr_layout.addWidget(self.hvsr_status_label)
+        hvsr_layout.addStretch()
+        analysis_layout.addWidget(hvsr_group)
+
+        # 4. Run
+        run_group = QGroupBox("4. Run Workflow")
+        run_layout = QVBoxLayout(run_group)
+
+        progress_layout = QHBoxLayout()
+        progress_layout.addWidget(QLabel("Overall:"))
+        self.progress_bar = QProgressBar()
+        progress_layout.addWidget(self.progress_bar)
+        run_layout.addLayout(progress_layout)
+
+        self.progress_label = QLabel("Ready")
+        run_layout.addWidget(self.progress_label)
+
+        self.task_status_label = QLabel("")
+        self.task_status_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.task_status_label.setWordWrap(True)
+        run_layout.addWidget(self.task_status_label)
+
+        btn_layout = QHBoxLayout()
+
+        self.run_btn = QPushButton("Run Workflow (Process Data)")
+        self.run_btn.setMinimumHeight(35)
+        self.run_btn.setFont(QFont("Arial", 11, QFont.Bold))
+        self.run_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.run_btn.clicked.connect(self._run_workflow)
+        btn_layout.addWidget(self.run_btn)
+
+        self.hvsr_btn = QPushButton("Generate HVSR Curves")
+        self.hvsr_btn.setMinimumHeight(35)
+        self.hvsr_btn.setFont(QFont("Arial", 11, QFont.Bold))
+        self.hvsr_btn.setStyleSheet("background-color: #2196F3; color: white;")
+        self.hvsr_btn.clicked.connect(self._run_hvsr)
+        self.hvsr_btn.setEnabled(False)
+        btn_layout.addWidget(self.hvsr_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel_workflow)
+        btn_layout.addWidget(self.cancel_btn)
+
+        run_layout.addLayout(btn_layout)
+        analysis_layout.addWidget(run_group)
+
+        # Log
+        log_group = QGroupBox("Log")
+        log_layout = QVBoxLayout(log_group)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(150)
+        log_layout.addWidget(self.log_text)
+        analysis_layout.addWidget(log_group)
+
+    # ==================================================================
+    #  Dialogs
+    # ==================================================================
+
+    def _open_time_windows_dialog(self):
+        existing = [{'name': w.get('name', ''), 'start_local': w.get('start_local', ''),
+                      'end_local': w.get('end_local', '')}
+                     for w in self._time_windows_data.get('windows', [])]
+
+        dialog = TimeWindowsDialog(self, time_windows=existing,
+                                   timezone=self._time_windows_data.get('timezone', 'CST'))
+        if dialog.exec_() == QDialog.Accepted:
+            result = dialog.get_result()
+            self._time_windows_data = result
+            n = len(result['windows'])
+            if n == 0:
+                self.time_windows_status.setText("(No windows configured)")
+                self.time_windows_status.setStyleSheet("color: gray;")
+            else:
+                names = [w['name'] for w in result['windows']][:3]
+                self.time_windows_status.setText(f"({n} window(s): {', '.join(names)})")
+                self.time_windows_status.setStyleSheet("color: green;")
+            self._log(f"Configured {n} time window(s)")
+
+    def _browse_output_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if folder:
+            self.output_dir_edit.setText(folder)
+
+    def _init_hvsr_defaults(self):
+        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import ALGORITHM_DEFAULTS
+        self.hvsr_settings = {
+            'freq_min': 0.2, 'freq_max': 30.0,
+            'smoothing_type': 'Konno-Ohmachi', 'smoothing_bw': 40,
+            'window_length': 120, 'overlap': 0.5,
+            'horizontal_method': 'geometric_mean',
+            'averaging': 'geo',
+            'auto_npeaks': 3, 'peak_font': 10,
+            'start_skip': 0, 'process_len': 20,
+            'full_duration': False,
+            'save_png': True, 'save_pdf': False,
+            'max_parallel': min(4, multiprocessing.cpu_count()),
+            'auto_mode': False,
+            'min_prominence': 0.5, 'min_amplitude': 2.0,
+            'n_frequencies': 200,
+            'taper': 'tukey',
+            'smoothing_method': 'konno_ohmachi',
+            'qc_amplitude': True, 'qc_stalta': True,
+            'qc_fdwra': True, 'qc_hvsr_amp': False,
+            'qc_flat_peak': False, 'qc_statistical': True,
+            'qc_params': {
+                'amplitude': ALGORITHM_DEFAULTS['amplitude'].copy(),
+                'sta_lta': ALGORITHM_DEFAULTS['sta_lta'].copy(),
+                'fdwra': ALGORITHM_DEFAULTS['fdwra'].copy(),
+                'hvsr_amplitude': ALGORITHM_DEFAULTS['hvsr_amplitude'].copy(),
+                'flat_peak': ALGORITHM_DEFAULTS['flat_peak'].copy(),
+                'statistical_outlier': ALGORITHM_DEFAULTS['statistical_outlier'].copy(),
+            },
+        }
+
+    def _open_hvsr_settings(self):
+        dialog = HVSRSettingsDialog(self)
+        dialog.set_settings(self.hvsr_settings)
+        dialog.set_time_windows(self._time_windows_data.get('windows', []))
+        if dialog.exec_() == QDialog.Accepted:
+            self.hvsr_settings = dialog.get_settings()
+            self.hvsr_status_label.setText("(Custom settings applied)")
+            self.hvsr_status_label.setStyleSheet("color: green;")
+            self._log("HVSR settings updated")
+
+    # ==================================================================
+    #  Logging
+    # ==================================================================
+
+    def _log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_text.append(f"[{timestamp}] {message}")
+        self.log_text.ensureCursorVisible()
+        self.statusBar().showMessage(message)
+
+    # ==================================================================
+    #  Workflow Execution
+    # ==================================================================
+
+    def _validate_inputs(self):
+        errors = []
+        station_files = self._station_mgr.get_station_files()
+        if not station_files:
+            errors.append("No station files configured")
+        if not self.output_dir_edit.text().strip():
+            errors.append("No output directory selected")
+        return errors
+
+    def _run_workflow(self):
+        """Run data processing step."""
+        errors = self._validate_inputs()
+        if errors:
+            QMessageBox.warning(self, "Validation Error", "\n".join(errors))
+            return
+
+        time_windows = self._time_windows_data.get('windows', [])
+        primary_window = None
+        if time_windows:
+            win = time_windows[0]
+            primary_window = {'start': win['start_utc'], 'end': win['end_utc'], 'name': win['name']}
+
+        params = {
+            'station_files': self._station_mgr.get_station_files(),
+            'output_dir': self.output_dir_edit.text(),
+            'time_window': primary_window,
+            'time_windows': time_windows,
+            'hvsr_settings': self.hvsr_settings,
+        }
+
+        self.run_btn.setEnabled(False)
+        self.hvsr_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+
+        self.data_worker = DataProcessWorker(params)
+        self.data_worker.progress.connect(self._on_progress)
+        self.data_worker.finished.connect(self._on_data_finished)
+        self.data_worker.start()
+        self._log("Data processing started...")
+
+    def _run_hvsr(self):
+        """Run HVSR processing using HVSRProcessor directly."""
+        if not self.processed_results:
+            QMessageBox.warning(self, "No Data", "Run data processing first.")
+            return
+
+        # Build task list
+        tasks = []
+        self.hvsr_task_status.clear()
+
+        for result in self.processed_results:
+            station_name = result['station_name']
+            window_name = result.get('window_name', '')
+            mat_path = result['mat_path']
+            out_dir = result['dir']
+
+            task_label = f"{window_name}/{station_name}" if window_name else station_name
+
+            tasks.append(BatchTask(
+                station_id=station_name,
+                window_name=window_name,
+                mat_path=str(mat_path),
+                output_dir=str(out_dir),
+                label=task_label
+            ))
+            self.hvsr_task_status[task_label] = 0
+
+        self._update_task_status_display()
+
+        # Build QC settings for the worker
+        qc_settings = {
+            'qc_stalta': self.hvsr_settings.get('qc_stalta', True),
+            'qc_amplitude': self.hvsr_settings.get('qc_amplitude', True),
+            'qc_fdwra': self.hvsr_settings.get('qc_fdwra', True),
+            'qc_statistical': self.hvsr_settings.get('qc_statistical', False),
+            'sta_lta_params': self.hvsr_settings.get('qc_params', {}).get('sta_lta', {}),
+            'fdwra_params': self.hvsr_settings.get('qc_params', {}).get('fdwra', {}),
+            'statistical_params': self.hvsr_settings.get('qc_params', {}).get('statistical_outlier', {}),
+        }
+
+        worker_settings = {
+            'window_length': self.hvsr_settings.get('window_length', 120),
+            'overlap': self.hvsr_settings.get('overlap', 0.5),
+            'konno_ohmachi_bandwidth': self.hvsr_settings.get('smoothing_bw', 40),
+            'smoothing_method': self.hvsr_settings.get('smoothing_method', 'konno_ohmachi'),
+            'freq_min': self.hvsr_settings.get('freq_min', 0.2),
+            'freq_max': self.hvsr_settings.get('freq_max', 30.0),
+            'n_frequencies': self.hvsr_settings.get('n_frequencies', 200),
+            'horizontal_method': self.hvsr_settings.get('horizontal_method', 'geometric_mean'),
+            'taper': self.hvsr_settings.get('taper', 'tukey'),
+            'qc_settings': qc_settings,
+            'save_png': self.hvsr_settings.get('save_png', True),
+            'save_pdf': self.hvsr_settings.get('save_pdf', False),
+            'auto_fig_dpi': self.hvsr_settings.get('auto_fig_dpi', 300),
+        }
+
+        self._log(f"Starting HVSR processing for {len(tasks)} tasks...")
+        self.run_btn.setEnabled(False)
+        self.hvsr_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+
+        self.hvsr_worker = BatchHVSRWorker(tasks, worker_settings, self)
+        self.hvsr_worker.log_line.connect(self._log)
+        self.hvsr_worker.progress.connect(self._on_hvsr_progress)
+        self.hvsr_worker.task_progress.connect(self._on_task_progress)
+        self.hvsr_worker.finished.connect(self._on_hvsr_finished)
+        self.hvsr_worker.start()
+
+    # ==================================================================
+    #  Progress & Callbacks
+    # ==================================================================
+
+    def _update_task_status_display(self):
+        if not self.hvsr_task_status:
+            self.task_status_label.setText("")
+            return
+        parts = []
+        for stn, pct in sorted(self.hvsr_task_status.items()):
+            if pct == 100:
+                parts.append(f"{stn}: Done")
+            elif pct == -1:
+                parts.append(f"{stn}: Error")
+            elif pct > 0:
+                parts.append(f"{stn}: {pct}%")
+            else:
+                parts.append(f"{stn}: Waiting")
+        self.task_status_label.setText(" | ".join(parts))
+
+    def _on_task_progress(self, name, pct):
+        self.hvsr_task_status[name] = pct
+        self._update_task_status_display()
+
+    def _on_hvsr_progress(self, pct, message):
+        self.progress_bar.setValue(pct)
+        self.progress_label.setText(message)
+
+    def _on_hvsr_finished(self, success, message):
+        self.run_btn.setEnabled(True)
+        self.hvsr_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self._log(message)
+        self.progress_label.setText(message)
+
+        if success and PROCESSING_AVAILABLE:
+            self._run_automatic_analysis()
+        elif success:
+            QMessageBox.information(self, "Complete", message)
+        else:
+            QMessageBox.warning(self, "Status", message)
+
+    def _run_automatic_analysis(self):
+        """Load results and populate the Results tab.
+
+        When ``auto_mode`` is enabled the function runs automatic peak
+        detection, exports results immediately, and populates the
+        Results tab with peaks already placed on the canvas.
+
+        When ``auto_mode`` is disabled (interactive / manual mode) the
+        Results tab is populated *without* peaks so the user can click
+        on the canvas to pick them manually and then generate a report.
+        """
+        if not PROCESSING_AVAILABLE:
+            return
+
+        auto_mode = self.hvsr_settings.get('auto_mode', False)
+
+        self._log("Loading results and detecting peaks...")
+        try:
+            station_results = results_handler.load_hvsr_results(
+                self.processed_results, self.hvsr_settings, log_fn=self._log)
+
+            if not station_results:
+                self._log("No results found")
+                return
+
+            result = results_handler.run_analysis(
+                station_results, self.hvsr_settings, log_fn=self._log)
+
+            if auto_mode:
+                results_handler.display_peak_statistics(
+                    result, log_fn=self._log)
+                output_dir = self.output_dir_edit.text()
+                if output_dir:
+                    results_handler.export_automatic_results(
+                        result, output_dir, self.hvsr_settings,
+                        log_fn=self._log)
+
+            self._populate_results_tab(result)
+
+            if auto_mode:
+                self.progress_label.setText(
+                    "Analysis complete - see Results tab")
+            else:
+                self.progress_label.setText(
+                    "Pick peaks on the canvas, then click 'Generate Report'")
+                self._log(
+                    "Interactive mode: pick peaks on the canvas and click "
+                    "'Generate Report' when ready.")
+                if hasattr(self, 'results_canvas'):
+                    self.results_canvas.btn_pick_peaks.setChecked(True)
+
+        except Exception as e:
+            import traceback
+            self._log(f"Analysis error: {e}\n{traceback.format_exc()}")
+
+    def _cancel_workflow(self):
+        if self.data_worker and self.data_worker.isRunning():
+            self.data_worker.terminate()
+            self._log("Data processing cancelled")
+            self._on_data_finished(False, "Cancelled")
+        if self.hvsr_worker and self.hvsr_worker.isRunning():
+            self.hvsr_worker.stop()
+            self._log("HVSR cancellation requested...")
+
+    def _on_progress(self, percent, message):
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(message)
+        self._log(message)
+
+    def _on_data_finished(self, success, message):
+        self.run_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+        if success:
+            self.progress_label.setText("Data processing complete!")
+            self._log("Data processing complete!")
+
+            if self.data_worker and hasattr(self.data_worker, 'params'):
+                self.processed_results = self.data_worker.params.get('results', [])
+
+            if self.processed_results:
+                self.hvsr_btn.setEnabled(True)
+                n = len(self.processed_results)
+                self._log(f"Ready to generate HVSR for {n} station/window combinations")
+                QMessageBox.information(self, "Success",
+                    f"{message}\n\nClick 'Generate HVSR Curves' to process.")
+            else:
+                QMessageBox.information(self, "Success", message)
+        else:
+            self.progress_label.setText("Processing failed!")
+            self._log(f"Failed: {message}")
+            QMessageBox.warning(self, "Error", message)

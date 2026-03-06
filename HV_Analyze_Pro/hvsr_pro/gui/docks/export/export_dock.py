@@ -200,6 +200,9 @@ class ExportDock(QDockWidget):
                     export_csv(filename, self.result, options)
                 elif format_type == 'json':
                     export_json(filename, self.result, self.windows, options)
+                elif format_type == 'xlsx':
+                    from .exporters.data_exporter import export_excel
+                    export_excel(filename, self.result, self.windows, options)
                 QMessageBox.information(
                     self, "Export Successful",
                     f"Data saved to:\n{filename}"

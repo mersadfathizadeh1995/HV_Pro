@@ -191,26 +191,29 @@ if HAS_PYQT5:
                     load_mode=getattr(mw, 'load_mode', 'single')
                 )
                 
-                # Processing settings
+                # Processing settings - read from processing tab panels
+                proc_panel = getattr(getattr(mw, 'processing_tab', None), 'processing_panel', None)
                 state.processing = SessionProcessingSettings(
-                    window_length=mw.window_length_spin.value() if hasattr(mw, 'window_length_spin') else 60.0,
-                    overlap=mw.overlap_spin.value() / 100.0 if hasattr(mw, 'overlap_spin') else 0.5,
-                    smoothing_bandwidth=mw.smoothing_spin.value() if hasattr(mw, 'smoothing_spin') else 40.0,
-                    f_min=mw.freq_min_spin.value() if hasattr(mw, 'freq_min_spin') else 0.2,
-                    f_max=mw.freq_max_spin.value() if hasattr(mw, 'freq_max_spin') else 20.0,
-                    n_frequencies=getattr(mw, 'n_freq_spin', None)
-                        and mw.n_freq_spin.value() or 100
+                    window_length=proc_panel.window_length_spin.value() if proc_panel else 60.0,
+                    overlap=proc_panel.overlap_spin.value() / 100.0 if proc_panel else 0.5,
+                    smoothing_bandwidth=proc_panel.smoothing_spin.value() if proc_panel else 40.0,
+                    f_min=proc_panel.freq_min_spin.value() if proc_panel else 0.2,
+                    f_max=proc_panel.freq_max_spin.value() if proc_panel else 20.0,
+                    n_frequencies=proc_panel.n_freq_spin.value() if proc_panel else 100
                 )
                 
-                # QC settings
+                # QC settings - read from unified QC panel
+                qc_panel = getattr(getattr(mw, 'processing_tab', None), 'unified_qc_panel', None)
+                qc_settings = qc_panel.get_settings() if qc_panel else {}
+                fdwra = qc_settings.get('cox_fdwra', {})
                 state.qc = SessionQCSettings(
-                    enabled=mw.qc_enable_check.isChecked() if hasattr(mw, 'qc_enable_check') else True,
-                    mode=mw.qc_combo.currentData() if hasattr(mw, 'qc_combo') else 'balanced',
-                    cox_fdwra_enabled=mw.cox_fdwra_check.isChecked() if hasattr(mw, 'cox_fdwra_check') else False,
-                    cox_n=mw.cox_n_spin.value() if hasattr(mw, 'cox_n_spin') else 2.0,
-                    cox_max_iterations=mw.cox_iterations_spin.value() if hasattr(mw, 'cox_iterations_spin') else 50,
-                    cox_min_iterations=mw.cox_min_iterations_spin.value() if hasattr(mw, 'cox_min_iterations_spin') else 1,
-                    cox_distribution=mw.cox_dist_combo.currentText() if hasattr(mw, 'cox_dist_combo') else 'lognormal'
+                    enabled=qc_settings.get('enabled', True),
+                    mode=qc_settings.get('mode', 'sesame'),
+                    cox_fdwra_enabled=fdwra.get('enabled', False),
+                    cox_n=fdwra.get('n', 2.0),
+                    cox_max_iterations=fdwra.get('max_iterations', 50),
+                    cox_min_iterations=fdwra.get('min_iterations', 1),
+                    cox_distribution=fdwra.get('distribution_fn', 'lognormal')
                 )
                 
                 # Window states
@@ -381,39 +384,26 @@ if HAS_PYQT5:
             if hasattr(mw, 'data_load_tab') and hasattr(mw.data_load_tab, 'work_dir_edit'):
                 mw.data_load_tab.work_dir_edit.setText(state.work_directory)
             
-            # Processing settings
-            if hasattr(state, 'processing'):
-                if hasattr(mw, 'window_length_spin'):
-                    mw.window_length_spin.setValue(state.processing.window_length)
-                if hasattr(mw, 'overlap_spin'):
-                    mw.overlap_spin.setValue(int(state.processing.overlap * 100))
-                if hasattr(mw, 'smoothing_spin'):
-                    mw.smoothing_spin.setValue(state.processing.smoothing_bandwidth)
-                if hasattr(mw, 'freq_min_spin'):
-                    mw.freq_min_spin.setValue(state.processing.f_min)
-                if hasattr(mw, 'freq_max_spin'):
-                    mw.freq_max_spin.setValue(state.processing.f_max)
-                if hasattr(mw, 'n_freq_spin') and hasattr(state.processing, 'n_frequencies'):
-                    mw.n_freq_spin.setValue(state.processing.n_frequencies)
+            # Processing settings - restore to processing tab panels
+            proc_panel = getattr(getattr(mw, 'processing_tab', None), 'processing_panel', None)
+            if hasattr(state, 'processing') and proc_panel:
+                try:
+                    proc_panel.window_length_spin.setValue(state.processing.window_length)
+                    proc_panel.overlap_spin.setValue(int(state.processing.overlap * 100))
+                    proc_panel.smoothing_spin.setValue(state.processing.smoothing_bandwidth)
+                    proc_panel.freq_min_spin.setValue(state.processing.f_min)
+                    proc_panel.freq_max_spin.setValue(state.processing.f_max)
+                    if hasattr(state.processing, 'n_frequencies'):
+                        proc_panel.n_freq_spin.setValue(state.processing.n_frequencies)
+                except AttributeError:
+                    pass  # Panel widgets may not exist yet
             
-            # QC settings
+            # QC settings - restore to unified QC panel
+            # Session QC is stored in simplified form; just restore what we can
             if hasattr(state, 'qc'):
-                if hasattr(mw, 'qc_enable_check'):
-                    mw.qc_enable_check.setChecked(state.qc.enabled)
-                if hasattr(mw, 'qc_combo'):
-                    idx = mw.qc_combo.findData(state.qc.mode)
-                    if idx >= 0:
-                        mw.qc_combo.setCurrentIndex(idx)
-                if hasattr(mw, 'cox_fdwra_check'):
-                    mw.cox_fdwra_check.setChecked(state.qc.cox_fdwra_enabled)
-                if hasattr(mw, 'cox_n_spin'):
-                    mw.cox_n_spin.setValue(state.qc.cox_n)
-                if hasattr(mw, 'cox_iterations_spin'):
-                    mw.cox_iterations_spin.setValue(state.qc.cox_max_iterations)
-                if hasattr(mw, 'cox_min_iterations_spin'):
-                    mw.cox_min_iterations_spin.setValue(state.qc.cox_min_iterations)
-                if hasattr(mw, 'cox_dist_combo'):
-                    mw.cox_dist_combo.setCurrentText(state.qc.cox_distribution)
+                qc_panel = getattr(getattr(mw, 'processing_tab', None), 'unified_qc_panel', None)
+                if qc_panel and hasattr(qc_panel, 'apply_session_qc'):
+                    qc_panel.apply_session_qc(state.qc)
             
             # File info
             if hasattr(state, 'file_info') and state.file_info.path:
@@ -580,23 +570,25 @@ if HAS_PYQT5:
             """Extract current GUI state from main window."""
             state = GUIState()
             
-            if hasattr(main_window, 'window_length_spin'):
-                state.window_length = main_window.window_length_spin.value()
-            if hasattr(main_window, 'overlap_spin'):
-                state.overlap = main_window.overlap_spin.value() / 100.0
-            if hasattr(main_window, 'smoothing_spin'):
-                state.smoothing_bandwidth = main_window.smoothing_spin.value()
-            if hasattr(main_window, 'freq_min_spin'):
-                state.freq_min = main_window.freq_min_spin.value()
-            if hasattr(main_window, 'freq_max_spin'):
-                state.freq_max = main_window.freq_max_spin.value()
-            if hasattr(main_window, 'n_freq_spin'):
-                state.n_frequencies = main_window.n_freq_spin.value()
+            # Read from processing tab panels
+            proc_panel = getattr(getattr(main_window, 'processing_tab', None), 'processing_panel', None)
+            if proc_panel:
+                try:
+                    state.window_length = proc_panel.window_length_spin.value()
+                    state.overlap = proc_panel.overlap_spin.value() / 100.0
+                    state.smoothing_bandwidth = proc_panel.smoothing_spin.value()
+                    state.freq_min = proc_panel.freq_min_spin.value()
+                    state.freq_max = proc_panel.freq_max_spin.value()
+                    state.n_frequencies = proc_panel.n_freq_spin.value()
+                except AttributeError:
+                    pass
             
-            if hasattr(main_window, 'qc_enable_check'):
-                state.qc_enabled = main_window.qc_enable_check.isChecked()
-            if hasattr(main_window, 'qc_combo'):
-                state.qc_mode = main_window.qc_combo.currentData()
+            # Read QC from unified panel
+            qc_panel = getattr(getattr(main_window, 'processing_tab', None), 'unified_qc_panel', None)
+            if qc_panel:
+                qc_settings = qc_panel.get_settings()
+                state.qc_enabled = qc_settings.get('enabled', True)
+                state.qc_mode = qc_settings.get('mode', 'sesame')
             
             if hasattr(main_window, 'cox_fdwra_check'):
                 state.cox_enabled = main_window.cox_fdwra_check.isChecked()
@@ -617,35 +609,22 @@ if HAS_PYQT5:
         
         def apply_gui_state(self, main_window, state: GUIState):
             """Apply GUI state to main window."""
-            if hasattr(main_window, 'window_length_spin'):
-                main_window.window_length_spin.setValue(state.window_length)
-            if hasattr(main_window, 'overlap_spin'):
-                main_window.overlap_spin.setValue(int(state.overlap * 100))
-            if hasattr(main_window, 'smoothing_spin'):
-                main_window.smoothing_spin.setValue(state.smoothing_bandwidth)
-            if hasattr(main_window, 'freq_min_spin'):
-                main_window.freq_min_spin.setValue(state.freq_min)
-            if hasattr(main_window, 'freq_max_spin'):
-                main_window.freq_max_spin.setValue(state.freq_max)
-            if hasattr(main_window, 'n_freq_spin'):
-                main_window.n_freq_spin.setValue(state.n_frequencies)
+            # Apply to processing tab panels
+            proc_panel = getattr(getattr(main_window, 'processing_tab', None), 'processing_panel', None)
+            if proc_panel:
+                try:
+                    proc_panel.window_length_spin.setValue(state.window_length)
+                    proc_panel.overlap_spin.setValue(int(state.overlap * 100))
+                    proc_panel.smoothing_spin.setValue(state.smoothing_bandwidth)
+                    proc_panel.freq_min_spin.setValue(state.freq_min)
+                    proc_panel.freq_max_spin.setValue(state.freq_max)
+                    proc_panel.n_freq_spin.setValue(state.n_frequencies)
+                except AttributeError:
+                    pass
             
-            if hasattr(main_window, 'qc_enable_check'):
-                main_window.qc_enable_check.setChecked(state.qc_enabled)
-            if hasattr(main_window, 'qc_combo'):
-                idx = main_window.qc_combo.findData(state.qc_mode)
-                if idx >= 0:
-                    main_window.qc_combo.setCurrentIndex(idx)
-            
-            if hasattr(main_window, 'cox_fdwra_check'):
-                main_window.cox_fdwra_check.setChecked(state.cox_enabled)
-            if hasattr(main_window, 'cox_n_spin'):
-                main_window.cox_n_spin.setValue(state.cox_n)
-            if hasattr(main_window, 'cox_iterations_spin'):
-                main_window.cox_iterations_spin.setValue(state.cox_max_iterations)
-            if hasattr(main_window, 'cox_min_iterations_spin'):
-                main_window.cox_min_iterations_spin.setValue(state.cox_min_iterations)
-            if hasattr(main_window, 'cox_dist_combo'):
+            # Cox settings are no longer on the main window - skip them
+            # They are managed by the unified QC panel
+            if False:  # Keep structure for reference but don't access removed widgets
                 main_window.cox_dist_combo.setCurrentText(state.cox_distribution)
             
             self.work_directory = state.work_directory

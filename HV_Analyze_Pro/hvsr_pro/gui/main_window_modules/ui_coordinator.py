@@ -347,6 +347,27 @@ if HAS_PYQT5:
                     self.parent.layers_dock.set_references(self.parent.plot_manager, windows)
                 self.parent.layers_dock.rebuild(window_lines, stat_lines)
             
+            # Auto-apply properties from Properties dock if available
+            if hasattr(self.parent, 'properties_dock') and hasattr(self.parent.properties_dock, 'get_properties'):
+                try:
+                    properties = self.parent.properties_dock.get_properties()
+                    if properties and hasattr(self.parent.plotting_ctrl, '_replot_with_properties'):
+                        self.parent.plotting_ctrl._replot_with_properties(properties)
+                        # Re-extract lines after replot
+                        new_window_lines = getattr(self.parent.plotting_ctrl, 'window_lines', {})
+                        new_stat_lines = getattr(self.parent.plotting_ctrl, 'stat_lines', {})
+                        if new_window_lines:
+                            self.parent.window_lines = new_window_lines
+                        if new_stat_lines:
+                            self.parent.stat_lines = new_stat_lines
+                        # Rebuild layer dock with potentially new stat lines
+                        if hasattr(self.parent, 'layers_dock'):
+                            self.parent.layers_dock.rebuild(
+                                self.parent.window_lines, self.parent.stat_lines
+                            )
+                except Exception:
+                    pass  # Properties not available yet, use initial plot
+            
             # Show plot window
             self.parent.plot_manager.show_separate()
         

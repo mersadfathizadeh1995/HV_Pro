@@ -35,23 +35,9 @@ class ProcessingSettings:
     n_workers: Optional[int] = None
 
 
-@dataclass
-class QCSettings:
-    """Quality control settings."""
-    preset: str = 'balanced'
-    enabled: bool = True
-    # Cox FDWRA settings
-    cox_fdwra_enabled: bool = False
-    cox_n: float = 2.0
-    cox_max_iterations: int = 50
-    cox_distribution: str = 'lognormal'
-    # Custom thresholds
-    amplitude_enabled: bool = True
-    quality_threshold: float = 0.5
-    quality_enabled: bool = False
-    stalta_enabled: bool = False
-    stalta_min_ratio: float = 0.2
-    stalta_max_ratio: float = 2.5
+# QCSettings is now defined in processing/rejection/settings.py
+# Import it from there for backward compatibility
+from hvsr_pro.processing.rejection.settings import QCSettings
 
 
 @dataclass
