@@ -21,7 +21,14 @@ if __name__ == "__main__":
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
+    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
+    # QWebEngineView MUST be imported before QApplication is created
+    try:
+        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+        from PyQt5.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+    except ImportError:
+        pass  # graceful fallback to matplotlib maps
     from hvsr_pro.gui import HVSRMainWindow, HAS_GUI
     
     if not HAS_GUI:

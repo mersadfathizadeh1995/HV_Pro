@@ -106,6 +106,8 @@ class BatchHVSRWorker(QThread):
     progress = pyqtSignal(int, str)
     task_progress = pyqtSignal(str, int)
     finished = pyqtSignal(bool, str)
+    # Emits per-station data for interactive mode: (task_label, data_dict)
+    station_data_ready = pyqtSignal(str, object)
 
     def __init__(self, tasks: List[BatchTask], hvsr_settings: Dict[str, Any],
                  parent=None):
@@ -113,6 +115,7 @@ class BatchHVSRWorker(QThread):
         self.tasks = tasks
         self.hvsr_settings = hvsr_settings
         self._stop_requested = False
+        self.station_results = []  # stores intermediate data for interactive mode
 
     def stop(self):
         self._stop_requested = True
@@ -180,10 +183,16 @@ class BatchHVSRWorker(QThread):
         smoothing_bw = settings.get('konno_ohmachi_bandwidth', 40)
         smoothing_method = settings.get('smoothing_method', 'konno_ohmachi')
         freq_min = settings.get('freq_min', 0.2)
-        freq_max = settings.get('freq_max', 20.0)
-        n_frequencies = settings.get('n_frequencies', 200)
+        freq_max = settings.get('freq_max', 30.0)
+        n_frequencies = settings.get('n_frequencies', 300)
         horizontal_method = settings.get('horizontal_method', 'geometric_mean')
         taper = settings.get('taper', 'tukey')
+        detrend = settings.get('detrend', 'linear')
+        statistics_method = settings.get('statistics_method', 'lognormal')
+        std_ddof = settings.get('std_ddof', 1)
+        min_prominence = settings.get('min_prominence', 0.5)
+        min_amplitude = settings.get('min_amplitude', 2.0)
+        peak_basis = settings.get('peak_basis', 'median')
 
         self.task_progress.emit(task.label or task.station_id, 10)
 
@@ -248,6 +257,12 @@ class BatchHVSRWorker(QThread):
             f_min=freq_min, f_max=freq_max,
             n_frequencies=n_frequencies,
             taper=taper,
+            detrend=detrend,
+            statistics_method=statistics_method,
+            std_ddof=std_ddof,
+            min_prominence=min_prominence,
+            min_amplitude=min_amplitude,
+            peak_basis=peak_basis,
         )
         result = processor.process(
             windows, detect_peaks_flag=True, save_window_spectra=True)
@@ -324,11 +339,27 @@ class BatchHVSRWorker(QThread):
         self._save_stats_csv(out_dir, fig_label, freq_rs, rs)
 
         if settings.get('save_png', True) or settings.get('save_pdf', False):
-            self._save_figure(out_dir, fig_label, freq_rs, rs,
-                              per_window_hvsr, result,
-                              save_png=settings.get('save_png', True),
-                              save_pdf=settings.get('save_pdf', False),
-                              dpi=settings.get('auto_fig_dpi', 300))
+            self._generate_all_figures(
+                out_dir, fig_label, freq_rs, rs, per_window_hvsr,
+                result, windows, data, settings)
+
+        # Store intermediate data for interactive mode
+        combined_hv = np.column_stack(per_window_hvsr) if per_window_hvsr else rs['mean_hvsr'].reshape(-1, 1)
+        rejected_mask = np.array([not w.is_active() for w in windows.windows]) if windows else np.zeros(1, dtype=bool)
+        station_data = {
+            'task': task,
+            'fig_label': fig_label,
+            'freq_rs': freq_rs,
+            'rs': rs,
+            'combined_hv': combined_hv,
+            'rejected_mask': rejected_mask,
+            'result': result,
+            'windows': windows,
+            'data': data,
+            'out_dir': out_dir,
+            'per_window_hvsr': per_window_hvsr,
+        }
+        self.station_results.append(station_data)
 
         self.task_progress.emit(task.label or task.station_id, 100)
 
@@ -616,3 +647,94 @@ class BatchHVSRWorker(QThread):
             self.log_line.emit(f"  Saved PDF: HVSR_{fig_label}.pdf")
 
         plt.close(fig)
+
+    # ------------------------------------------------------------------
+    #  Comprehensive Figure Generation (replaces _save_figure for batch)
+    # ------------------------------------------------------------------
+
+    def _generate_all_figures(self, out_dir, fig_label, freq_rs, rs,
+                              per_window_hvsr, result, windows, data, settings):
+        """Generate all configured figures using figure_gen module."""
+        try:
+            from hvsr_pro.packages.batch_processing.figure_gen import (
+                generate_hvsr_figures, build_hvsr_pro_objects)
+        except ImportError:
+            self.log_line.emit("  Warning: figure_gen not available, using basic figure")
+            self._save_figure(out_dir, fig_label, freq_rs, rs,
+                              per_window_hvsr, result,
+                              save_png=settings.get('save_png', True),
+                              save_pdf=settings.get('save_pdf', False),
+                              dpi=settings.get('auto_fig_dpi', 300))
+            return
+
+        dpi = settings.get('auto_fig_dpi', 300)
+        save_png = settings.get('save_png', True)
+        save_pdf = settings.get('save_pdf', False)
+
+        # Build combined_hv matrix (n_freq x n_windows) from per-window curves
+        if per_window_hvsr:
+            combined_hv = np.column_stack(per_window_hvsr)
+        else:
+            combined_hv = rs['mean_hvsr'].reshape(-1, 1)
+
+        n_windows_total = windows.n_windows if windows else combined_hv.shape[1]
+
+        # Build rejection mask and accepted indices
+        rejected_mask = np.zeros(n_windows_total, dtype=bool)
+        rejected_reasons = [''] * n_windows_total
+        accepted_indices = list(range(combined_hv.shape[1]))
+
+        if windows is not None:
+            win_list = windows.windows
+            rej_idx = 0
+            for wi, win in enumerate(win_list):
+                if not win.is_active():
+                    rejected_mask[wi] = True
+                    rejected_reasons[wi] = getattr(win, 'rejection_reason', '') or 'rejected'
+
+        # Use the HVSRResult directly if available (it's already an hvsr_pro object)
+        hvsr_result_obj = result
+        window_collection = windows
+        seismic_data = data
+
+        hv_mean = rs['mean_hvsr']
+        hv_std = rs['std_hvsr']
+        hv_mean_plus_std = hv_mean + hv_std
+        hv_mean_minus_std = np.maximum(hv_mean - hv_std, 0)
+        hv_16 = rs['percentile_16']
+        hv_84 = rs['percentile_84']
+
+        fig_config = settings.get('figure_export_config', {})
+        fig_title = f'HVSR - {fig_label}'
+
+        peaks = result.peaks if hasattr(result, 'peaks') else []
+
+        n_saved = generate_hvsr_figures(
+            hvsr_result_obj=hvsr_result_obj,
+            window_collection=window_collection,
+            seismic_data=seismic_data,
+            peaks=peaks,
+            freq_ref=freq_rs,
+            hv_mean=hv_mean,
+            hv_std=hv_std,
+            hv_mean_plus_std=hv_mean_plus_std,
+            hv_mean_minus_std=hv_mean_minus_std,
+            hv_16=hv_16,
+            hv_84=hv_84,
+            combined_hv=combined_hv,
+            rejected_mask=rejected_mask[:combined_hv.shape[1]],
+            accepted_indices=accepted_indices,
+            n_windows=n_windows_total,
+            output_dir=out_dir,
+            fig_label=fig_label,
+            fig_title=fig_title,
+            fig_config=fig_config,
+            fig_standard=settings.get('auto_fig_standard', True),
+            fig_hvsr_pro=settings.get('auto_fig_hvsr_pro', True),
+            fig_statistics=settings.get('auto_fig_statistics', True),
+            save_png=save_png,
+            save_pdf=save_pdf,
+            dpi=dpi,
+            ann_font_pt=settings.get('peak_font', 10),
+        )
+        self.log_line.emit(f"  Generated {n_saved} figures for {fig_label}")

@@ -15,9 +15,9 @@ from hvsr_pro.processing.hvsr.structures import Peak
 
 def detect_peaks(frequencies: np.ndarray,
                 hvsr: np.ndarray,
-                min_prominence: float = 1.5,
+                min_prominence: float = 0.5,
                 min_amplitude: float = 2.0,
-                freq_range: Tuple[float, float] = (0.2, 20.0),
+                freq_range: Tuple[float, float] = (0.2, 30.0),
                 distance: Optional[int] = None) -> List[Peak]:
     """
     Detect peaks in HVSR curve.

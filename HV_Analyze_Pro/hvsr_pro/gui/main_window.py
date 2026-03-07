@@ -508,6 +508,22 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"Batch Processing package not available:\n{str(e)}")
     
+    def open_bedrock_mapping(self):
+        """Open the 3D Bedrock Mapping window."""
+        try:
+            from hvsr_pro.packages.bedrock_mapping import BedrockMappingWindow
+            
+            if not hasattr(self, '_bedrock_window') or self._bedrock_window is None:
+                self._bedrock_window = BedrockMappingWindow(self)
+            
+            self._bedrock_window.show()
+            self._bedrock_window.raise_()
+            self._bedrock_window.activateWindow()
+        except ImportError as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Not Available",
+                f"3D Bedrock Mapping package not available:\n{str(e)}")
+
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
         from hvsr_pro.gui.dialogs import AdvancedQCDialog

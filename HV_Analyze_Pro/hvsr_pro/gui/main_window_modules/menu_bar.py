@@ -233,6 +233,13 @@ if HAS_PYQT5:
             batch_action.triggered.connect(self.parent.open_batch_processing)
             self.actions['batch_processing'] = batch_action
             
+            bedrock_action = tools_menu.addAction('3D &Bedrock Mapping...')
+            bedrock_action.setShortcut('Ctrl+M')
+            bedrock_action.setStatusTip('Open 3D bedrock depth mapping from HVSR and borehole data')
+            bedrock_action.setToolTip('3D bedrock depth mapping (Ctrl+M)')
+            bedrock_action.triggered.connect(self.parent.open_bedrock_mapping)
+            self.actions['bedrock_mapping'] = bedrock_action
+            
             return tools_menu
         
         def _build_mode_menu(self) -> QMenu:

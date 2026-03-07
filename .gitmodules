@@ -1,0 +1,3 @@
+[submodule "HV_Analyze_Pro/hvsr_pro/packages/bedrock_mapping"]
+	path = HV_Analyze_Pro/hvsr_pro/packages/bedrock_mapping
+	url = https://github.com/mersadfathizadeh1995/bedrock_mapping.git

@@ -45,12 +45,12 @@ def _process_single_window_parallel(args):
     
     Args:
         args: Tuple of (window, target_frequencies, smoothing_bandwidth, 
-              horizontal_method, taper, smoothing_method)
+              horizontal_method, taper, smoothing_method, detrend)
     
     Returns:
         Tuple of (WindowSpectrum, None) or (None, error_message)
     """
-    window, target_frequencies, smoothing_bandwidth, horizontal_method, taper, smoothing_method = args
+    window, target_frequencies, smoothing_bandwidth, horizontal_method, taper, smoothing_method, detrend = args
     
     try:
         # Import inside function for multiprocessing
@@ -72,9 +72,9 @@ def _process_single_window_parallel(args):
             return None, f"Window {window.index}: Vertical component has no data"
         
         # Compute FFT for each component
-        freq_e, spec_e = compute_fft(window.data.east.data, sampling_rate, taper)
-        freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, taper)
-        freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, taper)
+        freq_e, spec_e = compute_fft(window.data.east.data, sampling_rate, taper, detrend=detrend)
+        freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, taper, detrend=detrend)
+        freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, taper, detrend=detrend)
         
         # Get smoothing function from registry
         smooth_fn = get_smoothing_function(smoothing_method)
@@ -140,7 +140,7 @@ class HVSRProcessor:
         ...     smoothing_bandwidth=40,
         ...     smoothing_method='konno_ohmachi',
         ...     f_min=0.2,
-        ...     f_max=20.0
+        ...     f_max=30.0
         ... )
         >>> result = processor.process(windows)
         >>> print(f"Primary peak: {result.primary_peak.frequency:.2f} Hz")
@@ -150,11 +150,17 @@ class HVSRProcessor:
                  smoothing_bandwidth: float = 40,
                  smoothing_method: str = 'konno_ohmachi',
                  f_min: float = 0.2,
-                 f_max: float = 20.0,
-                 n_frequencies: int = 100,
+                 f_max: float = 30.0,
+                 n_frequencies: int = 300,
                  parallel: bool = False,
                  horizontal_method: str = 'geometric_mean',
-                 taper: Optional[str] = 'hann'):
+                 taper: Optional[str] = 'tukey',
+                 detrend: str = 'linear',
+                 statistics_method: str = 'lognormal',
+                 std_ddof: int = 1,
+                 min_prominence: float = 0.5,
+                 min_amplitude: float = 2.0,
+                 peak_basis: str = 'median'):
         """
         Initialize HVSR processor.
         
@@ -168,11 +174,22 @@ class HVSRProcessor:
                         'linear_rectangular', 'log_rectangular',
                         'linear_triangular', 'log_triangular', 'none'
             f_min: Minimum frequency in Hz (default: 0.2)
-            f_max: Maximum frequency in Hz (default: 20.0)
-            n_frequencies: Number of frequency points (default: 100)
+            f_max: Maximum frequency in Hz (default: 30.0)
+            n_frequencies: Number of frequency points (default: 300)
             parallel: Enable parallel processing for windows (default: False)
             horizontal_method: Method for combining horizontal components
-            taper: Taper window type ('hann', 'hamming', 'blackman', None)
+            taper: Taper window type ('hann', 'hamming', 'blackman', 'tukey', None)
+            detrend: Detrend method ('linear', 'mean', 'none'). Default 'linear'
+                uses scipy.signal.detrend for proper linear trend removal.
+            statistics_method: Method for computing HVSR statistics.
+                'lognormal' — lognormal median & percentiles (recommended)
+                'numpy'     — direct numpy median/percentile
+            std_ddof: Delta degrees of freedom for std (default: 1)
+            min_prominence: Minimum peak prominence for detection (default: 0.5)
+            min_amplitude: Minimum HVSR amplitude for peak detection (default: 2.0)
+            peak_basis: Curve used for peak detection.
+                'median' — detect on median HVSR (recommended)
+                'mean'   — detect on mean HVSR
         """
         self.smoothing_bandwidth = smoothing_bandwidth
         self.smoothing_method = smoothing_method.lower().replace(" ", "_").replace("-", "_")
@@ -182,6 +199,12 @@ class HVSRProcessor:
         self.parallel = parallel
         self.horizontal_method = horizontal_method
         self.taper = taper if taper else None
+        self.detrend = detrend
+        self.statistics_method = statistics_method
+        self.std_ddof = std_ddof
+        self.min_prominence = min_prominence
+        self.min_amplitude = min_amplitude
+        self.peak_basis = peak_basis
         self.use_only_active = True
         
         # Validate smoothing method
@@ -236,7 +259,7 @@ class HVSRProcessor:
             
             args_list = [
                 (window, self.target_frequencies, self.smoothing_bandwidth, 
-                 self.horizontal_method, self.taper, self.smoothing_method)
+                 self.horizontal_method, self.taper, self.smoothing_method, self.detrend)
                 for window in window_list
             ]
             
@@ -279,18 +302,37 @@ class HVSRProcessor:
         
         # Compute statistics
         mean_hvsr = np.mean(hvsr_array, axis=0)
-        median_hvsr = np.median(hvsr_array, axis=0)
-        std_hvsr = np.std(hvsr_array, axis=0)
-        percentile_16 = np.percentile(hvsr_array, 16, axis=0)
-        percentile_84 = np.percentile(hvsr_array, 84, axis=0)
+        std_hvsr = np.std(hvsr_array, axis=0, ddof=self.std_ddof)
+        
+        if self.statistics_method == 'lognormal':
+            # Lognormal statistics (matches old system)
+            from scipy.stats import lognorm
+            # Guard against zero/negative means
+            safe_mean = np.maximum(mean_hvsr, 1e-10)
+            safe_std = np.maximum(std_hvsr, 1e-10)
+            zeta = np.sqrt(np.log1p((safe_std ** 2) / (safe_mean ** 2)))
+            lam = np.log(safe_mean) - 0.5 * zeta ** 2
+            median_hvsr = lognorm.median(s=zeta, scale=np.exp(lam))
+            percentile_16, percentile_84 = (
+                lognorm.ppf(p, s=zeta, scale=np.exp(lam)) for p in (0.16, 0.84))
+        else:
+            # Direct numpy statistics
+            median_hvsr = np.median(hvsr_array, axis=0)
+            percentile_16 = np.percentile(hvsr_array, 16, axis=0)
+            percentile_84 = np.percentile(hvsr_array, 84, axis=0)
         
         logger.info(f"Computed HVSR statistics from {len(hvsr_curves)} valid windows")
         
         # Detect peaks
         peaks = []
         if detect_peaks_flag:
-            peaks = self._detect_peaks(self.target_frequencies, mean_hvsr)
-            logger.info(f"Detected {len(peaks)} peaks")
+            # Choose curve for peak detection based on peak_basis setting
+            if self.peak_basis == 'median':
+                peak_curve = median_hvsr
+            else:
+                peak_curve = mean_hvsr
+            peaks = self._detect_peaks(self.target_frequencies, peak_curve)
+            logger.info(f"Detected {len(peaks)} peaks (basis={self.peak_basis})")
             
             if peaks:
                 primary = peaks[0]
@@ -329,9 +371,9 @@ class HVSRProcessor:
             raise ValueError("Vertical component has no data")
         
         # Compute FFT for each component
-        freq_e, spec_e = compute_fft(window.data.east.data, sampling_rate, self.taper)
-        freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, self.taper)
-        freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, self.taper)
+        freq_e, spec_e = compute_fft(window.data.east.data, sampling_rate, self.taper, detrend=self.detrend)
+        freq_n, spec_n = compute_fft(window.data.north.data, sampling_rate, self.taper, detrend=self.detrend)
+        freq_z, spec_z = compute_fft(window.data.vertical.data, sampling_rate, self.taper, detrend=self.detrend)
         
         # Apply smoothing using the configured method
         smooth_e = self._smooth_fn(freq_e, spec_e, self.target_frequencies, self.smoothing_bandwidth)
@@ -362,15 +404,14 @@ class HVSRProcessor:
         )
     
     def _detect_peaks(self, frequencies: np.ndarray, hvsr: np.ndarray) -> List[Peak]:
-        """Detect and refine peaks."""
-        # Lazy import to avoid circular dependency
+        """Detect and refine peaks using configurable parameters."""
         from hvsr_pro.processing.windows.peaks import detect_peaks, refine_peak_frequency
         
         peaks = detect_peaks(
             frequencies,
             hvsr,
-            min_prominence=1.5,
-            min_amplitude=2.0,
+            min_prominence=self.min_prominence,
+            min_amplitude=self.min_amplitude,
             freq_range=(self.f_min, self.f_max)
         )
         
@@ -393,6 +434,12 @@ class HVSRProcessor:
             'n_frequencies': self.n_frequencies,
             'horizontal_method': self.horizontal_method,
             'taper': self.taper,
+            'detrend': self.detrend,
+            'statistics_method': self.statistics_method,
+            'std_ddof': self.std_ddof,
+            'min_prominence': self.min_prominence,
+            'min_amplitude': self.min_amplitude,
+            'peak_basis': self.peak_basis,
             'use_only_active': self.use_only_active
         }
     

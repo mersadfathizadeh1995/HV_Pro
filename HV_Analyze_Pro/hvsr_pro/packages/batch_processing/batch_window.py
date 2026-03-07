@@ -20,6 +20,7 @@ from PyQt5.QtGui import QFont
 from datetime import datetime
 import multiprocessing
 import os
+import numpy as np
 
 # Package-local imports
 from hvsr_pro.packages.batch_processing.dialogs.hvsr_settings import HVSRSettingsDialog
@@ -70,6 +71,7 @@ class BatchProcessingWindow(QMainWindow):
         self._manual_median_peaks = []
         self._time_windows_data = {'timezone': 'CST', 'windows': []}
         self._fig_export_settings = None
+        self._last_checked_ids = None  # Cache for selection change optimization
         
         # Build UI
         self._build_ui()
@@ -209,6 +211,11 @@ class BatchProcessingWindow(QMainWindow):
         if not hasattr(self, 'results_table'):
             return
         checked = self.results_table.get_checked_results()
+        checked_ids = frozenset(
+            (sr.topic, sr.station_name) for sr in checked)
+        if checked_ids == self._last_checked_ids:
+            return
+        self._last_checked_ids = checked_ids
         self.results_canvas.replot_grand_median(checked)
         if hasattr(self, 'results_histogram'):
             self.results_histogram.refresh(checked)
@@ -242,6 +249,7 @@ class BatchProcessingWindow(QMainWindow):
 
         try:
             import csv as csv_mod
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             curves_dir = os.path.join(report_dir, "curves")
             hist_dir = os.path.join(report_dir, "histogram")
@@ -250,7 +258,8 @@ class BatchProcessingWindow(QMainWindow):
             for d in (curves_dir, hist_dir, table_dir, median_dir):
                 os.makedirs(d, exist_ok=True)
 
-            # Table export
+            # Table export (fast, sequential)
+            self.progress_label.setText("Exporting table...")
             csv_path = os.path.join(table_dir, "HVSR_Results_Table.csv")
             with open(csv_path, 'w', newline='') as f:
                 writer = csv_mod.writer(f)
@@ -269,32 +278,60 @@ class BatchProcessingWindow(QMainWindow):
                     writer.writerow(row)
             self._log(f"  table/  -> {csv_path}")
 
-            # Canvas figure export
+            # Qt-embedded figure saves (must be on main thread)
+            self.progress_label.setText("Saving canvas snapshots...")
             fig_path = os.path.join(curves_dir, "HVSR_AllMedians.png")
             self.results_canvas.fig.savefig(fig_path, dpi=300, bbox_inches='tight')
             self._log(f"  curves/ -> {fig_path}")
-
-            report_export.export_enhanced_curve(curves_dir, checked, fig_settings)
-            self._log("  curves/ -> enhanced publication figure")
-
             hist_path = os.path.join(hist_dir, "HVSR_F0_Histogram.png")
             self.results_histogram.fig.savefig(hist_path, dpi=300, bbox_inches='tight')
             self._log(f"  histogram/ -> {hist_path}")
 
-            report_export.export_enhanced_histogram(hist_dir, checked, fig_settings)
-            report_export.export_median_data(median_dir, checked, log_fn=self._log)
-
+            # Parallel export of independent operations
+            self.progress_label.setText("Generating publication figures & data...")
             n_peaks = self.hvsr_settings.get('auto_npeaks', 3)
             manual_pks = self._manual_median_peaks
             json_hvsr_path = os.path.join(median_dir, "HVSR_Median_Result.json")
-            report_export.export_median_json_hvsr_format(
-                json_hvsr_path, checked,
-                n_peaks=n_peaks,
-                hvsr_settings=self.hvsr_settings,
-                manual_peaks=manual_pks or None,
-                log_fn=self._log,
-            )
 
+            def _export_curve():
+                report_export.export_enhanced_curve(
+                    curves_dir, checked, fig_settings)
+                return "curves/ -> enhanced publication figure"
+
+            def _export_histogram():
+                report_export.export_enhanced_histogram(
+                    hist_dir, checked, fig_settings)
+                return "histogram/ -> enhanced publication figure"
+
+            def _export_median():
+                report_export.export_median_data(
+                    median_dir, checked, log_fn=self._log)
+                return "median/ -> Excel + CSV + JSON + MAT"
+
+            def _export_json():
+                report_export.export_median_json_hvsr_format(
+                    json_hvsr_path, checked,
+                    n_peaks=n_peaks,
+                    hvsr_settings=self.hvsr_settings,
+                    manual_peaks=manual_pks or None,
+                    log_fn=self._log)
+                return "median/ -> HVSR_Median_Result.json"
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = {
+                    pool.submit(_export_curve): "enhanced_curve",
+                    pool.submit(_export_histogram): "enhanced_hist",
+                    pool.submit(_export_median): "median_data",
+                    pool.submit(_export_json): "json_hvsr",
+                }
+                for future in as_completed(futures):
+                    try:
+                        msg = future.result()
+                        self._log(f"  {msg}")
+                    except Exception as ex:
+                        self._log(f"  Warning: {futures[future]} failed: {ex}")
+
+            self.progress_label.setText("Report generation complete")
             QMessageBox.information(self, "Report Generated",
                 f"Report exported to:\n{report_dir}\n\n"
                 f"Stations included: {len(checked)}")
@@ -617,13 +654,24 @@ class BatchProcessingWindow(QMainWindow):
             'smoothing_method': self.hvsr_settings.get('smoothing_method', 'konno_ohmachi'),
             'freq_min': self.hvsr_settings.get('freq_min', 0.2),
             'freq_max': self.hvsr_settings.get('freq_max', 30.0),
-            'n_frequencies': self.hvsr_settings.get('n_frequencies', 200),
+            'n_frequencies': self.hvsr_settings.get('n_frequencies', 300),
             'horizontal_method': self.hvsr_settings.get('horizontal_method', 'geometric_mean'),
             'taper': self.hvsr_settings.get('taper', 'tukey'),
+            'detrend': self.hvsr_settings.get('detrend', 'linear'),
+            'statistics_method': self.hvsr_settings.get('statistics_method', 'lognormal'),
+            'std_ddof': self.hvsr_settings.get('std_ddof', 1),
+            'min_prominence': self.hvsr_settings.get('min_prominence', 0.5),
+            'min_amplitude': self.hvsr_settings.get('min_amplitude', 2.0),
+            'peak_basis': self.hvsr_settings.get('peak_basis', 'median'),
+            'auto_npeaks': self.hvsr_settings.get('auto_npeaks', 3),
             'qc_settings': qc_settings,
             'save_png': self.hvsr_settings.get('save_png', True),
             'save_pdf': self.hvsr_settings.get('save_pdf', False),
             'auto_fig_dpi': self.hvsr_settings.get('auto_fig_dpi', 300),
+            'auto_fig_standard': self.hvsr_settings.get('auto_fig_standard', True),
+            'auto_fig_hvsr_pro': self.hvsr_settings.get('auto_fig_hvsr_pro', True),
+            'auto_fig_statistics': self.hvsr_settings.get('auto_fig_statistics', True),
+            'figure_export_config': self.hvsr_settings.get('figure_export_config', {}),
         }
 
         self._log(f"Starting HVSR processing for {len(tasks)} tasks...")
@@ -674,10 +722,14 @@ class BatchProcessingWindow(QMainWindow):
         self._log(message)
         self.progress_label.setText(message)
 
-        if success and PROCESSING_AVAILABLE:
-            self._run_automatic_analysis()
-        elif success:
-            QMessageBox.information(self, "Complete", message)
+        if success:
+            auto_mode = self.hvsr_settings.get('auto_mode', False)
+            if not auto_mode and self.hvsr_worker and self.hvsr_worker.station_results:
+                self._run_interactive_peak_picking()
+            elif PROCESSING_AVAILABLE:
+                self._run_automatic_analysis()
+            else:
+                QMessageBox.information(self, "Complete", message)
         else:
             QMessageBox.warning(self, "Status", message)
 
@@ -699,15 +751,25 @@ class BatchProcessingWindow(QMainWindow):
 
         self._log("Loading results and detecting peaks...")
         try:
+            self.progress_label.setText("Loading HVSR results...")
+            self.progress_bar.setValue(50)
+
             station_results = results_handler.load_hvsr_results(
                 self.processed_results, self.hvsr_settings, log_fn=self._log)
 
             if not station_results:
                 self._log("No results found")
+                self.progress_bar.setValue(0)
                 return
+
+            self.progress_label.setText("Running peak detection...")
+            self.progress_bar.setValue(70)
 
             result = results_handler.run_analysis(
                 station_results, self.hvsr_settings, log_fn=self._log)
+
+            self.progress_label.setText("Populating results tab...")
+            self.progress_bar.setValue(90)
 
             if auto_mode:
                 results_handler.display_peak_statistics(
@@ -717,6 +779,21 @@ class BatchProcessingWindow(QMainWindow):
                     results_handler.export_automatic_results(
                         result, output_dir, self.hvsr_settings,
                         log_fn=self._log)
+                    # Auto-export enhanced figures
+                    try:
+                        checked = result.station_results
+                        report_dir = os.path.join(output_dir, "Report")
+                        curves_dir = os.path.join(report_dir, "curves")
+                        hist_dir = os.path.join(report_dir, "histogram")
+                        os.makedirs(curves_dir, exist_ok=True)
+                        os.makedirs(hist_dir, exist_ok=True)
+                        report_export.export_enhanced_curve(
+                            curves_dir, checked, log_fn=self._log)
+                        report_export.export_enhanced_histogram(
+                            hist_dir, checked, log_fn=self._log)
+                        self._log("Auto-export: enhanced figures saved")
+                    except Exception as fig_err:
+                        self._log(f"Auto-export figures warning: {fig_err}")
 
             self._populate_results_tab(result)
 
@@ -735,6 +812,118 @@ class BatchProcessingWindow(QMainWindow):
         except Exception as e:
             import traceback
             self._log(f"Analysis error: {e}\n{traceback.format_exc()}")
+
+    def _run_interactive_peak_picking(self):
+        """Open interactive peak-picking dialog for each station."""
+        from hvsr_pro.packages.batch_processing.dialogs.interactive_peak_dialog import (
+            InteractivePeakDialog)
+
+        station_results = self.hvsr_worker.station_results
+        self._log(f"Interactive mode: {len(station_results)} stations to review")
+
+        for i, sdata in enumerate(station_results):
+            fig_label = sdata['fig_label']
+            self._log(f"\n--- Interactive: {fig_label} ({i+1}/{len(station_results)}) ---")
+            self.progress_label.setText(
+                f"Interactive: {fig_label} ({i+1}/{len(station_results)})")
+
+            rs = sdata['rs']
+            dialog = InteractivePeakDialog(
+                freq_ref=sdata['freq_rs'],
+                combined_hv=sdata['combined_hv'],
+                rejected_mask=sdata['rejected_mask'],
+                hv_median=rs['median_hvsr'],
+                hv_mean=rs['mean_hvsr'],
+                hv_std=rs['std_hvsr'],
+                fig_label=fig_label,
+                settings=self.hvsr_settings,
+                parent=self,
+            )
+
+            if dialog.exec_() == QDialog.Accepted:
+                picked_peaks = dialog.get_peaks()
+                if picked_peaks:
+                    self._log(f"  Accepted {len(picked_peaks)} peaks for {fig_label}")
+                    # Update result with user-picked peaks and regenerate figures
+                    self._apply_interactive_peaks(sdata, picked_peaks)
+                else:
+                    self._log(f"  No peaks selected for {fig_label}")
+            else:
+                self._log(f"  Skipped {fig_label}")
+
+        self.progress_label.setText("Interactive peak picking complete")
+        self._log("Interactive peak picking complete for all stations")
+        if PROCESSING_AVAILABLE:
+            self._run_automatic_analysis()
+
+    def _apply_interactive_peaks(self, sdata, picked_peaks):
+        """Apply user-picked peaks and regenerate figures for a station."""
+        from hvsr_pro.processing.hvsr.structures import Peak
+        from hvsr_pro.packages.batch_processing.figure_gen import generate_hvsr_figures
+
+        result = sdata['result']
+        rs = sdata['rs']
+        freq_rs = sdata['freq_rs']
+        fig_label = sdata['fig_label']
+        out_dir = sdata['out_dir']
+
+        # Convert picked peaks to Peak objects
+        new_peaks = []
+        for freq, amp in picked_peaks:
+            new_peaks.append(Peak(frequency=freq, amplitude=amp, prominence=0.0))
+
+        # Update result peaks
+        result.peaks = new_peaks
+
+        # Save updated peaks to disk so load_hvsr_results can find them
+        try:
+            json_path = os.path.join(out_dir, f"HVSR_{fig_label}_result.json")
+            if os.path.exists(json_path):
+                result.save(json_path)
+                self._log(f"  Saved updated peaks to {json_path}")
+        except Exception as e:
+            self._log(f"  Warning: could not save peaks to disk: {e}")
+
+        # Regenerate figures with user-picked peaks
+        combined_hv = sdata['combined_hv']
+        rejected_mask = sdata['rejected_mask']
+        accepted_indices = [i for i in range(combined_hv.shape[1])
+                           if not rejected_mask[i]]
+
+        hv_mean = rs['mean_hvsr']
+        hv_std = rs['std_hvsr']
+
+        try:
+            n_saved = generate_hvsr_figures(
+                hvsr_result_obj=result,
+                window_collection=sdata['windows'],
+                seismic_data=sdata['data'],
+                peaks=new_peaks,
+                freq_ref=freq_rs,
+                hv_mean=hv_mean,
+                hv_std=hv_std,
+                hv_mean_plus_std=hv_mean + hv_std,
+                hv_mean_minus_std=np.maximum(hv_mean - hv_std, 0),
+                hv_16=rs['percentile_16'],
+                hv_84=rs['percentile_84'],
+                combined_hv=combined_hv,
+                rejected_mask=rejected_mask,
+                accepted_indices=accepted_indices,
+                n_windows=combined_hv.shape[1],
+                output_dir=out_dir,
+                fig_label=fig_label,
+                fig_title=f'HVSR - {fig_label}',
+                fig_config=self.hvsr_settings.get('figure_export_config', {}),
+                fig_standard=self.hvsr_settings.get('auto_fig_standard', True),
+                fig_hvsr_pro=self.hvsr_settings.get('auto_fig_hvsr_pro', True),
+                fig_statistics=self.hvsr_settings.get('auto_fig_statistics', True),
+                save_png=self.hvsr_settings.get('save_png', True),
+                save_pdf=self.hvsr_settings.get('save_pdf', False),
+                dpi=self.hvsr_settings.get('auto_fig_dpi', 300),
+            )
+            self._log(f"  Regenerated {n_saved} figures with user-picked peaks")
+        except Exception as e:
+            self._log(f"  Figure regeneration failed: {e}")
 
     def _cancel_workflow(self):
         if self.data_worker and self.data_worker.isRunning():

@@ -81,9 +81,34 @@ class HVSRSettingsDialog(QDialog):
 
         freq_layout.addWidget(QLabel("Taper:"), 3, 2)
         self.taper = QComboBox()
-        self.taper.addItems(["hann", "hamming", "blackman", "tukey", "none"])
+        self.taper.addItems(["tukey", "hann", "hamming", "blackman", "none"])
         self.taper.setToolTip("Taper window applied to each time segment")
         freq_layout.addWidget(self.taper, 3, 3)
+
+        freq_layout.addWidget(QLabel("Detrend:"), 4, 0)
+        self.detrend = QComboBox()
+        self.detrend.addItems(["linear", "mean", "none"])
+        self.detrend.setToolTip(
+            "Detrend method applied before FFT.\n"
+            "'linear' removes linear trend (recommended),\n"
+            "'mean' subtracts the mean, 'none' skips detrending.")
+        freq_layout.addWidget(self.detrend, 4, 1)
+
+        freq_layout.addWidget(QLabel("Statistics:"), 4, 2)
+        self.statistics_method = QComboBox()
+        self.statistics_method.addItems(["lognormal", "numpy"])
+        self.statistics_method.setToolTip(
+            "Method for computing median and percentiles.\n"
+            "'lognormal' uses lognormal distribution (recommended),\n"
+            "'numpy' uses direct numpy median/percentile.")
+        freq_layout.addWidget(self.statistics_method, 4, 3)
+
+        freq_layout.addWidget(QLabel("Std ddof:"), 5, 0)
+        self.std_ddof = QSpinBox()
+        self.std_ddof.setRange(0, 1)
+        self.std_ddof.setValue(1)
+        self.std_ddof.setToolTip("Delta degrees of freedom for std deviation (0 or 1)")
+        freq_layout.addWidget(self.std_ddof, 5, 1)
 
         layout.addWidget(freq_group)
 
@@ -385,8 +410,11 @@ class HVSRSettingsDialog(QDialog):
         self.smoothing_bw.setValue(40)
         self.window_length.setValue(120)
         self.averaging.setCurrentText("geo")
-        self.n_frequencies.setValue(100)
-        self.taper.setCurrentText("hann")
+        self.n_frequencies.setValue(300)
+        self.taper.setCurrentText("tukey")
+        self.detrend.setCurrentText("linear")
+        self.statistics_method.setCurrentText("lognormal")
+        self.std_ddof.setValue(1)
         self.peak_font.setValue(10)
         self.start_skip.setValue(0)
         self.process_len.setValue(20)
@@ -431,6 +459,9 @@ class HVSRSettingsDialog(QDialog):
             'averaging': self.averaging.currentText(),
             'n_frequencies': self.n_frequencies.value(),
             'taper': self.taper.currentText(),
+            'detrend': self.detrend.currentText(),
+            'statistics_method': self.statistics_method.currentText(),
+            'std_ddof': self.std_ddof.value(),
             'peak_font': self.peak_font.value(),
             'start_skip': self.start_skip.value(),
             'process_len': self.process_len.value(),
@@ -484,6 +515,12 @@ class HVSRSettingsDialog(QDialog):
             self.n_frequencies.setValue(settings['n_frequencies'])
         if 'taper' in settings:
             self.taper.setCurrentText(settings['taper'])
+        if 'detrend' in settings:
+            self.detrend.setCurrentText(settings['detrend'])
+        if 'statistics_method' in settings:
+            self.statistics_method.setCurrentText(settings['statistics_method'])
+        if 'std_ddof' in settings:
+            self.std_ddof.setValue(settings['std_ddof'])
         if 'peak_font' in settings:
             self.peak_font.setValue(settings['peak_font'])
         if 'start_skip' in settings:

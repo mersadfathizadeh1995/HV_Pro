@@ -17,14 +17,19 @@ from scipy.fft import rfft, rfftfreq
 
 
 def compute_fft(data: np.ndarray, sampling_rate: float, 
-                taper: Optional[str] = 'hann') -> Tuple[np.ndarray, np.ndarray]:
+                taper: Optional[str] = 'hann',
+                detrend: str = 'linear') -> Tuple[np.ndarray, np.ndarray]:
     """
-    Compute FFT with optional tapering.
+    Compute FFT with optional tapering and detrending.
     
     Args:
         data: Time series data
         sampling_rate: Sampling rate in Hz
         taper: Taper window ('hann', 'hamming', 'blackman', 'tukey', None)
+        detrend: Detrend method before FFT.
+            'linear' — remove linear trend via scipy.signal.detrend (recommended)
+            'mean'   — subtract the mean only
+            'none'   — no detrending
         
     Returns:
         frequencies: Frequency array (Hz)
@@ -42,8 +47,12 @@ def compute_fft(data: np.ndarray, sampling_rate: float,
     
     n = len(data)
     
-    # Remove mean
-    data = data - np.mean(data)
+    # Detrend
+    if detrend == 'linear':
+        data = scipy_signal.detrend(data)
+    elif detrend == 'mean':
+        data = data - np.mean(data)
+    # 'none' — skip detrending
     
     # Apply taper
     if taper:
@@ -54,7 +63,7 @@ def compute_fft(data: np.ndarray, sampling_rate: float,
         elif taper == 'blackman':
             window = np.blackman(n)
         elif taper == 'tukey':
-            window = scipy_signal.windows.tukey(n, alpha=0.1)
+            window = scipy_signal.windows.tukey(n, alpha=0.05)
         else:
             raise ValueError(f"Unknown taper: {taper}. Use 'hann', 'hamming', 'blackman', 'tukey', or None.")
         data = data * window

@@ -11,7 +11,8 @@ REM Check if the local virtual environment exists
 if not exist ".venv\Scripts\python.exe" (
     echo ERROR: Virtual environment not found!
     echo.
-    echo Please run install.bat first to set up the environment.
+    echo Please run:  python -m venv .venv
+    echo Then run:    .venv\Scripts\pip install -r requirements.txt
     echo.
     pause
     exit /b 1
@@ -19,12 +20,15 @@ if not exist ".venv\Scripts\python.exe" (
 
 echo Starting HVSR Pro...
 echo Working directory: %CD%
-echo Using Python: %CD%\.venv\Scripts\python.exe
 echo.
 
 REM Run the GUI launcher using the local venv Python
 .venv\Scripts\python.exe -X faulthandler launch_gui.py
 
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Application exited with error code %ERRORLEVEL%
+)
 echo.
 echo ========================================
 echo    Application closed

@@ -1,9 +1,39 @@
 # HVSR Pro - Required Dependencies
 # Install with: pip install -r requirements.txt
 
+# --- Build / packaging ---
 setuptools>=75.0.0,<82
+
+# --- Core scientific stack ---
 numpy==2.2.4
 scipy==1.15.2
 matplotlib==3.10.1
-PyQt5==5.15.11
+pandas>=2.2,<3
+openpyxl>=3.1            # Excel read/write (pandas optional dep)
+
+# --- Seismology ---
 obspy==1.4.2
+
+# --- GUI framework ---
+PyQt5==5.15.11
+PyQtWebEngine>=5.15      # QWebEngineView for interactive maps
+
+# --- Interactive maps ---
+folium>=0.17             # Generates Leaflet HTML maps
+branca>=0.7              # Folium colormap backend (auto-dep)
+plotly>=5.18             # Interactive 3D plots
+
+# --- Geospatial / coordinate transforms ---
+pyproj>=3.6              # CRS conversions (UTM ↔ WGS84)
+
+# --- Machine learning (batch QC) ---
+scikit-learn>=1.4        # Window clustering / classification
+
+# --- Optional but recommended (3D Bedrock Mapping) ---
+pykrige>=1.7             # Kriging interpolation methods
+shapely>=2.0             # Boundary geometry operations
+pyvista>=0.43            # 3D mesh visualization & export
+Pillow>=10.0             # Contour image generation
+
+# --- Testing ---
+pytest>=8.0
