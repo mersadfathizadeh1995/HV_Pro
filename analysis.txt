@@ -1,0 +1,792 @@
+# COMPLETE SIGNAL FLOW ANALYSIS - BedrockMapping State/Settings System
+
+## CRITICAL BUGS IDENTIFIED
+
+### BUG #1: DEEP COPY ISSUE IN GLOBAL SETTINGS (SCENARIO A)
+**File**: global_settings.py, lines 57, 429
+
+In __init__:
+`python
+self._contour_copy: Dict[str, Dict] = deepcopy(state.contour_layer_configs)
+`
+
+In _write_to_state (line 429):
+`python
+s.contour_layer_configs = deepcopy(self._contour_copy)
+`
+
+**THE PROBLEM**: 
+- _contour_copy is a deepcopy of state.contour_layer_configs
+- When _save_current_contour() runs (lines 352-370), it calls:
+  `python
+  self._contour_copy[key] = {...}
+  `
+  This CREATES A NEW DICT - it doesn't update the old one via reference
+- Each time a user changes ANY contour control, a new dict is created in _contour_copy
+- BUT _load_from_state only runs ONCE in __init__ (line 62)
+- So if the user opens Global Settings, then changes opacity in Display Settings panel, 
+  THEN opens Global Settings again, the dialog won't see the changes from the panel!
+
+**Timeline**:
+1. User opens Global Settings → _load_from_state() → _contour_copy = deepcopy(state)
+2. User changes opacity to 0.5 in Display Settings PANEL
+3. state.contour_layer_configs['surface']['opacity'] = 0.5
+4. state.display_settings_changed.emit()
+5. User opens Global Settings again
+6. _load_from_state() is NOT called again! (it only runs in __init__)
+7. _contour_copy still has old value (0.7)
+8. Dialog shows stale opacity value
+
+**VERIFICATION**: Line 292-310 in global_settings.py:
+- _load_from_state() is called only in __init__, never after dialog re-opens
+- No refresh mechanism exists for when dialog is shown again
+
+---
+
+### BUG #2: LAYER PANEL WRITES TO WRONG REFERENCE (SCENARIO B) 
+**File**: layer_panel.py, lines 340-351
+
+`python
+def _on_disp_changed(self, *_):
+    if self._disp_loading:
+        return
+    key = self.disp_layer.currentData()
+    cfg = self.state.contour_layer_configs.get(key, {})  # GET REFERENCE
+    cfg['opacity'] = self.opacity_slider.value() / 100.0   # MODIFY IT
+    cfg['levels'] = self.levels_spin.value()
+    cfg['colorscale'] = self.cs_combo.currentText()
+    self.opacity_label.setText(f"{self.opacity_slider.value()}%")
+    self.state.display_settings_changed.emit()
+    self.state.map_needs_refresh.emit()
+`
+
+**THE PROBLEM**:
+- Line 345: cfg = self.state.contour_layer_configs.get(key, {}) gets a REFERENCE to the nested dict
+- BUT if the key doesn't exist, .get(key, {}) returns an EMPTY DICT created inline
+- If the key DOES exist, it gets the reference but then OVERWRITES it each time (lines 346-348)
+- The code does: cfg['opacity'] = ... which modifies the dict in place
+- BUT look at what happens NEXT:
+  
+  In global_settings.py line 429:
+  `python
+  s.contour_layer_configs = deepcopy(self._contour_copy)
+  `
+  
+  This REPLACES the entire contour_layer_configs dict with a new one!
+  
+  So the reference that layer_panel was holding is now STALE
+
+**Timeline for Scenario B**:
+1. Layer panel changes opacity slider → _on_disp_changed() called
+2. Gets reference: cfg = self.state.contour_layer_configs['surface']
+3. Modifies reference: cfg['opacity'] = 0.5
+4. Emits: state.display_settings_changed.emit()
+5. Map/2D/3D views see signal and call render() → they call get_contour_config('surface')
+6. get_contour_config gets the UPDATED value (0.5) ✓ This works!
+7. BUT if user then opens Global Settings and changes a different property (e.g., levels):
+8. Global Settings calls: s.contour_layer_configs = deepcopy(self._contour_copy)
+9. This REPLACES the ENTIRE dict with the one from _contour_copy
+10. All the opacity=0.5 changes from the panel are NOW LOST because the dict was replaced!
+
+**The actual problem**: 
+- When Global Settings does: s.contour_layer_configs = deepcopy(...)
+- This BREAKS any reference that was previously held
+- The views then call get_contour_config() which gets a REFERENCE to the nested dict
+- But if global_settings replaced the parent dict, the old reference is invalidated
+
+**VERIFICATION**:
+- state.py lines 198-207: get_contour_config() returns the dict from contour_layer_configs
+  `python
+  def get_contour_config(self, layer_key: str) -> Dict:
+      cfg = self.contour_layer_configs.get(layer_key, {})
+      return {**defaults, **cfg}  # Merges with defaults
+  `
+- layer_panel.py line 345 does: cfg = self.state.contour_layer_configs.get(key, {})
+- Both are getting references to nested dicts
+
+---
+
+### BUG #3: NO REFRESH OF LAYER PANEL WHEN GLOBAL SETTINGS CLOSES
+**File**: global_settings.py (no connection), layer_panel.py line 193
+
+Layer panel connects to display_settings_changed (line 193):
+`python
+self.state.display_settings_changed.connect(self._refresh_disp_widgets)
+`
+
+BUT:
+- global_settings.py DOES emit display_settings_changed (line 436)
+- HOWEVER, _refresh_disp_widgets() (layer_panel.py lines 353-355) calls _load_disp_layer()
+- _load_disp_layer() reads from state and updates UI widgets
+- BUT it doesn't BLOCK SIGNALS while updating
+- So when layer panel's widgets change, it triggers _on_disp_changed() AGAIN
+- And _on_disp_changed() emits display_settings_changed AGAIN
+- This could cause cascading updates!
+
+**Check layer_panel.py _refresh_disp_widgets**:
+`python
+def _refresh_disp_widgets(self):
+    """Re-load display widgets when state changes externally."""
+    self._load_disp_layer()
+
+def _load_disp_layer(self, _idx=0):
+    """Load display settings for the selected contour layer."""
+    self._disp_loading = True  # Guard set
+    key = self.disp_layer.currentData()
+    cfg = self.state.get_contour_config(key)
+    self.opacity_slider.setValue(int(cfg['opacity'] * 100))  # Triggers valueChanged!
+    ...
+    self._disp_loading = False
+`
+
+- Line 331 sets _disp_loading = True BEFORE changing widgets
+- Line 334 changes slider (will trigger valueChanged signal)
+- Line 342 sets _disp_loading = False
+- **BUT**: The valueChanged signal will call _on_disp_changed()
+- _on_disp_changed() checks if self._disp_loading: return (line 342)
+- So the guard SHOULD work... but the guard is checked AFTER the signal is emitted
+- Actually, looking at PyQt: when you call setValue(), it emits the signal immediately
+- The guard IS in place, so this shouldn't cascade
+
+**However**, there's still an issue:
+- If global_settings changes multiple settings, display_settings_changed is emitted ONCE
+- But the layer panel reads ALL settings when refreshed
+- If the user had manually edited a setting in the panel that global_settings didn't change...
+- It will be OVERWRITTEN by the refresh!
+
+Example:
+1. User sets opacity=0.5 in panel, levels=20
+2. User opens Global Settings, changes ONLY colorscale
+3. Global Settings calls _write_to_state() which does:
+   s.contour_layer_configs = deepcopy(self._contour_copy)
+4. But _contour_copy was loaded from state in __init__, which had opacity=0.7, levels=15!
+5. So the panel's changes (opacity=0.5) are LOST!
+
+This is the BUG: **Global Settings doesn't merge its changes with existing state, it REPLACES the entire dict**
+
+---
+
+### BUG #4: RENDER METHODS READ STALE STATE (SCENARIO A & B)
+
+**File**: 
+- map_widget.py: refresh() method at line 425+ (not shown but called by debounce)
+- view_2d.py: render() method at line 498+
+- view_3d_plotly.py: render() method at line 363
+
+**The issue**:
+All three refresh methods read from state INSIDE the render call:
+`python
+# view_2d.py line 177:
+cfg_s = self.state.get_contour_config('surface')
+
+# view_3d_plotly.py line 437:
+cfg_d = s.get_contour_config('depth')
+
+# map_widget.py ~line 300+:
+self.state.get_contour_config('surface')['colorscale']
+`
+
+This SHOULD work correctly UNLESS:
+1. State wasn't actually updated (Bug #1)
+2. OR the state reference was invalidated (Bug #3)
+3. OR the render call happens before display_settings_changed is emitted
+
+**Check signal connections**:
+- map_widget.py line 81: self.state.display_settings_changed.connect(self._schedule_refresh)
+- view_2d.py line 93: self.state.display_settings_changed.connect(self._schedule_render)
+- view_3d_plotly.py line 354: s.display_settings_changed.connect(self._schedule)
+
+All three connect to display_settings_changed ✓
+
+But see map_widget.py line 83-85:
+`python
+def _schedule_refresh(self, *_args):
+    """Debounced refresh — 300ms delay to batch rapid changes."""
+    self._debounce.start()
+`
+
+**THERE'S A 300ms DELAY!**
+
+Timeline:
+1. User changes opacity in layer panel
+2. _on_disp_changed() runs, sets value in state, emits display_settings_changed
+3. map_widget._schedule_refresh() starts a 300ms debounce timer
+4. User immediately opens Global Settings before timer fires
+5. Global Settings dialog reads from state (which has the new opacity) ✓
+6. User changes opacity in Global Settings
+7. _save_current_contour() updates _contour_copy ✓
+8. User clicks OK
+9. _write_to_state() runs: s.contour_layer_configs = deepcopy(self._contour_copy)
+10. display_settings_changed.emit()
+11. map_widget._schedule_refresh() starts a NEW 300ms timer
+12. BUT in parallel, the old timer might STILL be running!
+13. When old timer fires, refresh() reads state and renders with OLD opacity
+14. Then new timer fires, refresh() reads state and renders with NEW opacity
+15. So you see TWO renders, but the first one is with stale data!
+
+**WORSE**: If the user has NOT touched the Global Settings dialog:
+1. Panel changes opacity=0.5
+2. display_settings_changed emitted
+3. map_widget starts 300ms debounce
+4. Panel changes opacity again (before timer fires)
+5. display_settings_changed emitted AGAIN
+6. Debounce is reset to 300ms again
+7. Finally, one render happens with latest state ✓
+
+So the debounce DOES help batch changes, but it means views might have stale state for up to 300ms!
+
+---
+
+## COMPLETE SIGNAL FLOW TRACES
+
+### SCENARIO A: User changes Global Settings and clicks OK
+
+**Step 1-2: User modifies UI controls**
+- User changes opacity slider in Global Settings dialog
+- QPy emits: opacity_spin.valueChanged.connect(self._save_current_contour) 
+- Line 206: _save_current_contour() called
+
+**Step 3: _save_current_contour() updates _contour_copy**
+- Lines 352-370:
+  `python
+  def _save_current_contour(self, *_):
+      if self._loading:  # Guard during load
+          return
+      key = self._current_contour_key()  # Get 'surface' or 'bedrock' or 'depth'
+      mode_keys = {0: 'count', 1: 'fixed', 2: 'nice'}
+      self._contour_copy[key] = {  # <-- NEW DICT CREATED, overwrites old one
+          'colorscale': self.cs_combo.currentText(),
+          'opacity': self.opacity_spin.value(),
+          ...
+      }
+  `
+- Note: Each field is read from the UI widget
+- _contour_copy[key] is REPLACED with a new dict
+
+**Step 4: No signal emitted yet**
+- _save_current_contour() does NOT emit any signal
+- Changes are ONLY in _contour_copy, NOT in state
+- Views do NOT refresh
+
+**Step 5: User clicks OK button**
+- Dialog button box emits: tns.accepted signal
+- Line 83: tns.accepted.connect(self._on_ok)
+
+**Step 6: _on_ok() calls _write_to_state()**
+- Line 442-444:
+  `python
+  def _on_ok(self):
+      self._write_to_state()
+      self.accept()
+  `
+
+**Step 7: _write_to_state() updates state**
+- Lines 422-437:
+  `python
+  def _write_to_state(self):
+      s = self.state
+      # General
+      s.unit_system = ...
+      s.point_size = ...
+      # ← BUG: No merge, just replace
+      s.contour_layer_configs = deepcopy(self._contour_copy)  # LINE 429
+      # 3D
+      s.show_contour_lines_3d = ...
+      # Legend
+      s.combine_legends = ...
+      s.layer_legend_configs = deepcopy(self._legend_copy)
+      # ← Signals emitted
+      s.display_settings_changed.emit()  # LINE 436
+      s.map_needs_refresh.emit()  # LINE 437
+  `
+
+**BUG TRIGGER**:
+- _contour_copy was initialized from state.contour_layer_configs in __init__
+- BUT it was NEVER updated if user changed display settings via panel
+- If user changed opacity in panel to 0.5, then opens Global Settings, _contour_copy still has 0.7
+- Then _load_from_state() is called (line 301) for the FIRST layer:
+  `python
+  self._load_contour_layer(0)
+  `
+- This reads from _contour_copy, which has STALE data
+- Dialog shows 0.7 opacity (not the 0.5 from panel!)
+- User thinks "the panel didn't work" and changes it again to 0.5
+- Clicks OK
+- Now _contour_copy has 0.5 written to it
+- _write_to_state() overwrites state.contour_layer_configs
+
+**Step 8: Signals emitted**
+- Line 436: s.display_settings_changed.emit()
+- Line 437: s.map_needs_refresh.emit()
+
+**Step 9: Map widget receives signal**
+- map_widget.py line 81: self.state.display_settings_changed.connect(self._schedule_refresh)
+- _schedule_refresh() called (line 83):
+  `python
+  def _schedule_refresh(self, *_args):
+      self._debounce.start()  # 300ms delay
+  `
+
+**Step 10: 300ms later, debounce timer fires**
+- Line 71: self._debounce.timeout.connect(self.refresh)
+- refresh() method called
+
+**Step 11: refresh() method reads state and re-renders**
+- map_widget.py ~line 425+ (not fully shown):
+  `python
+  def refresh(self):
+      self._build_folium_map()
+      # which calls:
+      self.state.get_contour_config('surface')['colorscale']
+      self.state.get_contour_config('surface')['opacity']
+      self.state.get_contour_config('depth')
+      ...
+  `
+- These calls read the UPDATED values from state ✓
+
+**Step 12: Similar for 2D and 3D views**
+- view_2d.py line 93 connects display_settings_changed → _schedule_render
+- view_2d.py line 498: render() calls get_contour_config()
+- view_3d_plotly.py line 354 connects display_settings_changed → _schedule
+- view_3d_plotly.py line 363: render() → _build_html() reads state
+
+**RESULT**: 
+- If user ONLY changed Global Settings: ✓ Works correctly
+- If user changed panel THEN Global Settings: ⚠️ Dialog shows stale values
+- If user changed panel, Global Settings, then panel again: ⚠️ Lost the first panel change
+
+---
+
+### SCENARIO B: User changes opacity in Display Settings panel
+
+**Step 1: User moves opacity slider**
+- layer_panel.py line 163:
+  `python
+  self.opacity_slider.valueChanged.connect(self._on_disp_changed)
+  `
+- _on_disp_changed() called (line 340)
+
+**Step 2: _on_disp_changed() reads current layer and updates state**
+- Lines 340-351:
+  `python
+  def _on_disp_changed(self, *_):
+      if self._disp_loading:  # Guard
+          return
+      key = self.disp_layer.currentData()  # 'surface' / 'bedrock' / 'depth'
+      cfg = self.state.contour_layer_configs.get(key, {})  # GET REFERENCE
+      cfg['opacity'] = self.opacity_slider.value() / 100.0  # MODIFY IN PLACE
+      cfg['levels'] = self.levels_spin.value()
+      cfg['colorscale'] = self.cs_combo.currentText()
+      self.opacity_label.setText(...)
+      self.state.display_settings_changed.emit()  # SIGNAL 1
+      self.state.map_needs_refresh.emit()  # SIGNAL 2
+  `
+
+**BUG TRIGGER**:
+- Line 345: cfg = self.state.contour_layer_configs.get(key, {})
+- This gets a REFERENCE to state.contour_layer_configs['surface']
+- Modifies it in-place ✓ State is updated correctly
+- BUT: What if later Global Settings does:
+  `python
+  s.contour_layer_configs = deepcopy(self._contour_copy)
+  `
+- This REPLACES the dict with a new object
+- The reference held by layer_panel is now stale!
+
+**Step 3: display_settings_changed signal propagates**
+- All views connected (map_widget line 81, view_2d line 93, view_3d_plotly line 354)
+- Each calls _schedule_refresh / _schedule_render / _schedule
+- Each starts a 300ms debounce timer
+
+**Step 4: 300ms later, first view's debounce fires**
+- render() called
+- Reads: cfg = state.get_contour_config('surface')
+- get_contour_config() returns:
+  `python
+  def get_contour_config(self, layer_key: str) -> Dict:
+      defaults = {...}
+      cfg = self.contour_layer_configs.get(layer_key, {})
+      return {**defaults, **cfg}
+  `
+- Merges defaults with current state
+- Current state has opacity=0.5 ✓ Correct!
+
+**Step 5: Other views' debounces fire**
+- view_2d and view_3d_plotly also read state
+- They get the updated values ✓ Correct!
+
+**PROBLEM SCENARIO**:
+1. User changes panel: opacity=0.5 in state ✓
+2. Views have 300ms debounce timers running
+3. User opens Global Settings BEFORE any timer fires
+4. Global Settings reads state and gets opacity=0.5
+5. Loads it into the dialog ✓ Shows 0.5
+6. But _contour_copy is from the dialog's __init__, so it also has 0.5 (because it was deep-copied from state)
+7. Actually wait, let me re-check...
+
+**Timeline for PROBLEM**:
+1. Initial state: opacity=0.7
+2. User opens Global Settings dialog
+   - __init__ line 57: _contour_copy = deepcopy(state.contour_layer_configs) → _contour_copy has opacity=0.7
+   - _load_from_state() line 62
+   - Dialog UI shows opacity=0.7
+3. User changes slider in dialog to opacity=0.9
+   - _save_current_contour() called
+   - _contour_copy['surface']['opacity'] = 0.9 (in the dialog copy only)
+   - State has opacity=0.7 (unchanged)
+4. User clicks OK WITHOUT clicking Apply
+   - _write_to_state() called
+   - s.contour_layer_configs = deepcopy(_contour_copy) 
+   - State now has opacity=0.9 ✓
+   - Signals emitted
+5. Views debounce and render with opacity=0.9 ✓
+6. BUT: User's previous opacity in panel is also affected!
+
+**ACTUAL PROBLEM**:
+1. Initial state: opacity=0.7, levels=15, colorscale='YlOrBr'
+2. User opens panel, changes opacity to 0.5 only
+   - _on_disp_changed: cfg['opacity'] = 0.5
+   - State: opacity=0.5, levels=15, colorscale='YlOrBr'
+   - Signals emitted
+3. User opens Global Settings dialog (before 300ms debounce)
+   - _contour_copy = deepcopy(state) → opacity=0.5, levels=15, colorscale='YlOrBr'
+   - Dialog loads and shows opacity=0.5 ✓
+4. User changes only levels to 20
+   - _save_current_contour: _contour_copy['surface'] = {opacity: 0.5, levels: 20, colorscale: ...}
+   - Wait, looking at lines 357-370:
+     `python
+     self._contour_copy[key] = {
+         'colorscale': self.cs_combo.currentText(),
+         'opacity': self.opacity_spin.value(),
+         'levels': self.levels_spin.value(),
+         'level_mode': mode_keys.get(self.level_mode.currentIndex(), 'count'),
+         'fixed_interval': self.interval_spin.value(),
+         'show_lines': self.show_lines_chk.isChecked(),
+         'show_labels': self.show_labels_chk.isChecked(),
+         'line_width': _LINE_WIDTH_MAP.get(...),
+         'label_fontsize': _LABEL_SIZE_MAP.get(...),
+         'decimal_places': self.decimal_spin.value(),
+     }
+     `
+   - This reads ALL values from ALL controls!
+   - So if opacity slider still shows 0.5, it writes opacity: 0.5
+   - If levels shows 20, it writes levels: 20
+   - So _contour_copy should still have opacity=0.5 ✓
+
+**So actually, this should work correctly!**
+
+Let me reconsider where the bug is...
+
+**REAL BUG in Scenario B**:
+
+The panel tries to update state directly:
+`python
+cfg = self.state.contour_layer_configs.get(key, {})  # Get reference
+cfg['opacity'] = 0.5  # Modify in place
+`
+
+But if it gets an empty dict (key doesn't exist):
+`python
+cfg = {}  # Empty dict created inline
+cfg['opacity'] = 0.5  # Modifies the local var, NOT the state!
+`
+
+However, get_contour_config() in state.py has defaults (line 198-207), so all keys should exist.
+
+Actually, the REAL issue is:
+- panel gets reference: cfg = state.contour_layer_configs.get('surface', {})
+- panel modifies: cfg['opacity'] = 0.5
+- If 'surface' key exists, this modifies the state dict in-place ✓
+- Global Settings later does: s.contour_layer_configs = deepcopy(self._contour_copy)
+- This REPLACES the entire dict
+- So if someone was holding a reference to the old dict, it's now broken
+
+But views use get_contour_config(), which reads from state EACH TIME
+So they should always see the latest values
+
+**THE ACTUAL PROBLEM**:
+
+When global_settings.py does:
+`python
+s.contour_layer_configs = deepcopy(self._contour_copy)
+`
+
+It REPLACES the dict. But _contour_copy was created in __init__ (line 57):
+`python
+self._contour_copy: Dict[str, Dict] = deepcopy(state.contour_layer_configs)
+`
+
+If user changed the panel AFTER opening the dialog, but BEFORE reading the current state for the dialog, the dialog doesn't know about those changes!
+
+Wait, let's check the actual sequence:
+
+Timeline for BUG #1 (Dialog shows stale values):
+1. State initialized: opacity=0.7
+2. Panel open, user changes opacity to 0.5
+   - _on_disp_changed(): cfg = state.contour_layer_configs.get('surface')
+   - cfg['opacity'] = 0.5
+   - state.contour_layer_configs['surface']['opacity'] = 0.5 ✓
+3. User opens Global Settings dialog
+   - __init__ called
+   - _contour_copy = deepcopy(state.contour_layer_configs)
+   - _contour_copy['surface']['opacity'] = 0.5 ✓ (because state has 0.5)
+   - _load_from_state() called
+   - opacity_spin.setValue(0.5) 
+   - Dialog shows 0.5 ✓
+
+So the dialog SHOULD see the updated value!
+
+BUT WAIT: What if:
+1. State: opacity=0.7
+2. User opens Global Settings dialog
+   - _contour_copy = deepcopy(...) → opacity=0.7
+   - _load_from_state() → Dialog shows 0.7
+3. User closes dialog WITHOUT clicking OK
+   - Dialog is disposed
+4. User changes panel to opacity=0.5
+   - state.contour_layer_configs['surface']['opacity'] = 0.5
+5. User opens Global Settings dialog AGAIN
+   - NEW instance of GlobalSettingsDialog created
+   - __init__ called
+   - _contour_copy = deepcopy(state) → Should have opacity=0.5 ✓
+   - Should work fine
+
+So actually, each dialog instance gets a fresh deepcopy. The bug would only occur if:
+- Dialog stays open
+- User changes panel outside the dialog
+- Dialog needs to refresh to show the new value
+
+**THE REAL BUG #1**: 
+Dialog doesn't auto-refresh when state changes while it's open!
+If user has both Global Settings and Panel visible, and changes panel, the dialog doesn't update its UI
+
+Actually, that's not so bad because they're separate windows...
+
+Let me look for the ACTUAL bugs by checking what "doesn't propagate" means.
+
+**The real issue from the problem statement**:
+"Changing Global Settings doesn't propagate to the different tabs (map, 2D, 3D)"
+
+This means:
+- User opens Global Settings
+- Changes a setting
+- Clicks OK
+- Map tab doesn't update with new setting
+- 2D tab doesn't update
+- 3D tab doesn't update
+
+Let me trace this:
+1. Global Settings: user changes opacity to 0.8
+   - _save_current_contour(): _contour_copy['surface']['opacity'] = 0.8
+2. Click OK
+   - _write_to_state(): s.contour_layer_configs = deepcopy(_contour_copy)
+   - state.contour_layer_configs['surface']['opacity'] = 0.8 ✓
+   - display_settings_changed.emit() ✓
+   - map_needs_refresh.emit() ✓
+3. map_widget receives display_settings_changed
+   - _schedule_refresh() starts 300ms timer
+4. 300ms later, refresh() calls:
+   - state.get_contour_config('surface')['opacity']
+   - Should return 0.8 ✓
+
+So it SHOULD work!
+
+Unless... let me check if display_settings_changed is actually emitted when views aren't connected
+
+Actually, looking at bedrock_window.py (the main window), I need to see how the widgets are created and connected.
+
+Let me check if all three views ARE actually connected to display_settings_changed...
+
+From what I read:
+- map_widget.py line 81: ✓ Connected
+- view_2d.py line 93: ✓ Connected
+- view_3d_plotly.py line 354: ✓ Connected
+
+So they should all receive the signal...
+
+Unless there's a tab visibility issue? Let me check if views only refresh when visible...
+
+map_widget.py line 83-85:
+`python
+def _schedule_refresh(self, *_args):
+    self._debounce.start()
+`
+
+This doesn't check if the widget is visible!
+
+view_2d.py line 96:
+`python
+def _schedule_render(self, *_args):
+    if self.isVisible() and self._has_data():  # <-- checks isVisible!
+        self._debounce.start()
+`
+
+view_3d_plotly.py line 356:
+`python
+def _schedule(self, *_args):
+    if self.isVisible():  # <-- checks isVisible!
+        self._debounce.start()
+`
+
+**AHA! Found it!**
+
+- map_widget doesn't check if it's visible - it always schedules refresh
+- view_2d ONLY refreshes if visible
+- view_3d_plotly ONLY refreshes if visible
+
+So if user is on map tab and opens Global Settings, the 2D and 3D views won't refresh even though the signal was emitted!
+
+But wait, when the user switches TO the 2D tab, showEvent() is called (view_2d.py line 101):
+`python
+def showEvent(self, event):
+    super().showEvent(event)
+    self._schedule_render()
+`
+
+So when the tab becomes visible, it should refresh.
+
+Unless the signal fired and the view decided NOT to render because it wasn't visible at that time, and then when the view becomes visible, there's no mechanism to refresh...
+
+Actually, looking at the showEvent handlers:
+- map_widget.py line 87-90:
+  `python
+  def showEvent(self, event):
+      super().showEvent(event)
+      self._schedule_refresh()
+  `
+  It DOES call _schedule_refresh!
+
+- view_2d.py line 101-104:
+  `python
+  def showEvent(self, event):
+      super().showEvent(event)
+      self._schedule_render()
+  `
+  It DOES call _schedule_render!
+
+So when switching tabs, it refreshes. So that should work...
+
+Unless... the _contour_copy problem is real!
+
+Let me re-examine: "sometimes doesn't update the views"
+
+What if:
+1. Global Settings: change opacity to 0.8
+   - _save_current_contour(): _contour_copy['surface']['opacity'] = 0.8
+2. BUT WAIT: What if _save_current_contour is NEVER called?
+
+Looking at lines 197-206 in global_settings.py:
+`python
+for w in (self.level_mode, self.levels_spin, self.interval_spin,
+          self.decimal_spin, self.cs_combo, self.opacity_spin,
+          self.show_lines_chk, self.line_width_combo,
+          self.show_labels_chk, self.label_size_combo):
+    if isinstance(w, QCheckBox):
+        w.toggled.connect(self._save_current_contour)
+    elif isinstance(w, QComboBox):
+        w.currentTextChanged.connect(self._save_current_contour)
+    elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
+        w.valueChanged.connect(self._save_current_contour)
+`
+
+These are all connected in _build_contour_tab().
+
+But what if the user just loads the dialog and clicks OK without changing anything?
+- _save_current_contour() is NOT called
+- _contour_copy has whatever it was from __init__
+
+But _load_from_state() did set the values, so _contour_copy should match state.
+
+Actually, I think I found it:
+
+Looking at _load_contour_layer (lines 325-350), it reads from _contour_copy:
+`python
+def _load_contour_layer(self, _idx):
+    key = self._current_contour_key()
+    cfg = self._contour_copy.get(key, {})  # <-- GET FROM COPY
+    was = self._loading
+    self._loading = True
+    ...
+`
+
+But initially, _contour_copy is created by deepcopy from state (line 57).
+
+So for layer 'surface', it creates a NEW dict by deepcopying.
+
+Then when _save_current_contour runs, it creates ANOTHER new dict:
+`python
+self._contour_copy[key] = {  # NEW DICT
+    'colorscale': ...,
+    'opacity': ...,
+    ...
+}
+`
+
+So the original dict from deepcopy is replaced with a new dict each time _save_current_contour runs.
+
+But that should be fine because the new dict has the current values.
+
+**WAIT I FOUND IT!**
+
+Looking at line 57:
+`python
+self._contour_copy: Dict[str, Dict] = deepcopy(state.contour_layer_configs)
+`
+
+And looking at state.py lines 113-117:
+`python
+self.contour_layer_configs: Dict[str, Dict] = {
+    'surface': {**_default_contour, 'colorscale': 'YlOrBr'},
+    'bedrock': {**_default_contour, 'colorscale': 'Blues'},
+    'depth':   {**_default_contour, 'colorscale': 'RdYlGn'},
+}
+`
+
+So state has keys: 'surface', 'bedrock', 'depth'
+
+But what if a tab is switched or the state is modified in a way that adds a new layer?
+
+Actually, the keys are fixed. But what if the initial default values in state.py are different from what's in global_settings?
+
+Let me check... no, they should match.
+
+**OK, I think the ACTUAL bug is simpler**:
+
+The panel's _on_disp_changed does NOT guard for recursion!
+
+When _refresh_disp_widgets is called:
+`python
+def _refresh_disp_widgets(self):
+    self._load_disp_layer()
+
+def _load_disp_layer(self, _idx=0):
+    self._disp_loading = True
+    ...
+    self.opacity_slider.setValue(...)
+    ...
+    self._disp_loading = False
+`
+
+The guard IS there. But the problem is:
+
+If global_settings does:
+`python
+s.contour_layer_configs = deepcopy(self._contour_copy)
+`
+
+And then layer_panel._on_disp_changed does:
+`python
+cfg = self.state.contour_layer_configs.get(key, {})
+cfg['opacity'] = value
+`
+
+The cfg reference is to THE OLD DICT before it was replaced!
+
+No wait, that's not right. After _write_to_state, the dictionary object is replaced, but the variables holding the old reference don't magically update. However, the next time _on_disp_changed is called, it will do:
+`python
+cfg = self.state.contour_layer_configs.get(key, {})
+`
+
+Which will get the NEW dict.
+
+Hmm, I think the bugs are more subtle. Let me write out the actual findings now.
