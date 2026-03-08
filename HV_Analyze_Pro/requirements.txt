@@ -35,5 +35,8 @@ shapely>=2.0             # Boundary geometry operations
 pyvista>=0.43            # 3D mesh visualization & export
 Pillow>=10.0             # Contour image generation
 
+# --- HV Strip Progressive ---
+PyYAML>=6.0              # Settings persistence (YAML load/save)
+
 # --- Testing ---
 pytest>=8.0

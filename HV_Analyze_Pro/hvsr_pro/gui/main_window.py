@@ -530,6 +530,11 @@ class HVSRMainWindow(QMainWindow):
             from hvsr_pro.packages import hvstrip_progressive_pkg
             HVStripWindow = hvstrip_progressive_pkg.HVStripWindow
 
+            if HVStripWindow is None:
+                err = hvstrip_progressive_pkg.get_import_error()
+                raise ImportError(
+                    f"HV_Strip_Progressive failed to import: {err}")
+
             if not hasattr(self, '_hvstrip_window') or self._hvstrip_window is None:
                 self._hvstrip_window = HVStripWindow(self)
 
