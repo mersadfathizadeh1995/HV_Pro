@@ -240,6 +240,13 @@ if HAS_PYQT5:
             bedrock_action.triggered.connect(self.parent.open_bedrock_mapping)
             self.actions['bedrock_mapping'] = bedrock_action
             
+            hvstrip_action = tools_menu.addAction('HV &Strip Progressive...')
+            hvstrip_action.setShortcut('Ctrl+Shift+S')
+            hvstrip_action.setStatusTip('Open HV Strip Progressive layer stripping analysis')
+            hvstrip_action.setToolTip('HV Strip Progressive analysis (Ctrl+Shift+S)')
+            hvstrip_action.triggered.connect(self.parent.open_hvstrip_progressive)
+            self.actions['hvstrip_progressive'] = hvstrip_action
+            
             return tools_menu
         
         def _build_mode_menu(self) -> QMenu:

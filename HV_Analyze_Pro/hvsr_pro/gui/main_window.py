@@ -524,6 +524,23 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"3D Bedrock Mapping package not available:\n{str(e)}")
 
+    def open_hvstrip_progressive(self):
+        """Open the HV Strip Progressive window."""
+        try:
+            from hvsr_pro.packages import hvstrip_progressive_pkg
+            HVStripWindow = hvstrip_progressive_pkg.HVStripWindow
+
+            if not hasattr(self, '_hvstrip_window') or self._hvstrip_window is None:
+                self._hvstrip_window = HVStripWindow(self)
+
+            self._hvstrip_window.show()
+            self._hvstrip_window.raise_()
+            self._hvstrip_window.activateWindow()
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Not Available",
+                f"HV Strip Progressive package not available:\n{str(e)}")
+
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
         from hvsr_pro.gui.dialogs import AdvancedQCDialog
