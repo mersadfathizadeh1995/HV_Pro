@@ -1,0 +1,269 @@
+# COMPREHENSIVE HV_Pro FIGURE STUDIO & RELATED ANALYSIS
+
+## 1. FIGURE STUDIO VIEW - figure_studio.py
+File: D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\HV_Strip_Progressive\dialogs\figure_studio.py
+Lines: 1-437
+
+### Class Name & Parent
+- FigureStudioWindow (QMainWindow)
+
+### Methods (Complete List)
+- __init__(strip_dir, output_dir=None, has_dual_resonance=False, parent=None)
+- _init_reporter()
+- _build_ui()
+- _select_first()
+- _on_fig_selected(row)
+- _apply()
+- _draw_current()
+- _get_kwargs()
+- _draw_figure(key, kw)
+- _export_current()
+- _export_all()
+
+### Figure Types (6 Total)
+1. hv_overlay - HV Curves Overlay
+2. peak_evolution - Peak Evolution
+3. interface_analysis - Interface Analysis
+4. waterfall - Waterfall Plot
+5. publication - Publication Figure (2x2)
+6. dual_resonance - Dual-Resonance Separation
+
+### Settings/Controls Per Figure Type
+- HVOverlay: log_x, grid, cmap, lw, alpha, show_peaks, marker_size, xlim_min/max
+- PeakEvolution: grid, show_fill, marker_size, lw
+- InterfaceAnalysis: grid, marker_size, lw, annot_font
+- Waterfall: log_x, grid, cmap, lw, alpha, offset, normalize
+- Publication: grid, cmap, lw, alpha, table_font
+- DualResonance: grid, lw, f0_offset, f1_offset, show_stripped, hs_ratio
+- Common: DPI, Font Size
+
+### Data Reception
+- ProgressiveStrippingReporter loaded from strip_dir
+- Contains all computed stripping steps
+- No direct signals; uses internal reporter state
+
+### Save Functionality
+- Formats: PNG, PDF, SVG (via QFileDialog)
+- _export_current(): Single figure with dialog
+- _export_all(): All figures to directory, PNG + PDF
+
+### UI Pattern
+- QListWidget for figure selection (max 180px height)
+- QStackedWidget for per-figure settings
+- QFormLayout for each panel
+- Status bar for feedback
+- NO collapsible groups used (unlike hv_curve_view.py)
+
+---
+
+## 2. HV OVERLAY VIEW - hv_overlay_view.py
+File: D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\HV_Strip_Progressive\views\hv_overlay_view.py
+Lines: 1-138
+
+### Class
+- HVOverlayView (QWidget)
+
+### Displays
+- Multi-step HV curves (all steps overlaid)
+- Loads from Step* folders in strip_dir
+- Each step: hv_curve.csv with freq, amplitude columns
+- Color-coded by step with colormap
+- Peak markers (*) at max amplitude per step
+
+### Controls
+- Log X: Toggle log-scale frequency (default ON)
+- Grid: Show/hide grid (default ON)
+- Show Peaks: Peak markers (default ON)
+- Colormap: 6 options (cividis/viridis/plasma/inferno/tab10/tab20)
+
+### Overlay Method
+- _collect_steps(): Scan for Step* folders, load CSV
+- Color via cmap(i / max(n-1, 1)) where i = step index
+- Plots all steps on single axes
+- Peaks marked with np.argmax()
+
+### Save
+- None (display-only)
+
+---
+
+## 3. RESULTS TAB FOR STRIP MODE - strip_results_view.py
+File: D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\HV_Strip_Progressive\views\strip_results_view.py
+Lines: 1-159
+
+### Class
+- StripResultsView (QWidget)
+
+### Data Format
+**Table (QTableWidget):**
+- Columns: Step | Layers | Peak Freq (Hz) | Peak Amp | Vs30 (m/s) | Status
+- Alternating row colors
+- Reads: result_dict[step_results] = {step_name: {peak_frequency, peak_amplitude, vs30}}
+
+**Summary (QTextEdit):**
+- Steps completed
+- Output directory
+- Frequency range min-max
+- Initial f0
+- Total shift %
+- Report file count
+
+### Dock Widget Conversion?
+YES - Can be extracted to QDockWidget:
+- Inherits from QDockWidget instead of QWidget
+- set_results() method remains same
+- Integrate via addDockWidget(Qt.RightDockWidgetArea)
+
+### Export
+- CSV button → strip_results.csv
+- Columns: Step, Peak_Frequency_Hz, Peak_Amplitude, Vs30_m_s, N_Frequencies
+
+---
+
+## 4. COLLAPSIBLE SETTINGS PATTERN - hv_curve_view.py
+File: D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\HV_Strip_Progressive\views\hv_curve_view.py
+Lines: 75-310
+
+### Collapsible Widget Class
+- CollapsibleGroupBox (from widgets/collapsible_group.py)
+- Custom QWidget with toggle button (▼/►)
+- Methods: setContentLayout(), addWidget(), addLayout(), setCollapsed(), isCollapsed()
+
+### Sub-Groups Structure
+Main: Plot Settings (collapsed=True)
+├── Display Toggles (always visible): log_x, log_y, grid, show_vs
+├── Curve Style: color, lw, hs%
+├── Peak Markers: f0_shape, f0_size, sec_marker, ann_font
+├── Axes & Grid: grid_alpha, minor_grid
+├── Labels: title, xlabel, ylabel
+├── Legend: show, pos, font, alpha, frame
+└── Export: dpi, fmt, fig_size
+
+Outside collapsible:
+- Peak row: f0/secondary buttons, undo, clear
+- Save row: CSV, All, gear icon
+
+### Settings Per Sub-Group
+**Curve Style:** Color dropdown, Line width spinner, HS% spinner
+**Peak Markers:** f0 shape/size, sec shape, annotation font
+**Axes & Grid:** Grid alpha, minor grid checkbox
+**Labels:** Title/xlabel/ylabel QLineEdits
+**Legend:** Show checkbox, position/font/alpha spinners, frame checkbox
+**Export:** DPI spinner, format dropdown, figure size dropdown
+
+### Key Pattern Difference from Figure Studio
+- Figure Studio: Uses stacked widgets, NO collapsible groups
+- HV Curve: Uses nested collapsible groups with sub-grouping
+
+---
+
+## 5. QWIZARD USAGE - Result: NONE
+No QWizard classes found in hvstrip-progressive codebase.
+
+### Custom Wizard Pattern Instead
+File: profile_wizard_view.py (Lines 1-599)
+Class: ProfileWizardView (QWidget) - NOT QWizard-based
+
+**Manual Step-Through UI:**
+- Left: Profile list (QListWidget, 180px)
+- Right: HV plot + optional Vs plot
+- Bottom: Previous/Next/Finish buttons
+
+**Flow:**
+1. set_results(results) → populate list with checkmarks
+2. Click profile → _show_profile(idx) → redraw HV + Vs
+3. Toggle "Select f0" → _pick_f0 = True (green highlight)
+4. Click curve → snap to nearest freq → place marker
+5. Repeat for secondary peaks (right-click to remove)
+6. Next/Previous → navigate through list
+7. Finish → wizard_finished.emit(peak_data)
+
+**No QWizardPage** - Each profile is implicitly a "page"
+
+---
+
+## 6. ALL_PROFILES_VIEW SAVE PATTERNS
+File: all_profiles_view.py (Lines 1-286)
+Supporting: all_profiles_view_modules/*
+
+### Module Structure
+- constants.py: PALETTES, MARKER_SHAPES, FIGURE_SIZES, LEGEND_LOCATIONS
+- ui_builder.py: build_ui() function for modular UI
+- drawing.py: redraw_hv(), redraw_vs(), _get_legend_cfg()
+- peak_picking.py: PeakPickingMixin
+- save_combined.py: Multi-figure CSV, canvas snapshots
+- save_profiles.py: Per-profile data
+- save_publication.py: 8 publication figures
+- save_helpers.py: Utilities
+- statistics.py: compute_stats()
+
+### Save Dialog Pattern (Gear Icon ⚙)
+File: dialogs/save_options_dialog.py (Lines 1-158)
+Class: SaveOptionsDialog (QDialog)
+
+**Structure:**
+- Output Directory: QLineEdit + browse button
+- Format: QComboBox (PNG/PDF/SVG)
+- DPI: QSpinBox (72-600)
+- All-Profile Outputs: 9 checkboxes (3 default=TRUE)
+  - Combined overlay, HV+Vs, Median HV, Vs comparison, Summary tables
+  - Normalized HV, f0 histogram, f0 vs Vs30, Spectral matrix
+- Per-Profile Re-save: 3 checkboxes (all default=FALSE)
+  - Re-save data CSV, Re-save HV figures, Re-save Vs figures
+
+### Two-Button Save Pattern
+1. "💾 Save Results" (Line 492, ui_builder.py)
+   - Green (BUTTON_SUCCESS)
+   - Calls _save_results()
+   - Fast: saves default All-Profile outputs only
+   - No dialog
+
+2. "⚙ Save All" (Line 499, ui_builder.py)
+   - Gear icon
+   - Calls _save_all_results()
+   - Opens SaveOptionsDialog
+   - Full control: per-profile + advanced outputs
+
+### Save Output Directory Structure
+all_profile_output/
+├── combined_hv.csv
+├── combined_hv_overlay.{png,pdf}
+├── median_hv.{png,pdf}
+├── hv_vs_combined.{png,pdf}
+├── vs_comparison.{png,pdf}
+├── summary_table.{csv,tex}
+├── f0_histogram.{png,pdf}
+├── f0_vs_vs30.{png,pdf}
+└── spectral_matrix.{png,pdf}
+
+per_profile_output/
+├── profile_name/
+│   ├── hv_curve.csv
+│   ├── peak_info.txt
+│   ├── vs_profile.{csv,png,pdf}
+│   └── hv_curve.{png,pdf}
+
+### Save Functions (save_publication.py)
+- save_hv_vs_combined(): 2x1 layout HV + Vs
+- save_median_hv(): Median with ±σ fill
+- save_summary_tables(): CSV + LaTeX format
+- save_vs_comparison(): All profiles Vs on grid
+- save_normalized_hv(): Normalized to max amplitude
+- save_f0_histogram(): Frequency distribution
+- save_f0_vs_vs30(): Scatter plot f0 vs Vs30
+- save_spectral_matrix(): Small multiples (all curves)
+
+---
+
+## REFERENCE TABLE
+
+Component          | File                       | Class                  | Lines | Type      | Save?
+-------------------|----------------------------|------------------------|-------|-----------|-------
+Figure Studio      | dialogs/figure_studio.py   | FigureStudioWindow     | 1-437 | QMainWindow | YES
+HV Overlay         | views/hv_overlay_view.py   | HVOverlayView          | 1-138 | QWidget   | NO
+Strip Results      | views/strip_results_view.py| StripResultsView       | 1-159 | QWidget   | CSV
+HV Curve           | views/hv_curve_view.py     | HVCurveView            | 1-951 | QWidget   | YES
+Profile Wizard     | views/profile_wizard_view.py| ProfileWizardView      | 1-599 | QWidget   | NO
+All Profiles       | views/all_profiles_view.py | AllProfilesView        | 1-286 | QWidget   | YES
+Collapsible        | widgets/collapsible_group.py| CollapsibleGroupBox   | 1-86  | QWidget   | NO
+Save Dialog        | dialogs/save_options_dialog.py| SaveOptionsDialog    | 1-158 | QDialog   | N/A
