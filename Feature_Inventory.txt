@@ -1,0 +1,650 @@
+# DETAILED FEATURE INVENTORY: "MULTIPLE" (BATCH) FORWARD SECTION
+# HV_Strip_Progressive - All-Profiles Analysis & Batch Processing
+
+## PART 1: FORWARD MULTI PANEL (Left Control Panel)
+## File: forward_multi_panel.py (lines 1-594)
+
+### 1.1 MAIN SETTINGS GROUP
+**Widget Type**: Collapsible Group Box | **Lines: 44-95**
+
+- **Engine Selection** (Lines 49-58)
+  - QComboBox: "diffuse_field", "sh_wave", "ellipticity"
+  - ⚙ Settings Button (gear icon) - opens engine-specific settings dialog
+  - Type: Processing Feature
+  
+- **Frequency Range Configuration** (Lines 62-80)
+  - Fmin: QDoubleSpinBox (0.01-10 Hz, default 0.5 Hz)
+  - Fmax: QDoubleSpinBox (1-100 Hz, default 20 Hz)  
+  - Points (Nf): QSpinBox (50-2000 points, default 500)
+  - Type: Processing Feature
+
+- **Output Directory** (Lines 83-92)
+  - QLineEdit: path text field (REQUIRED)
+  - Browse Button (...): opens folder dialog
+  - Type: Save/Export Feature
+
+### 1.2 AUTO-DETECT OPTIONS ROW
+**Widget Type**: Horizontal Layout | **Lines: 98-110**
+
+- **Auto-detect Peaks Checkbox** (Line 99)
+  - QCheckBox: "Auto-detect peaks" (default: CHECKED)
+  - Type: Processing Feature
+  
+- **Auto Peak Settings Button** (Lines 103-108)
+  - ⚙ Gear Button (26x26 px)
+  - Opens AutoPeakSettingsDialog
+  - Tooltip: "Auto Peak Detection Settings"
+  - Type: Processing Feature
+
+- **Include Median Curve** (Lines 112-114)
+  - QCheckBox: "Include Median Curve" (default: CHECKED)
+  - Type: Processing Feature
+
+### 1.3 EXECUTION CONTROL
+**Widget Type**: Buttons & Progress Bar | **Lines: 117-129**
+
+- **Compute All Button** (Lines 117-120)
+  - QPushButton: "🎯 Compute All" (primary style)
+  - Type: Processing Control
+  
+- **Progress Bar** (Lines 122-124)
+  - QProgressBar (hidden until run starts)
+  - Type: UI/Display Feature
+
+- **Result Label** (Lines 126-129)
+  - QLabel: status message display (wordwrap enabled)
+  - Type: UI/Display Feature
+
+---
+
+## PART 2: AUTO PEAK SETTINGS DIALOG
+## File: auto_peak_settings_dialog.py (lines 1-174)
+
+### 2.1 DETECTION PARAMETERS GROUP
+**Widget Type**: QGroupBox + QFormLayout | **Lines: 74-99**
+
+- **Min Prominence** (Lines 78-83)
+  - QDoubleSpinBox: 0.0-10.0 (default: 0.5)
+  - Step: 0.1, Decimals: 2
+  - Type: Processing Feature
+  - Purpose: Scipy.signal.find_peaks threshold
+
+- **Min Amplitude** (Lines 85-90)
+  - QDoubleSpinBox: 0.0-100.0 (default: 2.0)
+  - Step: 0.5, Decimals: 2
+  - Type: Processing Feature
+  - Purpose: Minimum peak amplitude threshold
+
+- **Number of Secondary Peaks** (Lines 92-96)
+  - QSpinBox: 0-10 (default: 2)
+  - Dynamically updates range rows on change
+  - Type: Processing Feature
+
+### 2.2 FREQUENCY RANGES (Optional)
+**Widget Type**: Scrollable Container | **Lines: 102-121**
+
+- **Peak Range Rows** (dynamically generated)
+  - Primary Peak Range (1 row)
+  - Secondary Peak Ranges (N rows, where N = n_secondary)
+  
+  **Per Row Contents** (class _PeakRangeRow, lines 14-56):
+  - Label: peak identifier (100px width)
+  - Fmin Spinner: QDoubleSpinBox (0.001-200 Hz, default 0.1 Hz)
+  - Fmax Spinner: QDoubleSpinBox (0.001-200 Hz, default 50 Hz)
+  - "Use" Checkbox: enable/disable constraint for this peak
+  
+  - Type: Processing Feature
+  - Strategy: If range enabled, searches max within that band (ignores prominence);
+             If range disabled, uses scipy find_peaks with prominence threshold
+
+---
+
+## PART 3: UI BUILDER FOR ALL PROFILES VIEW
+## File: ui_builder.py (lines 1-510)
+
+### 3.1 PLOT SETTINGS PANEL (Collapsible Group)
+**Widget Type**: CollapsibleGroupBox | **Lines: 111-142**
+
+#### 3.1.1 DISPLAY TOGGLES ROW
+**Lines: 145-179**
+
+- **Median Toggle** (Line 149)
+  - QCheckBox: "Median" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **±1σ (Sigma) Toggle** (Line 154)
+  - QCheckBox: "±1σ" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **f0 Peaks Toggle** (Line 159)
+  - QCheckBox: "f0 Peaks" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **Secondary Peaks Toggle** (Line 164)
+  - QCheckBox: "Sec. Peaks" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **Annotations Toggle** (Line 169)
+  - QCheckBox: "Annotations" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **Vs Panel Toggle** (Line 174)
+  - QCheckBox: "Vs Panel" (default: UNCHECKED)
+  - Shows/hides right-side velocity profile panel
+  - Type: UI/Display Feature
+
+#### 3.1.2 CURVES GROUP (Collapsible)
+**Lines: 182-231**
+
+- **Palette Selection** (Lines 189-193)
+  - QComboBox: 19 built-in palettes
+    * Custom: "Classic", "Bold", "Earth", "Nordic", "Sunset", "Green", "Blue", "Orange", "Red", "Purple"
+    * Matplotlib: "tab10", "tab20", "Set1", "Set2", "Set3", "Pastel1", "Paired", "Dark2", "Accent"
+  - Max width: 120px
+  - Type: UI/Display Feature
+
+- **Curve Alpha (Transparency)** (Lines 196-202)
+  - QDoubleSpinBox: 0.05-1.0 (default: 0.5)
+  - Step: 0.05
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+- **Line Width (LW)** (Lines 204-210)
+  - QDoubleSpinBox: 0.3-5.0 (default: 1.2)
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+- **Median Line Width (Med LW)** (Lines 212-218)
+  - QDoubleSpinBox: 0.5-8.0 (default: 3.0)
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+- **Sigma Band Alpha (±1σ α)** (Lines 220-227)
+  - QDoubleSpinBox: 0.05-0.6 (default: 0.15)
+  - Step: 0.05
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+#### 3.1.3 PRIMARY PEAK (f0) GROUP (Collapsible)
+**Lines: 234-265**
+
+- **Primary Peak Marker Shape** (Lines 240-245)
+  - QComboBox: MARKER_SHAPES keys = ["★", "◆", "●", "▲", "▼", "■", "+", "✕"]
+  - Max width: 70px
+  - Type: UI/Display Feature
+
+- **Primary Peak Size** (Lines 247-253)
+  - QSpinBox: 4-30 (default: 14)
+  - Max width: 55px
+  - Type: UI/Display Feature
+
+- **Annotation Font Size** (Lines 255-261)
+  - QSpinBox: 6-20 (default: 8)
+  - Max width: 55px
+  - Type: UI/Display Feature
+
+#### 3.1.4 SECONDARY PEAKS GROUP (Collapsible)
+**Lines: 268-292**
+
+- **Secondary Marker Shape** (Lines 274-280)
+  - QComboBox: same MARKER_SHAPES (default: index 1 = "◆")
+  - Max width: 70px
+  - Type: UI/Display Feature
+
+- **Secondary Peak Size** (Lines 282-288)
+  - QSpinBox: 4-30 (default: 10)
+  - Max width: 55px
+  - Type: UI/Display Feature
+
+#### 3.1.5 AXES & GRID GROUP (Collapsible)
+**Lines: 295-329**
+
+- **Y Auto Limit Checkbox** (Lines 301-304)
+  - QCheckBox: "Y Auto" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **Y Limit Method** (Lines 306-311)
+  - QComboBox: ["Auto", "95th Percentile", "Mean + 3σ", "Mean + 2×IQR"]
+  - Max width: 120px
+  - Type: UI/Display Feature
+
+- **Grid Checkbox** (Lines 313-316)
+  - QCheckBox: "Grid" (default: CHECKED)
+  - Type: UI/Display Feature
+
+- **Grid Alpha** (Lines 318-325)
+  - QDoubleSpinBox: 0.1-1.0 (default: 0.3)
+  - Step: 0.1
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+#### 3.1.6 EXPORT GROUP (Collapsible)
+**Lines: 332-359**
+
+- **DPI (Dots Per Inch)** (Lines 338-343)
+  - QSpinBox: 72-600 (default: 300)
+  - Max width: 65px
+  - Type: Export Feature
+
+- **Export Format** (Lines 345-349)
+  - QComboBox: ["PNG", "PDF", "SVG"]
+  - Max width: 70px
+  - Type: Export Feature
+
+- **Figure Size Preset** (Lines 351-355)
+  - QComboBox: FIGURE_SIZES keys
+    * "Standard (10×7)": (10, 7) inches
+    * "Large (14×10)": (14, 10) inches
+    * "Publication (12×8)": (12, 8) inches
+    * "Wide (16×6)": (16, 6) inches
+  - Max width: 140px
+  - Type: Export Feature
+
+#### 3.1.7 LABELS GROUP (Collapsible)
+**Lines: 362-387**
+
+- **Title Edit** (Lines 369-373)
+  - QLineEdit: default "All Profiles"
+  - Type: UI/Display Feature
+
+- **X-Axis Label Edit** (Lines 376-379)
+  - QLineEdit: default "Frequency (Hz)"
+  - Type: UI/Display Feature
+
+- **Y-Axis Label Edit** (Lines 380-383)
+  - QLineEdit: default "H/V Amplitude Ratio"
+  - Type: UI/Display Feature
+
+#### 3.1.8 LEGEND GROUP (Collapsible)
+**Lines: 390-458**
+
+- **Legend Mode** (Lines 399-408)
+  - QComboBox: ["Full", "Summary", "Compact", "Hidden"]
+  - Default: "Full"
+  - Max width: 100px
+  - Tooltips explain each mode
+  - Type: UI/Display Feature
+  - Modes:
+    * Full: all individual profiles + stats
+    * Summary: only Median/±1σ/Vs30 entries
+    * Compact: all entries, smaller font, more columns
+    * Hidden: no legend
+
+- **Legend Position** (Lines 410-416)
+  - QComboBox: LEGEND_LOCATIONS keys
+    * "Upper Right", "Upper Left", "Lower Right", "Lower Left"
+    * "Center Right", "Center Left", "Upper Center", "Lower Center"
+    * "Best (auto)"
+  - Default: "Upper Right"
+  - Max width: 120px
+  - Type: UI/Display Feature
+
+- **Legend Font Size** (Lines 424-430)
+  - QSpinBox: 4-16 (default: 7)
+  - Max width: 55px
+  - Type: UI/Display Feature
+
+- **Legend Columns** (Lines 432-438)
+  - QSpinBox: 1-6 (default: 2)
+  - Max width: 55px
+  - Type: UI/Display Feature
+
+- **Legend Alpha** (Lines 440-447)
+  - QDoubleSpinBox: 0.0-1.0 (default: 0.85)
+  - Step: 0.05
+  - Max width: 60px
+  - Type: UI/Display Feature
+
+- **Legend Frame** (Lines 449-452)
+  - QCheckBox: "Frame" (default: CHECKED)
+  - Type: UI/Display Feature
+
+### 3.2 BOTTOM TOOLBAR
+**Lines: 463-509**
+
+- **Select f0 Button** (Lines 467-472)
+  - QPushButton: "🎯 Select f0" (toggle, checkable)
+  - Disabled until data loaded
+  - Tooltip: "Click on median curve to set primary peak"
+  - Type: UI/Interaction Feature
+
+- **Select Secondary Button** (Lines 474-479)
+  - QPushButton: "🔶 Select Secondary" (toggle, checkable)
+  - Disabled until data loaded
+  - Tooltip: "Click on median curve to add secondary peaks"
+  - Type: UI/Interaction Feature
+
+- **Undo Secondary Button** (Lines 481-484)
+  - QPushButton: "↩ Undo Sec."
+  - Tooltip: "Remove last added secondary peak"
+  - Type: UI/Interaction Feature
+
+- **Clear Peaks Button** (Lines 486-488)
+  - QPushButton: "✕ Clear Peaks"
+  - Type: UI/Interaction Feature
+
+- **Save Results Button** (Lines 492-497)
+  - QPushButton: "💾 Save Results" (green success style)
+  - Disabled until computation complete
+  - Tooltip: "Save only All Profiles outputs"
+  - Type: Save/Export Feature
+
+- **Save All Button** (Lines 499-503)
+  - QPushButton: "⚙ Save All"
+  - Disabled until computation complete
+  - Tooltip: "Full re-save: per-profile + all profiles"
+  - Type: Save/Export Feature
+
+- **Load Results Button** (Lines 505-507)
+  - QPushButton: "📂 Load Results"
+  - Type: Save/Export Feature
+
+---
+
+## PART 4: SAVE OPTIONS DIALOG
+## File: save_options_dialog.py (lines 1-158)
+
+### 4.1 OUTPUT CONFIGURATION
+**Lines: 29-57**
+
+- **Output Directory** (Lines 30-37)
+  - QLineEdit with browse button
+  - Required field
+  - Type: Save/Export Feature
+
+- **Export Format** (Lines 41-48)
+  - QComboBox: ["PNG", "PDF", "SVG"]
+  - Default: "PNG"
+  - Max width: 80px
+  - Type: Export Feature
+
+- **DPI Setting** (Lines 50-56)
+  - QSpinBox: 72-600 (default: 300)
+  - Max width: 80px
+  - Type: Export Feature
+
+### 4.2 ALL-PROFILE OUTPUTS GROUP
+**Lines: 60-99**
+
+Checkboxes (all default CHECKED unless noted):
+
+- **Combined HV Overlay + Median CSV** (Line 62)
+  - Type: Export Feature
+  - Output: overlay figure + median curve CSV
+
+- **Combined HV + Vs Side-by-Side (Publication)** (Line 66)
+  - Type: Export Feature
+
+- **Median-Only H/V ± σ (Publication)** (Line 70)
+  - Type: Export Feature
+
+- **Vs Profile Comparison (Publication)** (Line 74)
+  - Type: Export Feature
+
+- **Summary Table (CSV + LaTeX)** (Line 78)
+  - Type: Export Feature
+
+- **Normalized HV Comparison** (Line 82)
+  - Default: UNCHECKED
+  - Type: Export Feature
+
+- **f0 Distribution Histogram** (Line 86)
+  - Default: UNCHECKED
+  - Type: Export Feature
+
+- **f0 vs Vs30 Scatter Plot** (Line 90)
+  - Default: UNCHECKED
+  - Type: Export Feature
+
+- **Spectral Ratio Matrix (Small Multiples)** (Line 94)
+  - Default: UNCHECKED
+  - Type: Export Feature
+
+### 4.3 PER-PROFILE RE-SAVE GROUP
+**Lines: 102-117**
+
+Checkboxes (all default UNCHECKED):
+
+- **Re-save Per-Profile Data (CSV + Peaks)** (Line 104)
+  - Type: Export Feature
+
+- **Re-save Per-Profile HV Figures** (Line 108)
+  - Type: Export Feature
+
+- **Re-save Per-Profile Vs Figures + Info** (Line 112)
+  - Type: Export Feature
+
+---
+
+## PART 5: PROCESSING FEATURES (MultiForwardWorker)
+## File: multi_forward_worker.py (lines 1-344)
+
+### 5.1 WORKER CONFIGURATION
+**Lines: 40-61**
+
+- **Profile List Processing**
+  - Sequential multi-profile computation
+  - Supports: editor data, dinver format, auto format detection
+  - Type: Processing Feature
+
+- **Engine Selection** 
+  - diffuse_field, sh_wave, ellipticity
+  - Type: Processing Feature
+
+- **Frequency Configuration** (built in config)
+  - fmin, fmax, nf parameters
+  - Type: Processing Feature
+
+### 5.2 AUTO-DETECT PEAK METHODS
+**Lines: 116-192** (Primary peak detection)
+
+- **Primary Peak Detection (f0)** (Lines 166-191)
+  - **Strategy 1 - Ranged**: If user specifies frequency range, finds max within that band
+    * Ignores prominence thresholds
+    * Direct search in (fmin, fmax) band
+  - **Strategy 2 - Unranged**: Global argmax if no range specified
+  - Output: (frequency, amplitude, array_index)
+  - Type: Processing Feature
+
+### 5.3 SECONDARY PEAK DETECTION
+**Lines: 193-287** (Secondary peaks)
+
+- **Number of Secondary Peaks** (configurable, 0-10)
+  - Type: Processing Feature
+
+- **Strategy 1 - Ranged Detection** (Lines 254-270)
+  - Finds maximum amplitude within user-specified frequency band
+  - Bypasses prominence constraints
+  - Skips primary peak and previously claimed secondaries
+  - Type: Processing Feature
+
+- **Strategy 2 - Unranged Detection** (Lines 271-279)
+  - Uses scipy.signal.find_peaks with prominence threshold
+  - Filters by min_amplitude threshold
+  - Excludes primary + claimed secondaries
+  - Picks strongest candidate
+  - Type: Processing Feature
+
+- **Prominence Filter** (configurable)
+  - Default: 0.3, Range: 0.0-10.0
+  - Scipy find_peaks parameter
+  - Type: Processing Feature
+
+- **Amplitude Filter** (configurable)
+  - Default: 1.5, Range: 0.0-100.0
+  - Minimum peak amplitude threshold
+  - Type: Processing Feature
+
+### 5.4 RESULT OUTPUTS
+**Lines: 9-26** (ProfileResult class)
+
+- **Per-Profile Data Captured**:
+  - name: profile identifier
+  - profile: SoilProfile object (Vs structure)
+  - freqs: frequency array
+  - amps: amplitude array (H/V ratios)
+  - f0: primary peak (freq, amp, index) tuple
+  - secondary_peaks: list of (freq, amp, index) tuples
+  - computed: success flag
+  - source_path: input file path
+  - Type: Processing Output
+
+### 5.5 SIGNALS EMITTED
+**Lines: 35-38**
+
+- progress: (message, current, total) - update messages
+- profile_done: (index, ProfileResult) - per-profile completion
+- all_done: (list of ProfileResult) - all profiles complete
+- error: (error_message) - error handling
+
+---
+
+## PART 6: CONSTANTS DEFINITIONS
+## File: constants.py (lines 1-73)
+
+### 6.1 COLOR PALETTES
+**Lines: 4-34**
+
+19 total palettes:
+- **Custom (10 palettes)**: Classic, Bold, Earth, Nordic, Sunset, Green, Blue, Orange, Red, Purple
+- **Matplotlib (9 palettes)**: tab10, tab20, Set1, Set2, Set3, Pastel1, Paired, Dark2, Accent
+- **Built-in Colors Dict**: RGB hex colors for each custom palette (8-10 colors per palette)
+- Type: UI/Display Feature
+
+### 6.2 MARKER SHAPES
+**Lines: 37-40**
+
+8 marker shape options:
+- "★" (star) → "*"
+- "◆" (diamond) → "D"
+- "●" (circle) → "o"
+- "▲" (triangle up) → "^"
+- "▼" (triangle down) → "v"
+- "■" (square) → "s"
+- "+" (plus) → "P"
+- "✕" (cross) → "X"
+- Type: UI/Display Feature
+
+### 6.3 Y-LIMIT METHODS
+**Lines: 42-43**
+
+4 auto-scaling methods for Y-axis:
+- "Auto" (default matplotlib)
+- "95th Percentile" (clips to 95th percentile)
+- "Mean + 3σ" (statistical limit)
+- "Mean + 2×IQR" (robust statistical limit)
+- Type: UI/Display Feature
+
+### 6.4 FIGURE SIZE PRESETS
+**Lines: 46-51**
+
+4 dimension presets (width × height in inches):
+- "Standard (10×7)": (10, 7)
+- "Large (14×10)": (14, 10)
+- "Publication (12×8)": (12, 8)
+- "Wide (16×6)": (16, 6)
+- Type: Export Feature
+
+### 6.5 LEGEND POSITIONS
+**Lines: 54-64**
+
+9 matplotlib legend positions:
+- Upper Right, Upper Left, Lower Right, Lower Left
+- Center Right, Center Left, Upper Center, Lower Center
+- Best (auto)
+- Type: UI/Display Feature
+
+### 6.6 LEGEND MODES
+**Lines: 67-72**
+
+4 legend display modes:
+- "Full": every individual profile + stats entries
+- "Summary": only Median/±1σ/Vs30 entries, profiles hidden
+- "Compact": all entries but smaller font, more columns
+- "Hidden": no legend at all
+- Type: UI/Display Feature
+
+---
+
+## SUMMARY: TOTAL CONFIGURABLE OPTIONS
+
+### PROCESSING FEATURES (24 items):
+✓ Engine selection (3 engines)
+✓ Frequency min/max (fmin: 0.01-10 Hz, fmax: 1-100 Hz)
+✓ Frequency points (50-2000)
+✓ Auto-detect peaks (enable/disable)
+✓ Min prominence threshold (0.0-10.0)
+✓ Min amplitude threshold (0.0-100.0)
+✓ Number of secondary peaks (0-10)
+✓ Primary peak frequency range (optional constraint)
+✓ Secondary peak ranges × N (optional constraints)
+✓ Include median curve (yes/no)
+✓ Result computation pipeline
+✓ Median curve computation
+✓ Primary peak detection strategy (ranged vs unranged)
+✓ Secondary peak detection strategy (ranged vs unranged)
+
+### UI/DISPLAY FEATURES (33 items):
+✓ Median overlay toggle
+✓ Sigma envelope (±1σ) toggle
+✓ f0 peaks toggle
+✓ Secondary peaks toggle
+✓ Annotations toggle
+✓ Vs panel toggle
+✓ Color palette (19 options)
+✓ Curve alpha transparency (0.05-1.0)
+✓ Curve line width (0.3-5.0)
+✓ Median line width (0.5-8.0)
+✓ Sigma band alpha (0.05-0.6)
+✓ Primary marker shape (8 options)
+✓ Primary marker size (4-30)
+✓ Annotation font size (6-20)
+✓ Secondary marker shape (8 options)
+✓ Secondary marker size (4-30)
+✓ Y-axis auto limit (enable/disable)
+✓ Y-limit method (4 methods)
+✓ Grid toggle
+✓ Grid alpha (0.1-1.0)
+✓ Title text
+✓ X-axis label text
+✓ Y-axis label text
+✓ Legend mode (4 modes)
+✓ Legend position (9 positions)
+✓ Legend font size (4-16)
+✓ Legend columns (1-6)
+✓ Legend alpha (0.0-1.0)
+✓ Legend frame toggle
+✓ Result status display
+
+### EXPORT/SAVE FEATURES (18 items):
+✓ Output directory (required)
+✓ Export format (PNG, PDF, SVG)
+✓ DPI setting (72-600)
+✓ Figure size presets (4 options)
+✓ Combined overlay figure
+✓ Median CSV export
+✓ HV + Vs publication figure
+✓ Median-only H/V ± σ figure
+✓ Vs comparison figure
+✓ Summary table (CSV + LaTeX)
+✓ Normalized HV comparison figure
+✓ f0 histogram
+✓ f0 vs Vs30 scatter plot
+✓ Spectral matrix figure
+✓ Per-profile data CSV re-save
+✓ Per-profile HV figures re-save
+✓ Per-profile Vs figures re-save
+✓ Peak information files (txt)
+
+### INTERACTION FEATURES (4 items):
+✓ Interactive f0 peak picking (click on curve)
+✓ Interactive secondary peak picking (click to add)
+✓ Undo secondary peak (remove last)
+✓ Clear all peaks
+✓ Save results button
+✓ Save all button
+✓ Load results button
+
+---
+
+## GRAND TOTAL: 79+ CONFIGURABLE OPTIONS & FEATURES

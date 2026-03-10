@@ -1,0 +1,416 @@
+# DETAILED CODE ANALYSIS - Multi-Profile Forward Modeling
+
+## 1. MULTI-PROFILE WIZARD DIALOG - MultiProfilePickerDialog
+
+### Location:
+D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\hvstrip_progressive\gui\dialogs\multi_profile_dialog.py
+
+### Architecture:
+
+#### ProfileResult Dataclass:
+- name: str (profile identifier)
+- profile: SoilProfile (soil model)
+- freqs: Optional[np.ndarray] (frequency array)
+- amps: Optional[np.ndarray] (amplitude/HVSR array)
+- f0: Optional[Tuple[float, float, int]] = (frequency, amplitude, index)
+- secondary_peaks: List[Tuple[float, float, int]] = list of secondary peaks
+- computed: bool (has HV curve been calculated?)
+
+#### Main Dialog Features:
+
+1. PROFILE NAVIGATION:
+   - Left panel: QListWidget showing all profiles + median step
+   - Sequential: profile_list shows current profile
+   - Median step appears as last entry (index = n_profiles)
+   - Navigation: _navigate_to(idx), _go_prev(), _go_next()
+
+2. HV COMPUTATION:
+   - _ComputeWorker: QThread that runs compute_hv_curve() for one profile
+   - Async computation prevents UI freezing
+   - On completion: _on_compute_done() fills ProfileResult
+   - Temp files created & cleaned up automatically
+
+3. PEAK SELECTION UI:
+   - Interactive canvas click handler: _on_canvas_click()
+   - Two modes: 
+     a) Select f0 (primary peak) - btn_pick_f0 toggle
+     b) Select Secondary peaks - btn_pick_sec toggle
+   - Log-space nearest-neighbor selection (click on curve)
+   - Visual feedback: markers + axes lines
+
+4. AUTO-DETECTION:
+   - _auto_detect_current(): Sets f0 = argmax(amps)
+   - _skip_current(): Auto + move to next
+   - _auto_all_remaining(): Batch auto-detect for unprocessed profiles
+
+5. MEDIAN COMPUTATION:
+   - _compute_median(): Triggered when navigating to median_idx
+   - Interpolates all profiles to first profile's frequency grid
+   - Computes element-wise median
+   - Auto-detects f0 for median curve
+
+6. OUTPUT SAVING:
+   - Per-profile: hv_curve.csv, peak_info.txt
+   - Combined: combined_hv_curves.png/pdf, combined_summary.csv
+   - Median: median_hv_curve.csv, median_peak_info.txt
+   - Vs profile figure (optional)
+
+### Key Methods:
+
+`python
+def __init__(profiles, freq_config, fig_settings, parent, engine_name):
+    # Initialize with list of (name, SoilProfile) tuples
+    # Create ProfileResult for each
+    # Create median_idx = n_profiles
+    # Start HV computation thread
+
+def _navigate_to(idx):
+    # Update current_idx
+    # If median step: _compute_median()
+    # Else if not computed: _compute_current()
+    # Replot + update buttons
+
+def _on_canvas_click(event):
+    # Get click frequency (log-space nearest neighbor)
+    # If _pick_f0: set r.f0 = (sel_f, sel_a, nearest_idx)
+    # If _pick_secondary: append to r.secondary_peaks
+    # Replot + update label
+
+def _auto_all_remaining():
+    # For each uncomputed profile:
+    #   Create temp file with profile.to_hvf_format()
+    #   Call compute_hv_curve()
+    #   If success: set freqs, amps, computed=True
+    #   If no f0: set f0 = argmax(amps)
+`
+
+### Figure Settings Configuration:
+- dpi: 300
+- width/height: inches
+- font_size: 12 pt
+- log_x: True (default)
+- color_palette: "Classic" (or others)
+- individual_alpha: 0.45 (transparency for individual curves)
+- individual_linewidth: 1.0
+- median_linewidth: 3.0
+- show_median: True
+- show_secondary_peaks: True
+- Marker colors: f0_marker_color, secondary_marker_color
+- Marker shapes: f0_marker_shape (Star, Diamond, Circle, etc.)
+
+---
+
+## 2. AUTO PEAK DETECTION - Peak Detection Presets
+
+### Location:
+D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\hvstrip_progressive\core\peak_detection.py
+
+### Preset Configurations:
+
+#### "default" Preset:
+method: find_peaks
+select: leftmost
+prominence: 0.2
+distance: 3
+freq_min: 0.5 Hz
+min_rel_height: 0.25
+exclude_first_n: 1 (skip first sample)
+min_amplitude: None
+
+#### "forward_modeling" Preset (RECOMMENDED FOR MULTI-PROFILE):
+method: find_peaks
+select: leftmost
+prominence: 0.1 (less strict than default)
+distance: 2 (closer peaks allowed)
+freq_min: 0.3 Hz (lower bound)
+min_rel_height: 0.15
+exclude_first_n: 1
+min_amplitude: 1.5 (minimum H/V ratio)
+check_clarity_ratio: True
+clarity_ratio_threshold: 1.5 (peak must be 1.5x amplitude at f0/2 and 2*f0)
+
+#### "conservative" Preset:
+method: find_peaks
+select: max (globally highest)
+prominence: 0.5 (very strict)
+distance: 5 (peaks well-separated)
+min_rel_height: 0.3
+min_amplitude: 2.0
+
+#### "forward_modeling_sharp" Preset:
+method: find_peaks
+select: leftmost_sharpest (leftmost of sharpest peaks)
+prominence: 0.1
+distance: 2
+
+### Peak Selection Strategies:
+
+`python
+def _select_peak(peaks, freqs, amps, select):
+    if select == "leftmost":
+        return peaks[np.argmin(freqs[peaks])]
+    elif select == "sharpest":
+        proms = peak_prominences(amps, peaks)
+        return peaks[np.argmax(proms)]
+    elif select == "leftmost_sharpest":
+        proms = peak_prominences(amps, peaks)
+        max_prom = np.max(proms)
+        sharp_peaks = peaks[proms >= max_prom * 0.5]
+        return sharp_peaks[np.argmin(freqs[sharp_peaks])]
+    else:  # "max"
+        return peaks[np.argmax(amps[peaks])]
+`
+
+### Peak Detection Function:
+
+`python
+def detect_peak(freqs, amps, config):
+    # Returns: (peak_frequency, peak_amplitude, peak_index)
+    
+    peak_cfg = config.get("peak_detection", {})
+    preset = peak_cfg.get("preset", None)
+    
+    # Resolve preset → merge with custom overrides
+    if preset:
+        peak_cfg = get_peak_detection_preset(preset)
+        # Custom values override preset
+    
+    method = peak_cfg.get("method", "max")
+    select = peak_cfg.get("select", "max")
+    fmin = peak_cfg.get("freq_min", None)
+    fmax = peak_cfg.get("freq_max", None)
+    min_rel_height = peak_cfg.get("min_rel_height", 0.0)
+    min_amplitude = peak_cfg.get("min_amplitude", None)
+    check_clarity = peak_cfg.get("check_clarity_ratio", False)
+    clarity_threshold = peak_cfg.get("clarity_ratio_threshold", 1.5)
+    
+    if method == "find_peaks":
+        params = peak_cfg.get("find_peaks_params", {})
+        peaks, _ = find_peaks(amps, **params)
+        # Apply filters
+        peaks = _apply_freq_window(peaks, freqs, fmin, fmax)
+        peaks = _apply_min_amplitude(peaks, amps, min_amplitude)
+        if check_clarity:
+            valid = [p for p in peaks if _check_clarity(...)]
+            peaks = np.array(valid)
+        # Select one peak
+        idx = _select_peak(peaks, freqs, amps, select)
+        return (freqs[idx], amps[idx], idx)
+    
+    elif method == "max":
+        # Global maximum (with optional filtering)
+        ...
+    elif method == "manual":
+        # User-specified frequency
+        f_manual = peak_cfg.get("manual_frequency")
+        idx = np.argmin(np.abs(freqs - f_manual))
+        return (freqs[idx], amps[idx], idx)
+`
+
+### Clarity Ratio Check:
+
+`python
+def _check_clarity(freqs, amps, peak_idx, clarity_threshold=1.5):
+    """Peak amplitude must exceed clarity_threshold × amplitude at f0/2 and 2*f0"""
+    peak_freq = freqs[peak_idx]
+    peak_amp = amps[peak_idx]
+    
+    # Check at f0/2
+    if peak_freq/2 >= freqs[0]:
+        idx_half = np.argmin(np.abs(freqs - peak_freq/2))
+        if peak_amp < clarity_threshold * amps[idx_half]:
+            return False
+    
+    # Check at 2*f0
+    if peak_freq*2 <= freqs[-1]:
+        idx_double = np.argmin(np.abs(freqs - peak_freq*2))
+        if peak_amp < clarity_threshold * amps[idx_double]:
+            return False
+    
+    return True
+`
+
+---
+
+## 3. FIGURE GENERATION - MultiProfileTab._save_results()
+
+### Per-Profile Output Structure:
+`
+output_dir/
+├── Profile_1/
+│   ├── hv_curve.csv (freq, amp columns)
+│   ├── peak_info.txt (f0_Frequency_Hz, f0_Amplitude, f0_Index, Secondary_*)
+│   ├── hv_forward_curve.png
+│   └── hv_forward_with_vs.png (if show_vs=True)
+├── Profile_2/
+│   └── ...
+├── combined_hv_curves.png (all on one plot)
+├── combined_hv_curves.pdf (optional)
+├── combined_summary.csv
+├── median_hv_curve.csv
+└── median_peak_info.txt
+`
+
+### CSV Formats:
+
+**hv_curve.csv:**
+`
+frequency,amplitude
+0.5,1.234
+0.501,1.245
+...
+`
+
+**peak_info.txt:**
+`
+f0_Frequency_Hz,0.567
+f0_Amplitude,3.456
+f0_Index,42
+Secondary_1_Frequency_Hz,1.234
+Secondary_1_Amplitude,2.123
+Secondary_1_Index,98
+`
+
+**combined_summary.csv:**
+`
+Profile,f0_Hz,f0_Amplitude,n_secondary
+Profile_1,0.567,3.456,1
+Profile_2,0.589,3.123,0
+...
+Median,0.576,3.290,1
+`
+
+### Figure Types:
+
+1. **HV-only figure**: 1 subplot with H/V curve + f0 marker + secondary markers
+2. **HV + Vs figure**: 2 subplots (HV ratio on left, Vs profile on right)
+3. **Combined overlay**: All profiles on one plot with optional median
+
+### Matplotlib Configuration:
+- Font: sans-serif, 10-12pt
+- Grid: True, dashed, alpha=0.3
+- Line width: 1.8 (default)
+- DPI: 300 (publication)
+- Axes linewidth: 1.0
+- Log x-axis (default)
+
+---
+
+## 4. OUTPUT VIEWER DIALOG
+
+### Location:
+D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pro\hvsr_pro\packages\hvstrip-progressive\hvstrip_progressive\gui\dialogs\output_viewer_dialog.py
+
+### Features:
+- Load previous output folder
+- Parse: hv_curve.csv, peak_info.txt from all profile subfolders
+- Reconstruct ProfileResult objects
+- DisplayOutputViewerDialog for viewing saved results
+- TreeWidget for toggling visibility:
+  - Individual profiles (f0, secondary peaks)
+  - Median (f0, secondary peaks)
+- Re-render with different settings
+
+---
+
+## 5. FORWARD MODELING PAGE INTEGRATION
+
+### Location:
+D:\Research\Narm_Afzar\Git_hub\HV_Pro\HV_Analyze_Pre\hvsr_pro\packages\hvstrip-progressive\hvstrip_progressive\gui\pages\forward_modeling_page.py
+
+### Input Tabs:
+1. From File: Load soil profile from file
+2. From Dinver: Import Dinver results
+3. Profile Editor: Manual layer definition
+4. Multiple Profiles (NEW): Calls MultiProfileTab
+
+### Frequency Configuration:
+- fmin: 0.01-10.0 Hz (default 0.5)
+- fmax: 1.0-100.0 Hz (default 20.0)
+- nf: 50-2000 points (default 500)
+- engine: diffuse_field, sh_wave, ellipticity
+
+### Engine Settings Dialog:
+- Opens EngineSettingsDialog for engine-specific parameters
+
+### Output Directory:
+- QLineEdit + Browse button
+- All results saved here per MultiProfileTab
+
+---
+
+## 6. LEGACY BATCH PROCESSING (hvsr_making_peak.py)
+
+### Architecture:
+
+1. **Parallel Window Processing:**
+   - ThreadPoolExecutor with MAX_WORKERS threads
+   - Each window independently processed
+   - Per-window: FFT, smoothing, QC checks
+
+2. **QC Checks:**
+   - STA/LTA ratio (transient detection)
+   - Amplitude clipping (saturation)
+   - HVSR amplitude bounds (2.0-20.0 default)
+   - Flat peak detection (peak/mean ratio)
+   - Statistical outlier pass (MAD or IQR)
+
+3. **Peak Detection (Auto Mode):**
+   - Uses hvsr_pro.processing.windows.peaks.detect_peaks()
+   - Fallback: scipy.signal.find_peaks()
+   - Environment variables:
+     - HV_AUTO_MODE: 0/1 (enable auto mode)
+     - HV_AUTO_NPEAKS: number of peaks (default 3)
+     - HV_AUTO_MIN_PROM: prominence threshold (default 0.5)
+     - HV_AUTO_MIN_AMP: amplitude threshold (default 2.0)
+
+4. **Output Files:**
+   - *.mat: Statistics (VelFreqHV, HVmean, HVStd, HVMedian, HV16, HV84)
+   - *_result.json: Per-station data (frequencies, means, percentiles, peaks)
+   - Figures: Standard, hvsr_pro, statistics (PNG/PDF)
+
+### Environment Variable Config:
+
+`ash
+export HV_MAX_PARALLEL=2          # Simultaneous processes
+export HV_AUTO_MODE=1            # Skip GUI
+export HV_AUTO_NPEAKS=3
+export HV_AUTO_MIN_PROM=0.5
+export HV_AUTO_MIN_AMP=2.0
+export HV_AUTO_DPI=300
+export HV_AUTO_JSON=1
+export HV_AUTO_CSV=1
+export HV_AUTO_FIG_STD=1
+export HV_AUTO_FIG_STATS=1
+export HV_AUTO_FIG_PRO=1
+export HV_STAT_METHOD=mad         # mad or iqr
+export HV_STAT_THRESHOLD=3.0      # Outlier threshold
+`
+
+---
+
+## SUMMARY TABLE: Peak Selection Parameters
+
+| Parameter | Default | Forward Modeling | Conservative |
+|-----------|---------|------------------|--------------|
+| Prominence | 0.2 | 0.1 | 0.5 |
+| Distance | 3 | 2 | 5 |
+| freq_min (Hz) | 0.5 | 0.3 | 0.5 |
+| min_rel_height | 0.25 | 0.15 | 0.3 |
+| min_amplitude | None | 1.5 | 2.0 |
+| select strategy | leftmost | leftmost | max |
+| clarity check | False | True | False |
+
+---
+
+## Total Lines of Code:
+- multi_profile_dialog.py: ~1100 LOC (core wizard)
+- multi_profile_tab.py: ~600 LOC (UI integration)
+- peak_detection.py: ~340 LOC (auto-detection)
+- hvsr_making_peak.py: ~1400+ LOC (legacy batch)
+- hvsr_figure_gen.py: ~550 LOC (legacy figures)
+- figure_wizard_dialog.py: ~280 LOC (post-processing)
+- report_generator.py: ~1400+ LOC (analysis reports)
+
+Total: ~7000+ lines of multi-profile code
+

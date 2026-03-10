@@ -1,0 +1,284 @@
+# DETAILED FEATURE SHOWCASE: ALL "COOL STUFF" IN MULTIPLE FORWARD SECTION
+
+## 🎯 AUTO PEAK DETECTION (Most Powerful Feature)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+PRIMARY PEAK DETECTION (f0):
+  • TWO STRATEGIES:
+    1. RANGED MODE: If frequency range specified (e.g., 0.5-2 Hz)
+       → Direct maximum search within the band (ignores prominence)
+       → Perfect for when you KNOW where the peak should be
+       File: multi_forward_worker.py, Line 166-191
+       
+    2. UNRANGED MODE: If no range specified
+       → Global argmax across entire frequency band
+       → File: multi_forward_worker.py, Line 189-191
+
+SECONDARY PEAK DETECTION (Multiple peaks possible):
+  • Configurable number: 0-10 secondary peaks (Default: 2)
+  • TWO STRATEGIES PER SECONDARY:
+    1. RANGED MODE: User specifies frequency band for each secondary
+       → Maximum within band (bypasses prominence filter)
+       → File: multi_forward_worker.py, Line 254-270
+       
+    2. UNRANGED MODE: Auto-detection via scipy.signal.find_peaks
+       → Apply prominence threshold (Default: 0.5, Range: 0.0-10.0)
+       → Apply amplitude threshold (Default: 2.0, Range: 0.0-100.0)
+       → Exclude primary + already-claimed secondaries
+       → Pick strongest remaining candidate
+       File: multi_forward_worker.py, Line 271-279
+
+CONFIGURATION:
+  • Min Prominence: 0.0-10.0 (Default: 0.5)
+    → Scipy find_peaks parameter for peak quality
+    
+  • Min Amplitude: 0.0-100.0 (Default: 2.0)
+    → Absolute amplitude threshold to ignore tiny peaks
+    
+  • Per-Peak Frequency Ranges (Optional):
+    → PRIMARY: constrain f0 to min-max band (e.g., 0.5-2 Hz)
+    → UP TO 10 SECONDARY: each with independent range
+    → Enable/disable each range independently
+    File: auto_peak_settings_dialog.py, Lines 14-56
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 📊 VISUALIZATION CONTROLS (Very Fine-Grained)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+CURVE OVERLAY:
+  ✓ 19 Color Palettes: Classic, Bold, Earth, Nordic, Sunset, Green, Blue, Orange, Red, Purple
+                       + Matplotlib: tab10, tab20, Set1, Set2, Set3, Pastel1, Paired, Dark2, Accent
+    File: ui_builder.py, Line 189-193 + constants.py, Lines 4-34
+    
+  ✓ Curve Alpha: 0.05-1.0 (step 0.05) - Individual profile transparency
+  ✓ Curve Line Width: 0.3-5.0 - Individual profile line thickness
+  ✓ Median Line Width: 0.5-8.0 - Separate median curve thickness
+  ✓ Sigma Band Alpha: 0.05-0.6 - ±1σ envelope transparency
+
+PEAK MARKERS (Different icons for primary vs secondary):
+  ✓ Primary Peak (f0):
+    - 8 Marker Shapes: ★ (star), ◆ (diamond), ● (circle), ▲ (up), ▼ (down), ■ (square), + (plus), ✕ (cross)
+    - Size: 4-30 px (Default: 14)
+    - Annotation Font: 6-20 pt (Default: 8)
+    File: ui_builder.py, Lines 240-245, 247-253, 255-261
+    
+  ✓ Secondary Peaks:
+    - Same 8 Marker Shapes (Independent selection)
+    - Size: 4-30 px (Default: 10)
+    File: ui_builder.py, Lines 274-280, 282-288
+
+DISPLAY TOGGLES (6-way control):
+  ✓ Show Median Curve (ON/OFF)
+  ✓ Show ±1σ Envelope (ON/OFF) - Confidence band
+  ✓ Show f0 Peaks (ON/OFF) - Primary peaks only
+  ✓ Show Secondary Peaks (ON/OFF)
+  ✓ Show Annotations (ON/OFF) - Text labels on peaks
+  ✓ Show Vs Panel (ON/OFF) - Velocity profile side panel
+  File: ui_builder.py, Lines 149-177
+
+GRID & AXES:
+  ✓ Auto Y-Limit (enable/disable)
+  ✓ Y-Limit Method (4 options):
+    - Auto: matplotlib default
+    - 95th Percentile: clips outliers
+    - Mean + 3σ: statistical
+    - Mean + 2×IQR: robust (interquartile range)
+    File: ui_builder.py, Line 307 + constants.py, Lines 42-43
+    
+  ✓ Grid (ON/OFF)
+  ✓ Grid Alpha: 0.1-1.0 (opacity control)
+  File: ui_builder.py, Lines 301-325
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 📈 LEGEND CUSTOMIZATION (4 modes)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+MODE OPTIONS:
+  1. FULL (Default)
+     → Shows every individual profile + statistical entries (Median, ±1σ, Vs30)
+     → Best for detailed analysis
+     
+  2. SUMMARY
+     → Only statistical entries (Median, ±1σ, Vs30)
+     → Profiles hidden from legend
+     → Best for cleaner view
+     
+  3. COMPACT
+     → All entries but smaller font + more columns
+     → Best for many profiles (density optimization)
+     
+  4. HIDDEN
+     → No legend at all
+     → Best for print/publication space-constrained layouts
+
+POSITION (9 locations):
+  • Upper Right (default), Upper Left, Lower Right, Lower Left
+  • Center Right, Center Left, Upper Center, Lower Center
+  • Best (auto-placement)
+
+STYLING:
+  ✓ Font Size: 4-16 pt (Default: 7)
+  ✓ Columns: 1-6 (Default: 2)
+  ✓ Alpha: 0.0-1.0 (Default: 0.85) - legend transparency
+  ✓ Frame: ON/OFF - border around legend
+  File: ui_builder.py, Lines 399-453
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 💾 EXPORT & SAVE OPTIONS (13+ output types)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+FIGURE EXPORT SETTINGS:
+  ✓ DPI: 72-600 (Default: 300) - resolution control
+  ✓ Format: PNG, PDF, SVG - vector or raster
+  ✓ Size Presets: 4 options
+    - Standard (10×7 in)
+    - Large (14×10 in)
+    - Publication (12×8 in)
+    - Wide (16×6 in)
+  File: ui_builder.py, Lines 338-355 + constants.py, Lines 46-51
+
+ALL-PROFILE OUTPUTS (9 options):
+  ✓ Combined HV Overlay + Median CSV (DEFAULT ON)
+    → Master figure with all profiles + median
+    
+  ✓ HV + Vs Side-by-Side (DEFAULT ON)
+    → Publication-ready: H/V curves left, Vs profile right
+    
+  ✓ Median-Only H/V ± σ (DEFAULT ON)
+    → Clean median + confidence envelope
+    
+  ✓ Vs Profile Comparison (DEFAULT ON)
+    → Stacked velocity profiles
+    
+  ✓ Summary Table CSV + LaTeX (DEFAULT ON)
+    → Tabular statistics export
+    
+  ✓ Normalized HV Comparison (DEFAULT OFF)
+    → Normalized by peak amplitude
+    
+  ✓ f0 Distribution Histogram (DEFAULT OFF)
+    → Frequency distribution plot
+    
+  ✓ f0 vs Vs30 Scatter Plot (DEFAULT OFF)
+    → Correlation analysis
+    
+  ✓ Spectral Ratio Matrix (DEFAULT OFF)
+    → Small multiples grid
+  File: save_options_dialog.py, Lines 62-96
+
+PER-PROFILE RE-SAVE OPTIONS (3 options):
+  ✓ Re-save Per-Profile Data (CSV + Peaks) - DEFAULT OFF
+  ✓ Re-save Per-Profile HV Figures - DEFAULT OFF
+  ✓ Re-save Per-Profile Vs Figures + Info - DEFAULT OFF
+  File: save_options_dialog.py, Lines 104-114
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 🎯 INTERACTIVE PEAK PICKING
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+MANUAL PEAK SELECTION:
+  ✓ Select f0 Button
+    → Click on median curve to set primary peak
+    → Overrides auto-detection
+    → Single click per profile
+    
+  ✓ Select Secondary Button
+    → Click to add secondary peaks (multi-click enabled)
+    → Builds list of additional peaks
+    
+  ✓ Undo Secondary Button
+    → Remove last added secondary peak (one at a time)
+    
+  ✓ Clear Peaks Button
+    → Reset all peaks to none
+    
+  ✓ Load Results Button
+    → Load previously computed/saved peak files
+  File: ui_builder.py, Lines 467-507
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## ⚙ PROCESSING ENGINES (3 forward modeling approaches)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+1. DIFFUSE FIELD (Default)
+   → Fast, standard forward modeling
+   
+2. SH WAVE
+   → Shear-wave specific modeling
+   
+3. ELLIPTICITY
+   → Love/Rayleigh coupling analysis
+
+EACH ENGINE HAS DEDICATED SETTINGS accessible via ⚙ gear button
+File: forward_multi_panel.py, Line 52 + Line 54-58
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 📋 BATCH PROCESSING WORKFLOW
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+SEQUENTIAL PROCESSING:
+  • Load N profiles (from editor, CSV, Dinver format)
+  • Compute forward HV curves for each
+  • Auto-detect peaks (optional, with full config)
+  • Generate per-profile outputs
+  • Compute median of all profiles
+  • Optional: route to Profile Wizard for manual peak adjustment
+  • Route to All Profiles view for batch visualization
+  • Save everything with configurable outputs
+  File: forward_multi_panel.py, Lines 168-278
+
+FREQUENCY CONFIGURATION:
+  ✓ Fmin: 0.01-10 Hz (Default: 0.5)
+  ✓ Fmax: 1-100 Hz (Default: 20)
+  ✓ Points: 50-2000 (Default: 500)
+  ✓ Engine: 3 options
+  File: forward_multi_panel.py, Lines 62-80
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## 📝 FIGURE CUSTOMIZATION
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+TITLE & LABELS (editable):
+  ✓ Figure Title: text field (Default: "All Profiles")
+  ✓ X-Axis Label: text field (Default: "Frequency (Hz)")
+  ✓ Y-Axis Label: text field (Default: "H/V Amplitude Ratio")
+  
+These update the figure in real-time!
+File: ui_builder.py, Lines 369-384
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+## SUMMARY: THE "COOL STUFF"
+
+🏆 AUTO PEAK DETECTION WITH RANGED CONSTRAINTS
+   → Most sophisticated feature: combine auto (scipy) with user ranges
+
+📊 19 COLOR PALETTES + CUSTOM STYLING
+   → Fine control over every visual element
+
+🎨 MARKER CUSTOMIZATION
+   → 8 shapes × 2 peak types × independent sizing
+
+📈 4 Y-LIMIT METHODS
+   → Statistical, percentile-based, or auto scaling
+
+📚 4-MODE LEGEND
+   → Compact, full, summary, or hidden
+
+💾 13+ EXPORT TYPES
+   → Everything from raw CSV to publication-ready figures
+
+🎯 INTERACTIVE PEAK PICKING
+   → Override auto-detection with clicks
+
+⚙ 3 PHYSICS ENGINES
+   → Different forward modeling approaches
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════
