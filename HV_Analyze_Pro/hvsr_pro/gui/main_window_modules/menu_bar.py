@@ -247,6 +247,15 @@ if HAS_PYQT5:
             hvstrip_action.triggered.connect(self.parent.open_hvstrip_progressive)
             self.actions['hvstrip_progressive'] = hvstrip_action
             
+            tools_menu.addSeparator()
+            
+            invert_action = tools_menu.addAction('&Invert HVSR...')
+            invert_action.setShortcut('Ctrl+I')
+            invert_action.setStatusTip('Open HVSR Inversion Wizard for curve inversion')
+            invert_action.setToolTip('HVSR curve inversion wizard (Ctrl+I)')
+            invert_action.triggered.connect(self.parent.open_invert_hvsr)
+            self.actions['invert_hvsr'] = invert_action
+            
             return tools_menu
         
         def _build_mode_menu(self) -> QMenu:

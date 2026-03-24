@@ -546,6 +546,28 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"HV Strip Progressive package not available:\n{str(e)}")
 
+    def open_invert_hvsr(self):
+        """Open the HVSR Inversion Wizard window."""
+        try:
+            from hvsr_pro.packages import invert_hvsr_pkg
+            InvertMainWindow = invert_hvsr_pkg.MainWindow
+
+            if InvertMainWindow is None:
+                err = invert_hvsr_pkg.get_import_error()
+                raise ImportError(
+                    f"Invert_HVSR failed to import: {err}")
+
+            if not hasattr(self, '_invert_window') or self._invert_window is None:
+                self._invert_window = InvertMainWindow()
+
+            self._invert_window.show()
+            self._invert_window.raise_()
+            self._invert_window.activateWindow()
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Not Available",
+                f"HVSR Inversion Wizard not available:\n{str(e)}")
+
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
         from hvsr_pro.gui.dialogs import AdvancedQCDialog
