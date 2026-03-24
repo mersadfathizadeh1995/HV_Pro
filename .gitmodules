@@ -4,3 +4,6 @@
 [submodule "HV_Analyze_Pro/hvsr_pro/packages/hvstrip-progressive"]
 	path = HV_Analyze_Pro/hvsr_pro/packages/hvstrip-progressive
 	url = https://github.com/mersadfathizadeh1995/hvstrip-progressive.git
+[submodule "HV_Analyze_Pro/hvsr_pro/packages/invert_hvsr"]
+	path = HV_Analyze_Pro/hvsr_pro/packages/invert_hvsr
+	url = https://github.com/mersadfathizadeh1995/Invert_HVSR.git
