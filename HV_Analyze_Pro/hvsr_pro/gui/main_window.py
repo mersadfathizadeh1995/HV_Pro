@@ -568,6 +568,97 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"HVSR Inversion Wizard not available:\n{str(e)}")
 
+    # ------------------------------------------------------------------
+    # Project Manager
+    # ------------------------------------------------------------------
+
+    def new_project(self):
+        """Create a new HV Pro project via the New Project dialog."""
+        try:
+            from hvsr_pro.packages.project_manager.gui.new_project_dialog import NewProjectDialog
+            from hvsr_pro.packages.project_manager.project import Project
+            from hvsr_pro.packages.project_manager.station_registry import StationRegistry
+            from hvsr_pro.packages.project_manager.project_io import add_recent_project
+
+            dlg = NewProjectDialog(self)
+            if dlg.exec_() and dlg.project_name:
+                proj = Project.create(
+                    name=dlg.project_name,
+                    path=dlg.project_location,
+                    author=dlg.author,
+                    description=dlg.description,
+                )
+
+                if dlg.csv_path:
+                    reg = StationRegistry.from_file(dlg.csv_path)
+                    proj.registry = reg
+                    proj.save()
+
+                add_recent_project(str(proj.hvpro_file))
+                self._open_hub_for_project(proj)
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error",
+                f"Failed to create project:\n{str(e)}")
+
+    def open_project(self):
+        """Open an existing project via file dialog."""
+        try:
+            from PyQt5.QtWidgets import QFileDialog
+            from hvsr_pro.packages.project_manager.project import Project
+            from hvsr_pro.packages.project_manager.project_io import add_recent_project
+
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open HV Pro Project", "",
+                "HV Pro Project (*.hvpro);;All Files (*)",
+            )
+            if path:
+                proj = Project.load(path)
+                add_recent_project(path)
+                self._open_hub_for_project(proj)
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error",
+                f"Failed to open project:\n{str(e)}")
+
+    def open_project_hub(self):
+        """Show the Project Hub for the current project (or prompt to create one)."""
+        if hasattr(self, '_hub_window') and self._hub_window is not None:
+            self._hub_window.show()
+            self._hub_window.raise_()
+            self._hub_window.activateWindow()
+        else:
+            self.new_project()
+
+    def _open_hub_for_project(self, project):
+        """Open the Project Hub window for a given Project."""
+        from hvsr_pro.packages.project_manager.gui.project_hub import ProjectHubWindow
+
+        if hasattr(self, '_hub_window') and self._hub_window is not None:
+            self._hub_window.close()
+
+        self._hub_window = ProjectHubWindow(project, parent=None)
+        self._current_project = project
+
+        # Connect hub signals to module openers
+        self._hub_window.open_batch_requested.connect(
+            lambda bid: self.open_batch_processing()
+        )
+        self._hub_window.open_bedrock_requested.connect(
+            lambda mid: self.open_bedrock_mapping()
+        )
+        self._hub_window.open_hvstrip_requested.connect(
+            lambda pid: self.open_hvstrip_progressive()
+        )
+        self._hub_window.open_inversion_requested.connect(
+            self.open_invert_hvsr
+        )
+        self._hub_window.open_hvsr_requested.connect(
+            lambda: self.raise_() or self.activateWindow()
+        )
+
+        self._hub_window.show()
+
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
         from hvsr_pro.gui.dialogs import AdvancedQCDialog

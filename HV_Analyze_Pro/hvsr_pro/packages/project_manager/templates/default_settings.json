@@ -1,0 +1,27 @@
+{
+  "hvsr_analysis": {
+    "window_length": 30,
+    "overlap": 50,
+    "smoothing": "konno_ohmachi",
+    "ko_bandwidth": 40,
+    "freq_min": 0.2,
+    "freq_max": 20.0,
+    "n_freq_points": 300
+  },
+  "qc": {
+    "sta_lta_enabled": true,
+    "anti_trigger_enabled": true,
+    "frequency_domain_rejection": true
+  },
+  "peak_detection": {
+    "min_prominence": 0.5,
+    "min_amplitude": 2.0,
+    "auto_npeaks": 3,
+    "basis": "lognormal_median"
+  },
+  "bedrock_mapping": {
+    "interpolation_method": "kriging",
+    "grid_resolution": 50,
+    "coordinate_system": "WGS84"
+  }
+}

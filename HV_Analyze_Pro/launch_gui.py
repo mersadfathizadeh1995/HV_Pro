@@ -41,15 +41,7 @@ try:
         print("=" * 70)
         print("HVSR Pro - Interactive Analysis GUI")
         print("=" * 70)
-        print("\nFeatures:")
-        print("  + Load seismic data (ASCII .txt or MiniSEED)")
-        print("  + Interactive window rejection (click to toggle)")
-        print("  + Color-coded visualization (green=active, gray=rejected)")
-        print("  + Real-time HVSR updates")
-        print("  + Quality metrics and statistics")
-        print("  + Export results and plots")
-        print("\n" + "=" * 70)
-        print("Starting GUI...\n")
+        print("\nStarting GUI...\n")
         
         app = QApplication(sys.argv)
         app.setApplicationName("HVSR Pro")
@@ -58,19 +50,47 @@ try:
         # Set application style
         app.setStyle('Fusion')
         
-        # Create and show main window
-        window = HVSRMainWindow()
-        window.show()
+        # Show Welcome Dialog first
+        try:
+            from hvsr_pro.packages.project_manager.gui.welcome_dialog import WelcomeDialog
+            from hvsr_pro.packages.project_manager.project import Project
+            from hvsr_pro.packages.project_manager.station_registry import StationRegistry
+            from hvsr_pro.packages.project_manager.project_io import add_recent_project
+
+            welcome = WelcomeDialog()
+            result = welcome.exec_()
+
+            if result and welcome.result_action == "new":
+                # Create main window then show New Project dialog
+                window = HVSRMainWindow()
+                window.show()
+                window.new_project()
+
+            elif result and welcome.result_action == "open":
+                window = HVSRMainWindow()
+                window.show()
+                proj = Project.load(welcome.result_path)
+                add_recent_project(welcome.result_path)
+                window._open_hub_for_project(proj)
+
+            elif result and welcome.result_action == "quick":
+                # Quick Analysis — just open the main window
+                window = HVSRMainWindow()
+                window.show()
+
+            else:
+                # Cancelled — still open main window
+                window = HVSRMainWindow()
+                window.show()
+
+        except Exception as e:
+            print(f"Welcome dialog error: {e}")
+            print("Falling back to direct launch...")
+            window = HVSRMainWindow()
+            window.show()
         
         print("SUCCESS: GUI launched successfully!")
-        print("\nInstructions:")
-        print("  1. Click 'Load Data File' to import seismic data")
-        print("  2. Adjust processing settings if needed")
-        print("  3. Click 'Process HVSR' to analyze")
-        print("  4. Use layer dock checkboxes to toggle window visibility")
-        print("  5. Mean HVSR updates automatically when you toggle")
-        print("  6. Export results when satisfied")
-        print("\n" + "=" * 70)
+        print("=" * 70)
         
         sys.exit(app.exec_())
     

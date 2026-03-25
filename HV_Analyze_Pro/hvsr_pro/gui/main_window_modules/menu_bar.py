@@ -61,12 +61,40 @@ if HAS_PYQT5:
             This creates all menus and actions, storing references in self.actions
             for later access by the main window.
             """
+            self._build_project_menu()
             self._build_file_menu()
             self._build_edit_menu()
             self._build_view_menu()
             self._build_tools_menu()
             self._build_mode_menu()
             self._build_help_menu()
+        
+        def _build_project_menu(self) -> QMenu:
+            """Build the Project menu (project manager integration)."""
+            project_menu = self.menubar.addMenu('&Project')
+            self.menus['project'] = project_menu
+            
+            new_action = project_menu.addAction('&New Project...')
+            new_action.setShortcut('Ctrl+Shift+N')
+            new_action.setStatusTip('Create a new HV Pro project')
+            new_action.triggered.connect(self.parent.new_project)
+            self.actions['new_project'] = new_action
+            
+            open_action = project_menu.addAction('&Open Project...')
+            open_action.setShortcut('Ctrl+Shift+O')
+            open_action.setStatusTip('Open an existing HV Pro project')
+            open_action.triggered.connect(self.parent.open_project)
+            self.actions['open_project'] = open_action
+            
+            project_menu.addSeparator()
+            
+            hub_action = project_menu.addAction('Project &Hub...')
+            hub_action.setShortcut('Ctrl+H')
+            hub_action.setStatusTip('Open the Project Hub dashboard')
+            hub_action.triggered.connect(self.parent.open_project_hub)
+            self.actions['project_hub'] = hub_action
+            
+            return project_menu
         
         def _build_file_menu(self) -> QMenu:
             """Build the File menu."""
