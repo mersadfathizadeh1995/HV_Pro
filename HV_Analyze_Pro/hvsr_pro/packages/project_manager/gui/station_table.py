@@ -19,15 +19,16 @@ from ..station_registry import StationRegistry, RegistryStation
 
 # Column indices
 COL_ID = 0
-COL_NAME = 1
-COL_X = 2
-COL_Y = 3
-COL_ELEV = 4
-COL_VS = 5
-COL_F0 = 6
-COL_STATUS = 7
+COL_SENSOR = 1
+COL_NAME = 2
+COL_X = 3
+COL_Y = 4
+COL_ELEV = 5
+COL_VS = 6
+COL_F0 = 7
+COL_STATUS = 8
 
-_HEADERS = ["ID", "Name", "X", "Y", "Elevation", "Vs (m/s)", "f₀ (Hz)", "Status"]
+_HEADERS = ["ID", "Sensor", "Name", "X", "Y", "Elevation", "Vs (m/s)", "f₀ (Hz)", "Status"]
 _MISSING_BG = QColor(255, 245, 230)  # light orange for missing data
 
 
@@ -141,6 +142,10 @@ class StationTableWidget(QWidget):
             id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, COL_ID, id_item)
 
+            # Sensor
+            sensor_item = QTableWidgetItem(stn.sensor or "")
+            self.table.setItem(row, COL_SENSOR, sensor_item)
+
             # Name
             self.table.setItem(row, COL_NAME, QTableWidgetItem(stn.display_name))
 
@@ -192,6 +197,10 @@ class StationTableWidget(QWidget):
             name_item = self.table.item(row, COL_NAME)
             if name_item:
                 stn.name = name_item.text().strip() or None
+
+            sensor_item = self.table.item(row, COL_SENSOR)
+            if sensor_item:
+                stn.sensor = sensor_item.text().strip() or None
 
             for col, attr in [
                 (COL_X, "x"), (COL_Y, "y"),

@@ -217,9 +217,6 @@ class DataProcessWorker(QThread):
 
         total_windows = len(time_windows)
         total_stations = len(station_files)
-        total_tasks = total_windows * total_stations
-
-        self.progress.emit(8, f"Processing {total_windows} window(s) × {total_stations} station(s) = {total_tasks} tasks [MiniSEED]")
 
         results = []
 
@@ -255,6 +252,31 @@ class DataProcessWorker(QThread):
 
             station_streams[stn_id] = (combined_stream, fs_detected or 200.0, data_start, data_end)
 
+        # Build per-station time window assignments
+        station_assignments = self.params.get('station_assignments', {})
+        # station_assignments maps config_name → [station_ids]
+        # Build reverse: station_id → set of window_indices
+        stn_to_windows = {}
+        if station_assignments:
+            for win_idx, window in enumerate(time_windows):
+                win_name = window.get('name', f'Window_{win_idx+1}')
+                assigned_stns = station_assignments.get(win_name, [])
+                for stn_id in assigned_stns:
+                    stn_to_windows.setdefault(stn_id, set()).add(win_idx)
+
+        # Count total tasks for progress
+        if stn_to_windows:
+            total_tasks = sum(
+                len(wins) for stn_id, wins in stn_to_windows.items()
+                if stn_id in station_streams
+            )
+            if total_tasks == 0:
+                total_tasks = 1
+        else:
+            total_tasks = total_windows * total_stations
+
+        self.progress.emit(8, f"Processing {total_tasks} tasks [MiniSEED]")
+
         # Process each time window × station combination
         task_idx = 0
         for win_idx, window in enumerate(time_windows):
@@ -269,6 +291,11 @@ class DataProcessWorker(QThread):
             os.makedirs(win_dir, exist_ok=True)
 
             for stn_id, (stream_orig, fs, data_start, data_end) in station_streams.items():
+                # Skip this station if per-station assignments exist and
+                # this station is NOT assigned to this window
+                if stn_to_windows and win_idx not in stn_to_windows.get(stn_id, set()):
+                    continue
+
                 task_idx += 1
                 progress_pct = 15 + int(80 * task_idx / max(1, total_tasks))
 

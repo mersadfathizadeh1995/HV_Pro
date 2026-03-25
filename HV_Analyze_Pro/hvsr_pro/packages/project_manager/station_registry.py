@@ -26,6 +26,7 @@ class RegistryStation:
     source CSV did not provide them.
     """
     id: str
+    sensor: Optional[str] = None
     name: Optional[str] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -54,6 +55,7 @@ class RegistryStation:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "sensor": self.sensor,
             "name": self.name,
             "x": self.x,
             "y": self.y,
@@ -70,6 +72,7 @@ class RegistryStation:
     def from_dict(cls, d: dict) -> "RegistryStation":
         return cls(
             id=d["id"],
+            sensor=d.get("sensor"),
             name=d.get("name"),
             x=d.get("x"),
             y=d.get("y"),
@@ -89,6 +92,7 @@ class RegistryStation:
 
 _COLUMN_ALIASES: Dict[str, List[str]] = {
     "id":        ["id", "station_id", "station", "stn", "stn_id", "point_id"],
+    "sensor":    ["sensor", "sensor_id", "sensor_num", "instrument", "sensor_name"],
     "name":      ["name", "station_name", "stn_name", "label", "description"],
     "x":         ["x", "lon", "longitude", "easting", "long"],
     "y":         ["y", "lat", "latitude", "northing"],
@@ -182,7 +186,7 @@ class StationRegistry:
             fields: Dict[str, Any] = {}
             for csv_col, field_name in col_map.items():
                 raw = row.get(csv_col)
-                if field_name in ("id", "name"):
+                if field_name in ("id", "name", "sensor"):
                     fields[field_name] = str(raw).strip() if raw else None
                 else:
                     fields[field_name] = _safe_float(raw)
@@ -193,6 +197,7 @@ class StationRegistry:
 
             stations.append(RegistryStation(
                 id=station_id,
+                sensor=fields.get("sensor"),
                 name=fields.get("name"),
                 x=fields.get("x"),
                 y=fields.get("y"),
@@ -348,6 +353,7 @@ class StationRegistry:
         for s in self.stations:
             records.append({
                 "id": s.id,
+                "sensor": s.sensor,
                 "name": s.display_name,
                 "x": s.x,
                 "y": s.y,
@@ -365,12 +371,12 @@ class StationRegistry:
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "id", "name", "x", "y", "elevation", "vs_avg",
+                "id", "sensor", "name", "x", "y", "elevation", "vs_avg",
                 "f0", "f0_std", "bedrock_depth",
             ])
             for s in self.stations:
                 writer.writerow([
-                    s.id, s.display_name, s.x, s.y, s.elevation, s.vs_avg,
+                    s.id, s.sensor, s.display_name, s.x, s.y, s.elevation, s.vs_avg,
                     s.f0, s.f0_std, s.bedrock_depth,
                 ])
 

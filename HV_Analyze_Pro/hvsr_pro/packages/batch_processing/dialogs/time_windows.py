@@ -17,7 +17,10 @@ import csv
 
 
 class TimeWindowsDialog(QDialog):
-    """Dialog for managing multiple time windows with timezone conversion."""
+    """Dialog for managing multiple time windows with timezone conversion.
+
+    Optionally supports per-station assignment when *station_ids* is provided.
+    """
 
     # Timezone offsets (hours to ADD to local time to get UTC)
     TZ_OFFSETS = {
@@ -26,14 +29,27 @@ class TimeWindowsDialog(QDialog):
         'CDT': 5,   # Central Daylight Time -> UTC+5
     }
 
-    def __init__(self, parent=None, time_windows=None, timezone='CST'):
+    def __init__(self, parent=None, time_windows=None, timezone='CST',
+                 station_ids=None, station_assignments=None):
+        """
+        Parameters
+        ----------
+        station_ids : list[int], optional
+            Station numbers available for assignment. If provided,
+            an "Assigned Stations" column is added to the table.
+        station_assignments : dict, optional
+            Maps config_name → list of station_ids pre-assigned.
+        """
         super().__init__(parent)
         self.setWindowTitle("Time Windows Configuration")
         self.setModal(True)
-        self.setMinimumSize(700, 400)
+        self.setMinimumSize(750, 450)
 
         self._time_windows = time_windows or []
         self._timezone = timezone
+        self._station_ids = station_ids or []
+        self._station_assignments = station_assignments or {}
+        self._has_stations = bool(self._station_ids)
         self._build_ui()
         self._load_windows()
 
@@ -59,16 +75,27 @@ class TimeWindowsDialog(QDialog):
         layout.addLayout(tz_layout)
 
         # Info label
-        info_label = QLabel("Each row defines a time window. All windows will be processed for each station.")
+        if self._has_stations:
+            info_label = QLabel("Define time windows and assign stations to each. "
+                                "Use Auto-Distribute to assign automatically.")
+        else:
+            info_label = QLabel("Each row defines a time window. "
+                                "All windows will be processed for each station.")
         info_label.setStyleSheet("color: #666; font-style: italic;")
         layout.addWidget(info_label)
 
         # Table for time windows
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['Config Name', 'Start Time', 'End Time'])
+        n_cols = 4 if self._has_stations else 3
+        self.table = QTableWidget(0, n_cols)
+        headers = ['Config Name', 'Start Time', 'End Time']
+        if self._has_stations:
+            headers.append('Assigned Stations')
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        if self._has_stations:
+            self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.table.setToolTip("Format: YYYY-MM-DD HH:MM:SS")
         layout.addWidget(self.table)
 
@@ -95,6 +122,26 @@ class TimeWindowsDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+        # Auto-distribute buttons (only when stations are available)
+        if self._has_stations:
+            dist_layout = QHBoxLayout()
+            dist_layout.addWidget(QLabel("Auto-Assign:"))
+
+            btn_seq = QPushButton("Sequential Split")
+            btn_seq.setToolTip(
+                "Divide stations equally among time windows.\n"
+                "E.g. 24 stations / 4 windows → 1-6, 7-12, 13-18, 19-24"
+            )
+            btn_seq.clicked.connect(self._auto_distribute_sequential)
+            dist_layout.addWidget(btn_seq)
+
+            btn_clear = QPushButton("Clear All Assignments")
+            btn_clear.clicked.connect(self._clear_assignments)
+            dist_layout.addWidget(btn_clear)
+
+            dist_layout.addStretch()
+            layout.addLayout(dist_layout)
+
         # OK/Cancel buttons
         dialog_btns = QHBoxLayout()
         dialog_btns.addStretch()
@@ -110,7 +157,8 @@ class TimeWindowsDialog(QDialog):
 
         layout.addLayout(dialog_btns)
 
-    def _add_row(self, config_name="", start_time="", end_time=""):
+    def _add_row(self, config_name="", start_time="", end_time="",
+                 assigned_stations=None):
         """Add a new row to the table."""
         row = self.table.rowCount()
         self.table.insertRow(row)
@@ -129,6 +177,18 @@ class TimeWindowsDialog(QDialog):
         end_item.setToolTip("YYYY-MM-DD HH:MM:SS")
         self.table.setItem(row, 2, end_item)
 
+        # Assigned stations (editable text, comma-separated station IDs)
+        if self._has_stations:
+            stn_text = ""
+            if assigned_stations:
+                stn_text = ", ".join(str(s) for s in assigned_stations)
+            stn_item = QTableWidgetItem(stn_text)
+            stn_item.setToolTip(
+                "Comma-separated station numbers.\n"
+                f"Available: {', '.join(str(s) for s in self._station_ids)}"
+            )
+            self.table.setItem(row, 3, stn_item)
+
     def _remove_selected(self):
         """Remove selected rows."""
         rows = set(item.row() for item in self.table.selectedItems())
@@ -138,10 +198,13 @@ class TimeWindowsDialog(QDialog):
     def _load_windows(self):
         """Load existing time windows into the table."""
         for win in self._time_windows:
+            name = win.get('name', '')
+            assigned = self._station_assignments.get(name, [])
             self._add_row(
-                config_name=win.get('name', ''),
+                config_name=name,
                 start_time=win.get('start_local', ''),
-                end_time=win.get('end_local', '')
+                end_time=win.get('end_local', ''),
+                assigned_stations=assigned,
             )
 
         # Add an empty row if no windows
@@ -227,6 +290,76 @@ class TimeWindowsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Could not write CSV:\n{e}")
 
+    def _auto_distribute_sequential(self):
+        """Distribute stations evenly across time windows.
+
+        E.g. 24 stations / 4 windows → stations 1-6, 7-12, 13-18, 19-24.
+        """
+        n_windows = self.table.rowCount()
+        if n_windows == 0 or not self._station_ids:
+            return
+
+        sorted_ids = sorted(self._station_ids)
+        chunk_size = len(sorted_ids) // n_windows
+        remainder = len(sorted_ids) % n_windows
+
+        idx = 0
+        for row in range(n_windows):
+            # Distribute remainder across first rows
+            n = chunk_size + (1 if row < remainder else 0)
+            chunk = sorted_ids[idx:idx + n]
+            idx += n
+
+            if self._has_stations:
+                stn_item = self.table.item(row, 3)
+                if stn_item:
+                    stn_item.setText(", ".join(str(s) for s in chunk))
+
+    def _clear_assignments(self):
+        """Clear all station assignments."""
+        if not self._has_stations:
+            return
+        for row in range(self.table.rowCount()):
+            stn_item = self.table.item(row, 3)
+            if stn_item:
+                stn_item.setText("")
+
+    def _parse_assigned_stations(self, row: int) -> list:
+        """Parse the assigned stations text for a row."""
+        if not self._has_stations:
+            return []
+        stn_item = self.table.item(row, 3)
+        if not stn_item:
+            return []
+        text = stn_item.text().strip()
+        if not text:
+            return []
+        result = []
+        for part in text.replace(";", ",").split(","):
+            part = part.strip()
+            if part:
+                try:
+                    result.append(int(part))
+                except ValueError:
+                    pass
+        return result
+
+    def get_station_assignments(self) -> dict:
+        """Return dict mapping config_name → [station_ids].
+
+        Only meaningful when station_ids were provided at construction.
+        """
+        assignments = {}
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            if not name_item:
+                continue
+            name = name_item.text().strip() or f"Window_{row+1}"
+            stations = self._parse_assigned_stations(row)
+            if stations:
+                assignments[name] = stations
+        return assignments
+
     def get_time_windows_local(self):
         """Get time windows as entered (local time, no conversion)."""
         windows = []
@@ -289,8 +422,11 @@ class TimeWindowsDialog(QDialog):
         return self._get_timezone()
 
     def get_result(self):
-        """Get dialog result: list of time windows with UTC conversion."""
-        return {
+        """Get dialog result: list of time windows with UTC conversion + assignments."""
+        result = {
             'timezone': self._get_timezone(),
             'windows': self.get_time_windows_utc(),
         }
+        if self._has_stations:
+            result['station_assignments'] = self.get_station_assignments()
+        return result

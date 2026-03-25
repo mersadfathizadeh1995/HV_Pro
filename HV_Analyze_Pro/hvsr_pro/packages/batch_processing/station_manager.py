@@ -33,11 +33,12 @@ class StationManager:
     # ----------------------------------------------------------------
 
     _COL_STATION = 0
-    _COL_FILENAME = 1
-    _COL_FILES = 2
-    _COL_ACTIONS = 3
+    _COL_SENSOR = 1
+    _COL_FILENAME = 2
+    _COL_FILES = 3
+    _COL_ACTIONS = 4
 
-    def add_station_row(self, station_num=None, files=None):
+    def add_station_row(self, station_num=None, files=None, sensor=None):
         """Add a new station row to the table."""
         row = self._table.rowCount()
         self._table.insertRow(row)
@@ -53,6 +54,10 @@ class StationManager:
                 next_num += 1
             stn_spin.setValue(next_num)
         self._table.setCellWidget(row, self._COL_STATION, stn_spin)
+
+        # Sensor column
+        sensor_item = QTableWidgetItem(str(sensor) if sensor else "")
+        self._table.setItem(row, self._COL_SENSOR, sensor_item)
 
         fname_item = QTableWidgetItem()
         fname_item.setFlags(fname_item.flags() & ~Qt.ItemIsEditable)
@@ -154,6 +159,68 @@ class StationManager:
         total_files = sum(len(f) for f in station_files.values())
         msg = f"Imported {total_files} file(s) into {len(station_files)} station(s)"
         self._log(msg)
+
+    def sensor_aware_import(self, sensor_manager, sensor_station_map,
+                            sensor_labels=None):
+        """Import files using sensor-based routing.
+
+        Parameters
+        ----------
+        sensor_manager : SensorConfigManager
+            Sensor configuration with file patterns.
+        sensor_station_map : dict
+            Maps sensor_id → [station_nums].
+        sensor_labels : dict, optional
+            Maps station_num → sensor display name.
+        """
+        from hvsr_pro.packages.batch_processing.data_adapter import get_file_dialog_filter
+        file_filter = get_file_dialog_filter()
+        files, _ = QFileDialog.getOpenFileNames(
+            self._table,
+            "Select ALL Seismic Data Files (sensor-based routing)",
+            "", file_filter,
+        )
+        if not files:
+            return
+
+        station_files, unmatched = sensor_manager.route_files_to_stations(
+            files, sensor_station_map,
+        )
+
+        if not station_files and not unmatched:
+            return
+
+        # Show mapping dialog for review
+        from hvsr_pro.packages.batch_processing.dialogs.sensor_file_mapping import (
+            SensorFileMappingDialog,
+        )
+        dlg = SensorFileMappingDialog(
+            self._table,
+            station_files=station_files,
+            unmatched=unmatched,
+            sensor_labels=sensor_labels or {},
+        )
+        if dlg.exec_() != dlg.Accepted:
+            return
+
+        station_files = dlg.get_station_files()
+
+        self._table.setRowCount(0)
+        for stn_num in sorted(station_files.keys()):
+            sensor_id = None
+            if sensor_labels:
+                sensor_id = sensor_labels.get(stn_num)
+            self.add_station_row(
+                station_num=stn_num,
+                files=station_files[stn_num],
+                sensor=sensor_id,
+            )
+
+        total_files = sum(len(f) for f in station_files.values())
+        self._log(
+            f"Sensor import: {total_files} file(s) → {len(station_files)} station(s)"
+            + (f", {len(unmatched)} unmatched" if unmatched else "")
+        )
 
     def auto_detect_stations(self):
         """Auto-detect stations from a folder."""

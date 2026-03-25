@@ -137,7 +137,9 @@ class BatchProcessingWindow(QMainWindow):
             if m:
                 stn_num = int(m.group(1))
 
-            self._station_mgr.add_station_row(station_num=stn_num, files=None)
+            self._station_mgr.add_station_row(
+                station_num=stn_num, files=None, sensor=stn.sensor,
+            )
             self._log(f"Pre-populated station: {stn.name or stn.id}")
 
         self._log(f"Loaded {len(registry.stations)} stations from project registry")
@@ -568,13 +570,14 @@ class BatchProcessingWindow(QMainWindow):
         input_group = QGroupBox("1. Station Data Files")
         input_layout = QVBoxLayout(input_group)
 
-        self.station_table = QTableWidget(0, 4)
-        self.station_table.setHorizontalHeaderLabels(["Station #", "Filename", "Files", "Actions"])
+        self.station_table = QTableWidget(0, 5)
+        self.station_table.setHorizontalHeaderLabels(["Station #", "Sensor", "Filename", "Files", "Actions"])
         self.station_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.station_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.station_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.station_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.station_table.setColumnWidth(1, 200)
+        self.station_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.station_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.station_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.station_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.station_table.setColumnWidth(2, 200)
         self.station_table.setMinimumHeight(120)
         input_layout.addWidget(self.station_table)
 
@@ -594,12 +597,22 @@ class BatchProcessingWindow(QMainWindow):
         btn.setToolTip("Select files and auto-group by station pattern")
         stn_btn_layout.addWidget(btn)
 
+        btn = QPushButton("Sensor Import")
+        btn.clicked.connect(self._sensor_aware_import)
+        btn.setToolTip("Import files using sensor→station routing")
+        stn_btn_layout.addWidget(btn)
+
         btn = QPushButton("Auto-Detect")
         btn.clicked.connect(self._station_mgr.auto_detect_stations)
         stn_btn_layout.addWidget(btn)
 
         btn = QPushButton("Clear All")
         btn.clicked.connect(self._station_mgr.clear_all)
+        stn_btn_layout.addWidget(btn)
+
+        btn = QPushButton("Sensor Config...")
+        btn.setToolTip("Configure sensor file-matching patterns")
+        btn.clicked.connect(self._open_sensor_editor)
         stn_btn_layout.addWidget(btn)
 
         stn_btn_layout.addStretch()
@@ -702,7 +715,9 @@ class BatchProcessingWindow(QMainWindow):
                      for w in self._time_windows_data.get('windows', [])]
 
         dialog = TimeWindowsDialog(self, time_windows=existing,
-                                   timezone=self._time_windows_data.get('timezone', 'CST'))
+                                   timezone=self._time_windows_data.get('timezone', 'CST'),
+                                   station_ids=self._station_mgr.get_existing_station_nums(),
+                                   station_assignments=self._time_windows_data.get('station_assignments', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
             self._time_windows_data = result
@@ -714,12 +729,72 @@ class BatchProcessingWindow(QMainWindow):
                 names = [w['name'] for w in result['windows']][:3]
                 self.time_windows_status.setText(f"({n} window(s): {', '.join(names)})")
                 self.time_windows_status.setStyleSheet("color: green;")
-            self._log(f"Configured {n} time window(s)")
+
+            assignments = result.get('station_assignments', {})
+            n_assigned = sum(len(v) for v in assignments.values())
+            if n_assigned > 0:
+                self._log(f"Configured {n} time window(s), {n_assigned} station assignments")
+            else:
+                self._log(f"Configured {n} time window(s) (all stations)")
 
     def _browse_output_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if folder:
             self.output_dir_edit.setText(folder)
+
+    def _open_sensor_editor(self):
+        """Open the Sensor Pattern Editor dialog."""
+        from hvsr_pro.packages.batch_processing.dialogs.sensor_pattern_editor import SensorPatternEditor
+        if not hasattr(self, '_sensor_manager'):
+            from hvsr_pro.packages.batch_processing.sensor_config import SensorConfigManager
+            self._sensor_manager = SensorConfigManager.default()
+
+        dlg = SensorPatternEditor(self, manager=self._sensor_manager)
+        if dlg.exec_() == dlg.Accepted:
+            self._sensor_manager = dlg.get_manager()
+            self._log(f"Sensor config updated: {len(self._sensor_manager)} sensors")
+
+    def _sensor_aware_import(self):
+        """Import files using sensor-based routing with registry data."""
+        if not hasattr(self, '_sensor_manager'):
+            from hvsr_pro.packages.batch_processing.sensor_config import SensorConfigManager
+            self._sensor_manager = SensorConfigManager.default()
+
+        # Build sensor→station map from project registry if available
+        sensor_station_map = {}
+        sensor_labels = {}
+        ctx = getattr(self, '_project_context', None)
+        if ctx:
+            project = ctx.get('project')
+            if project and project.registry and project.registry.stations:
+                sensor_station_map = self._sensor_manager.build_sensor_station_map(
+                    project.registry.stations
+                )
+                # Build labels: station_num → sensor display name
+                for stn in project.registry.stations:
+                    if stn.sensor is not None:
+                        import re
+                        m = re.search(r'(\d+)', stn.id)
+                        if m:
+                            num = int(m.group(1))
+                            cfg = self._sensor_manager.get_sensor(str(stn.sensor))
+                            sensor_labels[num] = cfg.display_name if cfg else str(stn.sensor)
+
+        if not sensor_station_map:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "Sensor Import",
+                "No sensor→station mapping found.\n\n"
+                "Make sure the station registry CSV has a 'sensor' column,\n"
+                "or configure sensors via 'Sensor Config...'.\n\n"
+                "Using standard batch import instead."
+            )
+            self._station_mgr.batch_import_files()
+            return
+
+        self._station_mgr.sensor_aware_import(
+            self._sensor_manager, sensor_station_map, sensor_labels,
+        )
 
     def _init_hvsr_defaults(self):
         from hvsr_pro.packages.batch_processing.dialogs.qc_settings import ALGORITHM_DEFAULTS
@@ -803,6 +878,7 @@ class BatchProcessingWindow(QMainWindow):
             'output_dir': self.output_dir_edit.text(),
             'time_window': primary_window,
             'time_windows': time_windows,
+            'station_assignments': self._time_windows_data.get('station_assignments', {}),
             'hvsr_settings': self.hvsr_settings,
         }
 
