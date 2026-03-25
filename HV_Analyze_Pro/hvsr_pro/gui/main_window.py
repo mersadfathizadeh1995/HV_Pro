@@ -492,11 +492,27 @@ class HVSRMainWindow(QMainWindow):
     # === REMOVED: _on_override_sampling_toggled ===
     # Now handled internally by ProcessingSettingsPanel
 
-    def open_batch_processing(self):
-        """Open the Batch Processing window."""
+    def open_batch_processing(self, project_context=None):
+        """Open the Batch Processing window.
+        
+        Parameters
+        ----------
+        project_context : dict, optional
+            {'project': Project, 'batch_id': str} from Project Manager.
+        """
         try:
             from hvsr_pro.packages.batch_processing import BatchProcessingWindow
             
+            # If project context changed, recreate window
+            if project_context and (
+                not hasattr(self, '_batch_window') or self._batch_window is None
+                or getattr(self._batch_window, '_project_context', None) != project_context
+            ):
+                if hasattr(self, '_batch_window') and self._batch_window is not None:
+                    self._batch_window.close()
+                self._batch_window = BatchProcessingWindow(
+                    self, project_context=project_context)
+
             if not hasattr(self, '_batch_window') or self._batch_window is None:
                 self._batch_window = BatchProcessingWindow(self)
             
@@ -508,11 +524,27 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"Batch Processing package not available:\n{str(e)}")
     
-    def open_bedrock_mapping(self):
-        """Open the 3D Bedrock Mapping window."""
+    def open_bedrock_mapping(self, project_context=None):
+        """Open the 3D Bedrock Mapping window.
+        
+        Parameters
+        ----------
+        project_context : dict, optional
+            {'project': Project, 'map_id': str} from Project Manager.
+        """
         try:
             from hvsr_pro.packages.bedrock_mapping import BedrockMappingWindow
             
+            # If project context changed, recreate window
+            if project_context and (
+                not hasattr(self, '_bedrock_window') or self._bedrock_window is None
+                or getattr(self._bedrock_window, '_project_context', None) != project_context
+            ):
+                if hasattr(self, '_bedrock_window') and self._bedrock_window is not None:
+                    self._bedrock_window.close()
+                self._bedrock_window = BedrockMappingWindow(
+                    self, project_context=project_context)
+
             if not hasattr(self, '_bedrock_window') or self._bedrock_window is None:
                 self._bedrock_window = BedrockMappingWindow(self)
             
@@ -640,12 +672,14 @@ class HVSRMainWindow(QMainWindow):
         self._hub_window = ProjectHubWindow(project, parent=None)
         self._current_project = project
 
-        # Connect hub signals to module openers
+        # Connect hub signals to module openers with project context
         self._hub_window.open_batch_requested.connect(
-            lambda bid: self.open_batch_processing()
+            lambda bid: self.open_batch_processing(
+                project_context={'project': project, 'batch_id': bid})
         )
         self._hub_window.open_bedrock_requested.connect(
-            lambda mid: self.open_bedrock_mapping()
+            lambda mid: self.open_bedrock_mapping(
+                project_context={'project': project, 'map_id': mid})
         )
         self._hub_window.open_hvstrip_requested.connect(
             lambda pid: self.open_hvstrip_progressive()

@@ -55,11 +55,23 @@ class BatchProcessingWindow(QMainWindow):
     - Report generation (Excel, CSV, figures)
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, project_context=None):
+        """
+        Parameters
+        ----------
+        parent : QWidget, optional
+        project_context : dict, optional
+            If launched from Project Manager, contains:
+            - 'project': Project instance
+            - 'batch_id': str (e.g. 'batch_001')
+        """
         super().__init__(parent)
         self.setWindowTitle("HVSR Pro - Batch Processing")
         self.resize(1200, 800)
         self.setMinimumSize(900, 600)
+        
+        # Project integration
+        self._project_context = project_context
         
         # State
         self.hvsr_settings = {}
@@ -79,6 +91,200 @@ class BatchProcessingWindow(QMainWindow):
         
         # Status bar
         self.statusBar().showMessage("Ready")
+        
+        # Apply project context after UI is built
+        if self._project_context:
+            self._apply_project_context()
+
+    # ==================================================================
+    #  Project Manager Integration
+    # ==================================================================
+
+    def _apply_project_context(self):
+        """Configure batch window from project context."""
+        ctx = self._project_context
+        if not ctx:
+            return
+
+        project = ctx.get('project')
+        batch_id = ctx.get('batch_id')
+        if not project:
+            return
+
+        # Set output directory to project batch folder
+        batch_dir = project.ensure_module_dir('batch_processing', batch_id)
+        if hasattr(self, 'output_dir_edit'):
+            self.output_dir_edit.setText(str(batch_dir))
+
+        self.setWindowTitle(f"HVSR Pro - Batch Processing — {project.name}")
+
+        # Try restoring saved state first; if none, pre-populate from registry
+        restored = self._restore_project_state(project, batch_id)
+        if not restored and project.registry and project.registry.stations:
+            self._pre_populate_from_registry(project)
+
+    def _pre_populate_from_registry(self, project):
+        """Add station rows from the project's station registry."""
+        registry = project.registry
+        if not registry or not registry.stations:
+            return
+
+        for stn in registry.stations:
+            stn_num = None
+            # Try to parse a numeric ID from the station ID (e.g. "hvsr1" → 1)
+            import re
+            m = re.search(r'(\d+)', stn.id)
+            if m:
+                stn_num = int(m.group(1))
+
+            self._station_mgr.add_station_row(station_num=stn_num, files=None)
+            self._log(f"Pre-populated station: {stn.name or stn.id}")
+
+        self._log(f"Loaded {len(registry.stations)} stations from project registry")
+
+    def _write_project_csvs(self):
+        """Write batch_peaks.csv and combined_results.csv to the project."""
+        ctx = self._project_context
+        if not ctx:
+            return
+        project = ctx.get('project')
+        batch_id = ctx.get('batch_id')
+        if not project or not batch_id:
+            return
+
+        try:
+            from hvsr_pro.packages.project_manager.data_bridge import (
+                write_batch_peaks_csv, write_combined_results_csv,
+            )
+
+            batch_dir = project.ensure_module_dir('batch_processing', batch_id)
+
+            # Convert workflow results to the dict format data_bridge expects
+            result_dicts = self._workflow_result_to_dicts()
+            if not result_dicts:
+                return
+
+            write_batch_peaks_csv(result_dicts, batch_dir / 'batch_peaks.csv')
+            write_combined_results_csv(project, result_dicts, batch_id)
+
+            project.log_activity('batch_processing', f'Results saved to {batch_id}')
+            project.save()
+            self._log("Project CSVs written: batch_peaks.csv, combined_results.csv")
+        except Exception as e:
+            self._log(f"Warning: failed to write project CSVs: {e}")
+
+    def _workflow_result_to_dicts(self):
+        """Convert _workflow_result.station_results to list-of-dicts for data_bridge."""
+        if not self._workflow_result:
+            return []
+        dicts = []
+        for sr in self._workflow_result.station_results:
+            peaks = []
+            if hasattr(sr, 'peaks') and sr.peaks:
+                for p in sr.peaks:
+                    peaks.append({
+                        'frequency': getattr(p, 'frequency', getattr(p, 'freq', None)),
+                        'amplitude': getattr(p, 'amplitude', getattr(p, 'amp', None)),
+                    })
+            dicts.append({
+                'station_name': sr.station_name,
+                'station_id': getattr(sr, 'station_id', None),
+                'peaks': peaks,
+                'valid_windows': getattr(sr, 'valid_windows', 0),
+                'total_windows': getattr(sr, 'total_windows', 0),
+                'output_dir': getattr(sr, 'output_dir',
+                               self.output_dir_edit.text() if hasattr(self, 'output_dir_edit') else ''),
+            })
+        return dicts
+
+    def _save_project_state(self):
+        """Save batch state to the project folder on close."""
+        ctx = self._project_context
+        if not ctx:
+            return
+        project = ctx.get('project')
+        batch_id = ctx.get('batch_id')
+        if not project or not batch_id:
+            return
+
+        try:
+            from hvsr_pro.packages.project_manager.module_state.batch_state_io import (
+                save_batch_state,
+            )
+
+            batch_dir = project.ensure_module_dir('batch_processing', batch_id)
+
+            # Collect station entries from the table
+            station_entries = []
+            for row in range(self.station_table.rowCount()):
+                spin = self.station_table.cellWidget(row, 0)
+                files_item = self.station_table.item(row, 2)
+                station_entries.append({
+                    'station_num': spin.value() if spin else row + 1,
+                    'files': files_item.data(Qt.UserRole) if files_item else [],
+                })
+
+            result_dicts = self._workflow_result_to_dicts()
+
+            save_batch_state(
+                batch_dir,
+                station_entries=station_entries,
+                processed_results=result_dicts,
+                settings=self.hvsr_settings,
+            )
+
+            project.log_activity('batch_processing', f'State saved for {batch_id}')
+            project.save()
+        except Exception as e:
+            self._log(f"Warning: failed to save project state: {e}")
+
+    def _restore_project_state(self, project, batch_id):
+        """Restore batch state from a previous session. Returns True if restored."""
+        try:
+            from hvsr_pro.packages.project_manager.module_state.batch_state_io import (
+                has_batch_state, load_batch_state,
+            )
+
+            batch_dir = project.module_dir('batch_processing', batch_id)
+            if batch_dir is None or not has_batch_state(batch_dir):
+                return False
+
+            state = load_batch_state(batch_dir)
+
+            # Restore station entries
+            for entry in state.get('station_entries', []):
+                self._station_mgr.add_station_row(
+                    station_num=entry.get('station_num'),
+                    files=entry.get('files'),
+                )
+
+            # Restore settings
+            saved_settings = state.get('settings', {})
+            if saved_settings:
+                self.hvsr_settings.update(saved_settings)
+
+            # Restore output dir
+            if hasattr(self, 'output_dir_edit'):
+                self.output_dir_edit.setText(str(batch_dir))
+
+            self._log(f"Restored batch state from {batch_id}")
+            return True
+        except Exception as e:
+            self._log(f"Warning: failed to restore state: {e}")
+            return False
+
+    def closeEvent(self, event):
+        """Save project state before closing."""
+        if self._project_context:
+            self._save_project_state()
+            # Write CSVs if we have results
+            if self._workflow_result:
+                self._write_project_csvs()
+        super().closeEvent(event)
+
+    # ==================================================================
+    #  UI Construction
+    # ==================================================================
 
     def _build_ui(self):
         """Build the main window UI."""
@@ -207,7 +413,9 @@ class BatchProcessingWindow(QMainWindow):
         self.mode_tabs.setTabEnabled(1, True)
         self.mode_tabs.setCurrentIndex(1)
 
-    def _on_results_selection_changed(self):
+        # Auto-write project CSVs when results are ready
+        if self._project_context:
+            self._write_project_csvs()
         if not hasattr(self, 'results_table'):
             return
         checked = self.results_table.get_checked_results()
