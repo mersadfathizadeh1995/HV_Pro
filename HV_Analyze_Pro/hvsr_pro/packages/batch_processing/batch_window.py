@@ -416,6 +416,8 @@ class BatchProcessingWindow(QMainWindow):
         # Auto-write project CSVs when results are ready
         if self._project_context:
             self._write_project_csvs()
+
+    def _on_results_selection_changed(self):
         if not hasattr(self, 'results_table'):
             return
         checked = self.results_table.get_checked_results()
