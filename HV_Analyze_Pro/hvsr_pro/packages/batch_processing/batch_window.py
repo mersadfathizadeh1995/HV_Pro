@@ -129,23 +129,27 @@ class BatchProcessingWindow(QMainWindow):
         if not registry or not registry.stations:
             return
 
+        import re
+        changed = False
         for stn in registry.stations:
             stn_num = None
-            # Try to parse a numeric ID from the station ID (e.g. "hvsr1" → 1)
-            import re
             m = re.search(r'(\d+)', stn.id)
             if m:
                 stn_num = int(m.group(1))
+                if stn.batch_station_num != stn_num:
+                    stn.batch_station_num = stn_num
+                    changed = True
 
             self._station_mgr.add_station_row(
                 station_num=stn_num, files=None, sensor=stn.sensor,
             )
-            self._log(f"Pre-populated station: {stn.name or stn.id}")
 
+        if changed:
+            project.save()
         self._log(f"Loaded {len(registry.stations)} stations from project registry")
 
     def _write_project_csvs(self):
-        """Write batch_peaks.csv and combined_results.csv to the project."""
+        """Write batch_peaks.csv, combined_results.csv, and update registry f0."""
         ctx = self._project_context
         if not ctx:
             return
@@ -168,6 +172,13 @@ class BatchProcessingWindow(QMainWindow):
 
             write_batch_peaks_csv(result_dicts, batch_dir / 'batch_peaks.csv')
             write_combined_results_csv(project, result_dicts, batch_id)
+
+            # Update the registry with f0 values from batch results
+            registry = project.registry
+            if registry:
+                n_updated = registry.update_from_batch_results(result_dicts)
+                if n_updated > 0:
+                    self._log(f"Updated f0 for {n_updated} station(s) in registry")
 
             project.log_activity('batch_processing', f'Results saved to {batch_id}')
             project.save()
@@ -219,11 +230,16 @@ class BatchProcessingWindow(QMainWindow):
             # Collect station entries from the table
             station_entries = []
             for row in range(self.station_table.rowCount()):
-                spin = self.station_table.cellWidget(row, 0)
-                files_item = self.station_table.item(row, 2)
+                spin = self.station_table.cellWidget(
+                    row, StationManager._COL_STATION)
+                files_item = self.station_table.item(
+                    row, StationManager._COL_FILES)
+                sensor_item = self.station_table.item(
+                    row, StationManager._COL_SENSOR)
                 station_entries.append({
                     'station_num': spin.value() if spin else row + 1,
                     'files': files_item.data(Qt.UserRole) if files_item else [],
+                    'sensor': sensor_item.text() if sensor_item else None,
                 })
 
             result_dicts = self._workflow_result_to_dicts()
@@ -258,6 +274,7 @@ class BatchProcessingWindow(QMainWindow):
                 self._station_mgr.add_station_row(
                     station_num=entry.get('station_num'),
                     files=entry.get('files'),
+                    sensor=entry.get('sensor'),
                 )
 
             # Restore settings

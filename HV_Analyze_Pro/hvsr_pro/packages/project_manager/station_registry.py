@@ -317,7 +317,8 @@ class StationRegistry:
         ----------
         results : list of dict
             Each dict should have keys: ``station_name`` (or ``station_id``),
-            ``f0``, and optionally ``f0_std``.
+            and either ``f0`` directly OR ``peaks`` (list of dicts with
+            ``frequency`` and ``amplitude``).
 
         Returns
         -------
@@ -332,12 +333,26 @@ class StationRegistry:
             # Try extracting number from name and matching batch_station_num
             if stn is None:
                 import re
-                m = re.search(r"(\d+)", stn_name)
+                m = re.search(r"(\d+)", str(stn_name))
                 if m:
                     num = int(m.group(1))
                     stn = self.get_by_batch_num(num)
-            if stn is not None:
-                stn.f0 = _safe_float(r.get("f0"))
+            if stn is None:
+                continue
+
+            # Extract f0: either directly or from peaks list
+            f0_val = _safe_float(r.get("f0"))
+            if f0_val is None and r.get("peaks"):
+                peaks = r["peaks"]
+                if isinstance(peaks, list) and peaks:
+                    # First peak is the fundamental frequency
+                    first_peak = peaks[0]
+                    f0_val = _safe_float(
+                        first_peak.get("frequency", first_peak.get("freq"))
+                    )
+
+            if f0_val is not None:
+                stn.f0 = f0_val
                 stn.f0_std = _safe_float(r.get("f0_std"))
                 updated += 1
         return updated

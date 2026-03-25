@@ -127,10 +127,16 @@ def write_combined_results_csv(
             stn_name = sr.get("station_name", "")
             stn_num = sr.get("station_id", 0)
 
-            # Look up in registry
+            # Look up in registry by name, then by batch_station_num
             reg_stn = registry.get_station(stn_name)
-            if reg_stn is None:
+            if reg_stn is None and stn_num:
                 reg_stn = registry.get_by_batch_num(stn_num)
+            # Fallback: extract number from STN name (e.g. "STN01" → 1)
+            if reg_stn is None:
+                import re
+                m = re.search(r"(\d+)", str(stn_name))
+                if m:
+                    reg_stn = registry.get_by_batch_num(int(m.group(1)))
 
             row = [
                 reg_stn.id if reg_stn else stn_name,

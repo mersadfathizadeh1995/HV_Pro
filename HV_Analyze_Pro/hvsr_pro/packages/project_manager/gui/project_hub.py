@@ -184,6 +184,18 @@ class ProjectHubWindow(QMainWindow):
         """Refresh all UI elements from the project state."""
         p = self._project
 
+        # Reload registry from disk in case another module updated it
+        try:
+            fresh = Project.load(p.hvpro_file)
+            p.registry = fresh.registry
+            p.modules = fresh.modules
+            p.recent_activity = fresh.recent_activity
+        except Exception:
+            pass
+
+        # Refresh station table
+        self.station_table.set_registry(p.registry)
+
         # Module card counts
         for module_name, card in [
             (MODULE_BATCH, self.card_batch),
@@ -248,6 +260,11 @@ class ProjectHubWindow(QMainWindow):
         self._project.ensure_module_dir(MODULE_HVSTRIP, profile_id)
         self._project.save()
         self.open_hvstrip_requested.emit(profile_id)
+
+    def showEvent(self, event) -> None:
+        """Refresh when the hub window becomes visible (e.g. after closing batch)."""
+        super().showEvent(event)
+        self._refresh()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # Auto-save on close
