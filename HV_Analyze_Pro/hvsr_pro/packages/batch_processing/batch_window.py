@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QDialog, QTableWidget, QHeaderView, QTabWidget, QSplitter,
     QStatusBar
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 from datetime import datetime
 import multiprocessing
@@ -248,6 +248,7 @@ class BatchProcessingWindow(QMainWindow):
                 batch_dir,
                 station_entries=station_entries,
                 processed_results=result_dicts,
+                data_worker_results=self.processed_results or [],
                 settings=self.hvsr_settings,
             )
 
@@ -286,11 +287,111 @@ class BatchProcessingWindow(QMainWindow):
             if hasattr(self, 'output_dir_edit'):
                 self.output_dir_edit.setText(str(batch_dir))
 
+            # Restore data-worker results (needed by load_hvsr_results)
+            dw_results = state.get('data_worker_results', [])
+            if dw_results:
+                self.processed_results = dw_results
+            else:
+                # Fallback: reconstruct from directory structure
+                dw_results = self._scan_batch_dir_for_results(str(batch_dir))
+                if dw_results:
+                    self.processed_results = dw_results
+
+            # If we have processed results, schedule Results tab population
+            if self.processed_results:
+                if hasattr(self, 'hvsr_btn'):
+                    self.hvsr_btn.setEnabled(True)
+                QTimer.singleShot(500, self._reload_results_from_disk)
+
             self._log(f"Restored batch state from {batch_id}")
             return True
         except Exception as e:
             self._log(f"Warning: failed to restore state: {e}")
             return False
+
+    def _scan_batch_dir_for_results(self, batch_dir):
+        """Reconstruct data-worker results by scanning directory structure.
+
+        Handles projects saved before data_worker_results was persisted.
+        Looks for T_*/STN*/ directories containing result JSON files.
+        """
+        import os
+        import glob
+
+        results = []
+        batch_path = str(batch_dir)
+
+        # Look for time-window directories (T_01, T_02, etc.)
+        for entry in sorted(os.listdir(batch_path)):
+            tw_dir = os.path.join(batch_path, entry)
+            if not os.path.isdir(tw_dir) or entry.startswith('.'):
+                continue
+            # Skip known non-station directories
+            if entry.lower() in ('report', '__pycache__'):
+                continue
+
+            # Look for station subdirectories
+            has_station = False
+            for stn_entry in sorted(os.listdir(tw_dir)):
+                stn_dir = os.path.join(tw_dir, stn_entry)
+                if not os.path.isdir(stn_dir):
+                    continue
+
+                # Check if this dir has result files
+                result_jsons = glob.glob(
+                    os.path.join(stn_dir, "HVSR_*_result.json"))
+                mat_files = glob.glob(
+                    os.path.join(stn_dir, "HVSR_Median_*.mat"))
+                if not result_jsons and not mat_files:
+                    continue
+
+                has_station = True
+                # Extract station_id from station_name if possible
+                stn_name = stn_entry
+                stn_id = 0
+                try:
+                    stn_id = int(''.join(c for c in stn_name if c.isdigit()) or '0')
+                except ValueError:
+                    pass
+
+                results.append({
+                    'station_id': stn_id,
+                    'station_name': stn_name,
+                    'window_name': entry,
+                    'dir': stn_dir,
+                    'mat_path': os.path.join(
+                        stn_dir, f"ArrayData_{stn_name}.mat"),
+                })
+
+        return results
+
+    def _reload_results_from_disk(self):
+        """Reload HVSR results from disk and populate the Results tab."""
+        if not self.processed_results:
+            return
+        if not PROCESSING_AVAILABLE:
+            self._log("Processing modules not available; cannot reload results.")
+            return
+
+        try:
+            self._log("Reloading HVSR results from disk...")
+            station_results = results_handler.load_hvsr_results(
+                self.processed_results, self.hvsr_settings, log_fn=self._log)
+
+            if not station_results:
+                self._log("No saved results found on disk.")
+                return
+
+            result = results_handler.run_analysis(
+                station_results, self.hvsr_settings, log_fn=self._log)
+
+            self._populate_results_tab(result)
+            self._log(f"Restored {len(station_results)} station result(s) "
+                      f"in Results tab.")
+        except Exception as e:
+            import traceback
+            self._log(f"Warning: could not reload results: {e}\n"
+                      f"{traceback.format_exc()}")
 
     def closeEvent(self, event):
         """Save project state before closing."""

@@ -15,6 +15,7 @@ def save_batch_state(
     batch_dir: str | Path,
     station_entries: List[Dict[str, Any]],
     processed_results: Optional[List[Dict[str, Any]]] = None,
+    data_worker_results: Optional[List[Dict[str, Any]]] = None,
     settings: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save batch processing state to a project batch folder.
@@ -26,8 +27,10 @@ def save_batch_state(
     station_entries : list of dict
         Each dict: ``{"station_num": int, "files": [str], "name": str}``.
     processed_results : list of dict, optional
-        List of processed result entries from data_worker
-        (each has station_id, station_name, dir, window_name, mat_path).
+        Workflow result summaries (peaks, valid_windows, etc.).
+    data_worker_results : list of dict, optional
+        Raw data-worker entries (station_name, dir, window_name, mat_path).
+        Used to reload HVSR results from disk on restore.
     settings : dict, optional
         Processing settings snapshot.
     """
@@ -37,6 +40,7 @@ def save_batch_state(
     state = {
         "station_entries": station_entries,
         "processed_results": processed_results or [],
+        "data_worker_results": data_worker_results or [],
     }
     with open(batch_dir / "state.json", "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False, default=str)
@@ -61,6 +65,7 @@ def load_batch_state(
     result: Dict[str, Any] = {
         "station_entries": [],
         "processed_results": [],
+        "data_worker_results": [],
         "settings": {},
     }
 
@@ -70,6 +75,7 @@ def load_batch_state(
             data = json.load(f)
         result["station_entries"] = data.get("station_entries", [])
         result["processed_results"] = data.get("processed_results", [])
+        result["data_worker_results"] = data.get("data_worker_results", [])
 
     settings_file = batch_dir / "settings.json"
     if settings_file.exists():
