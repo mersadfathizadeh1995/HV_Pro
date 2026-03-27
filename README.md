@@ -109,10 +109,10 @@ HVSR Pro generates a comprehensive set of publication-quality figures for each a
 </details>
 
 <p align="center">
-  <img src="Pictures/7_export%20option.jpg" width="55%" alt="Export options"/>
-  <img src="Pictures/8_layers.jpg" width="30%" alt="Layer management"/>
+  <img src="Pictures/7_export%20option.jpg" width="40%" alt="Export options"/>
+  <img src="Pictures/8_layers.jpg" width="55%" alt="Layer management"/>
 </p>
-<p align="center"><em>Export dialog and layer management panel</em></p>
+<p align="center"><em>Export dialog (left) and layer management panel (right)</em></p>
 
 ---
 
@@ -166,6 +166,14 @@ Compute bedrock depth from HVSR peak frequencies and Vs profiles. Perform spatia
   <br><em>Contour layers and station markers exported to Google Earth</em>
 </p>
 
+#### 2D & 3D Visualization
+
+<p align="center">
+  <img src="Pictures/2D_plot.jpg" width="45%" alt="2D visualization"/>
+  <img src="Pictures/3d_Plot.jpg" width="45%" alt="3D visualization"/>
+</p>
+<p align="center"><em>2D cross-section and interactive 3D subsurface model</em></p>
+
 ---
 
 ### 📐 HV Strip — Progressive Analysis
@@ -202,16 +210,6 @@ Forward-model inversion of HVSR curves to estimate subsurface shear-wave velocit
   <img src="Pictures/HVSR_Invert_inversion_process.jpg" width="45%" alt="Inversion process"/>
 </p>
 <p align="center"><em>Layer bound generation (left) and inversion progress (right)</em></p>
-
----
-
-### 📉 2D & 3D Visualization
-
-<p align="center">
-  <img src="Pictures/2D_plot.jpg" width="45%" alt="2D visualization"/>
-  <img src="Pictures/3d_Plot.jpg" width="45%" alt="3D visualization"/>
-</p>
-<p align="center"><em>2D cross-section and interactive 3D subsurface model</em></p>
 
 ---
 
