@@ -159,9 +159,12 @@ Compute bedrock depth from HVSR peak frequencies and Vs profiles. Perform spatia
 
 <p align="center">
   <img src="Pictures/15_Google_earth_export.jpg" width="60%" alt="Google Earth export settings"/>
-  <img src="Pictures/Google_Earth_output.jpg" width="35%" alt="KMZ output in Google Earth"/>
 </p>
-<p align="center"><em>KMZ export settings and the result visualized in Google Earth</em></p>
+
+<p align="center">
+  <img src="Pictures/Google_Earth_output.jpg" width="80%" alt="KMZ output in Google Earth"/>
+  <br><em>Contour layers and station markers exported to Google Earth</em>
+</p>
 
 ---
 
@@ -425,6 +428,12 @@ Contributions are welcome! Please:
 3. Commit your changes (`git commit -m "Add my feature"`)
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a Pull Request
+
+---
+
+## Acknowledgments
+
+This work was developed under the guidance of **Dr. Clinton Wood** at the University of Arkansas. Parts of the azimuthal analysis workflow and certain data-input format handling drew inspiration from [hvsrpy](https://github.com/jpvantassel/hvsrpy).
 
 ---
 
