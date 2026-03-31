@@ -556,8 +556,14 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"3D Bedrock Mapping package not available:\n{str(e)}")
 
-    def open_hvstrip_progressive(self):
-        """Open the HV Strip Progressive window."""
+    def open_hvstrip_progressive(self, project_context=None):
+        """Open the HV Strip Progressive window.
+
+        Parameters
+        ----------
+        project_context : dict, optional
+            {'project': Project, 'profile_id': str} from Project Manager.
+        """
         try:
             from hvsr_pro.packages import hvstrip_progressive_pkg
             HVStripWindow = hvstrip_progressive_pkg.HVStripWindow
@@ -566,6 +572,15 @@ class HVSRMainWindow(QMainWindow):
                 err = hvstrip_progressive_pkg.get_import_error()
                 raise ImportError(
                     f"HV_Strip_Progressive failed to import: {err}")
+
+            # Recreate if project context changed
+            if project_context and (
+                not hasattr(self, '_hvstrip_window') or self._hvstrip_window is None
+                or getattr(self._hvstrip_window, '_project_context', None) != project_context
+            ):
+                if hasattr(self, '_hvstrip_window') and self._hvstrip_window is not None:
+                    self._hvstrip_window.close()
+                self._hvstrip_window = HVStripWindow(self, project_context=project_context)
 
             if not hasattr(self, '_hvstrip_window') or self._hvstrip_window is None:
                 self._hvstrip_window = HVStripWindow(self)
@@ -578,8 +593,14 @@ class HVSRMainWindow(QMainWindow):
             QMessageBox.warning(self, "Not Available",
                 f"HV Strip Progressive package not available:\n{str(e)}")
 
-    def open_invert_hvsr(self):
-        """Open the HVSR Inversion Wizard window."""
+    def open_invert_hvsr(self, project_context=None):
+        """Open the HVSR Inversion Wizard window.
+
+        Parameters
+        ----------
+        project_context : dict, optional
+            {'project': Project, 'inv_id': str} from Project Manager.
+        """
         try:
             from hvsr_pro.packages import invert_hvsr_pkg
             InvertMainWindow = invert_hvsr_pkg.MainWindow
@@ -588,6 +609,16 @@ class HVSRMainWindow(QMainWindow):
                 err = invert_hvsr_pkg.get_import_error()
                 raise ImportError(
                     f"Invert_HVSR failed to import: {err}")
+
+            # Recreate if project context changed
+            if project_context and (
+                not hasattr(self, '_invert_window') or self._invert_window is None
+                or getattr(self._invert_window, '_project_context', None) != project_context
+            ):
+                if hasattr(self, '_invert_window') and self._invert_window is not None:
+                    self._invert_window.close()
+                self._invert_window = InvertMainWindow(
+                    project_context=project_context)
 
             if not hasattr(self, '_invert_window') or self._invert_window is None:
                 self._invert_window = InvertMainWindow()
@@ -682,16 +713,105 @@ class HVSRMainWindow(QMainWindow):
                 project_context={'project': project, 'map_id': mid})
         )
         self._hub_window.open_hvstrip_requested.connect(
-            lambda pid: self.open_hvstrip_progressive()
+            lambda pid: self.open_hvstrip_progressive(
+                project_context={'project': project, 'profile_id': pid})
         )
         self._hub_window.open_inversion_requested.connect(
-            self.open_invert_hvsr
+            lambda iid: self.open_invert_hvsr(
+                project_context={'project': project, 'inv_id': iid})
         )
         self._hub_window.open_hvsr_requested.connect(
-            lambda: self.raise_() or self.activateWindow()
+            lambda aid: self._open_hvsr_with_project(project, aid)
         )
 
         self._hub_window.show()
+
+    def _open_hvsr_with_project(self, project, analysis_id):
+        """Open the main HVSR window in project context.
+
+        Sets the project context so that Save Session writes to the
+        project's ``hvsr_analysis/analysis_NNN/`` directory.  If the
+        analysis folder already contains saved state, it is restored
+        automatically.
+        """
+        from hvsr_pro.packages.project_manager.project import MODULE_HVSR_ANALYSIS
+
+        self._hvsr_project_context = {
+            'project': project,
+            'analysis_id': analysis_id,
+        }
+
+        # Set work directory into the project analysis folder
+        analysis_dir = project.ensure_module_dir(
+            MODULE_HVSR_ANALYSIS, analysis_id)
+        self._work_directory = str(analysis_dir)
+        self.session_ctrl.set_work_directory(str(analysis_dir))
+
+        # Update window title
+        self.setWindowTitle(
+            f"HVSR Pro — {project.name} — {analysis_id}")
+
+        # Attempt to restore from existing state
+        from hvsr_pro.packages.project_manager.module_state.hvsr_state_io import (
+            has_hvsr_state, load_hvsr_state,
+        )
+        if has_hvsr_state(analysis_dir):
+            try:
+                loaded = load_hvsr_state(analysis_dir)
+                if loaded.get("hvsr_result") is not None and loaded.get("windows") is not None:
+                    self.add_info(f"Restoring analysis {analysis_id} ...")
+
+                    # Apply settings from state_dict
+                    sd = loaded.get("state_dict", {})
+                    if "processing" in sd:
+                        proc = sd["processing"]
+                        pp = getattr(
+                            getattr(self, 'processing_tab', None),
+                            'processing_panel', None)
+                        if pp:
+                            for attr, spin_name in [
+                                ("window_length", "window_length_spin"),
+                                ("smoothing_bandwidth", "smoothing_spin"),
+                                ("f_min", "freq_min_spin"),
+                                ("f_max", "freq_max_spin"),
+                                ("n_frequencies", "n_freq_spin"),
+                            ]:
+                                spin = getattr(pp, spin_name, None)
+                                if spin and attr in proc:
+                                    spin.setValue(proc[attr])
+                            if "overlap" in proc:
+                                ov_spin = getattr(pp, "overlap_spin", None)
+                                if ov_spin:
+                                    ov_spin.setValue(int(proc["overlap"] * 100))
+
+                    # Restore data objects
+                    self.restore_session_gui(
+                        loaded["hvsr_result"],
+                        loaded["windows"],
+                        loaded.get("seismic_data"),
+                    )
+
+                    # Azimuthal
+                    if loaded.get("azimuthal_result") is not None:
+                        if hasattr(self, 'azimuthal_tab'):
+                            self.azimuthal_tab.result = loaded["azimuthal_result"]
+                            try:
+                                self.azimuthal_tab.update_plot()
+                            except Exception:
+                                pass
+
+                    self.add_info(f"Analysis {analysis_id} restored successfully.")
+                else:
+                    self.add_info(f"Opening new analysis: {analysis_id}")
+            except Exception as e:
+                self.add_info(
+                    f"Could not restore {analysis_id}: {e}")
+        else:
+            self.add_info(f"New analysis: {analysis_id}")
+
+        # Bring main window to front
+        self.raise_()
+        self.activateWindow()
 
     def open_advanced_qc_settings(self):
         """Open Advanced QC Settings dialog."""
@@ -1188,7 +1308,8 @@ class HVSRMainWindow(QMainWindow):
     def save_session(self):
         """
         Save current session state including all settings and computed data.
-        Delegates to SessionController for the heavy lifting.
+        If a project context is active, also writes to the project folder
+        and updates the project activity log.
         """
         # Sync work directory with controller
         self.session_ctrl.set_work_directory(getattr(self, '_work_directory', ''))
@@ -1197,9 +1318,76 @@ class HVSRMainWindow(QMainWindow):
         result = self.session_ctrl.save_full_session(self)
         
         if result.success:
+            # Also persist into project if context is active
+            ctx = getattr(self, '_hvsr_project_context', None)
+            if ctx:
+                try:
+                    self._save_hvsr_to_project(ctx)
+                except Exception as e:
+                    self.add_info(f"Warning: project save failed: {e}")
             QMessageBox.information(self, "Session Saved", result.info_message)
         else:
             QMessageBox.critical(self, "Save Failed", result.error_message)
+
+    def _save_hvsr_to_project(self, ctx):
+        """Persist current HVSR state into the project folder."""
+        from hvsr_pro.packages.project_manager.project import MODULE_HVSR_ANALYSIS
+        from hvsr_pro.packages.project_manager.module_state.hvsr_state_io import (
+            save_hvsr_state,
+        )
+
+        project = ctx['project']
+        analysis_id = ctx['analysis_id']
+        analysis_dir = project.ensure_module_dir(
+            MODULE_HVSR_ANALYSIS, analysis_id)
+
+        # Build state dict from current GUI
+        state_dict = {}
+        proc_panel = getattr(
+            getattr(self, 'processing_tab', None), 'processing_panel', None)
+        if proc_panel:
+            state_dict["processing"] = {
+                "window_length": proc_panel.window_length_spin.value(),
+                "overlap": proc_panel.overlap_spin.value() / 100.0,
+                "smoothing_bandwidth": proc_panel.smoothing_spin.value(),
+                "f_min": proc_panel.freq_min_spin.value(),
+                "f_max": proc_panel.freq_max_spin.value(),
+                "n_frequencies": proc_panel.n_freq_spin.value(),
+            }
+
+        # File info
+        current_file = getattr(self, 'current_file', '')
+        if isinstance(current_file, list):
+            current_file = ';'.join(str(f) for f in current_file)
+        state_dict["file_path"] = str(current_file) if current_file else ''
+
+        # Peak summary
+        hvsr_result = getattr(self, 'hvsr_result', None)
+        if hvsr_result and hasattr(hvsr_result, 'primary_peak') and hvsr_result.primary_peak:
+            state_dict["peak_frequency"] = hvsr_result.primary_peak.frequency
+            state_dict["peak_amplitude"] = hvsr_result.primary_peak.amplitude
+
+        windows = getattr(self, 'windows', None)
+        seismic_data = getattr(self, 'seismic_data', None) or getattr(self, 'data', None)
+        azimuthal_result = None
+        if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'result'):
+            azimuthal_result = self.azimuthal_tab.result
+
+        save_hvsr_state(
+            analysis_dir,
+            state_dict=state_dict,
+            windows=windows,
+            hvsr_result=hvsr_result,
+            seismic_data=seismic_data,
+            azimuthal_result=azimuthal_result,
+        )
+
+        project.log_activity(
+            MODULE_HVSR_ANALYSIS,
+            f"Analysis saved: {analysis_id}",
+        )
+        project.save()
+        self.add_info(f"Saved to project: {analysis_id}")
     
     def load_session(self):
         """

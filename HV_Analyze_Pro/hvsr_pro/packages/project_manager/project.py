@@ -65,8 +65,10 @@ MODULE_BATCH = "batch_processing"
 MODULE_BEDROCK = "bedrock_mapping"
 MODULE_HVSTRIP = "hv_strip"
 MODULE_INVERSION = "inversion"
+MODULE_HVSR_ANALYSIS = "hvsr_analysis"
 
-_ALL_MODULES = [MODULE_BATCH, MODULE_BEDROCK, MODULE_HVSTRIP, MODULE_INVERSION]
+_ALL_MODULES = [MODULE_BATCH, MODULE_BEDROCK, MODULE_HVSTRIP,
+                MODULE_INVERSION, MODULE_HVSR_ANALYSIS]
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +219,24 @@ class Project:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return out
 
+    def clone_to(self, dest: Path, new_name: Optional[str] = None) -> "Project":
+        """Deep-copy this project to *dest* and return the new Project.
+
+        Copies every file/folder (raw_data, module folders, etc.) then
+        rewrites the ``.hvpro`` manifest with an optional *new_name*.
+        """
+        dest = Path(dest)
+        if dest.exists():
+            raise FileExistsError(f"Destination already exists: {dest}")
+        shutil.copytree(str(self.path), str(dest))
+        new_proj = Project.open(dest)
+        if new_name:
+            new_proj.name = new_name
+        new_proj.created = datetime.now(timezone.utc).isoformat()
+        new_proj.log_activity("project", f"Cloned from {self.name}")
+        new_proj.save()
+        return new_proj
+
     # ------------------------------------------------------------------
     # Path helpers
     # ------------------------------------------------------------------
@@ -240,6 +260,9 @@ class Project:
     def inversion_dir(self, item_id: str = "inv_001") -> Path:
         return self.path / "inversion" / item_id
 
+    def analysis_dir(self, item_id: str = "analysis_001") -> Path:
+        return self.path / "hvsr_analysis" / item_id
+
     def reports_dir(self) -> Path:
         return self.path / "reports"
 
@@ -250,6 +273,7 @@ class Project:
             self.path / "bedrock_mapping",
             self.path / "hv_strip",
             self.path / "inversion",
+            self.path / "hvsr_analysis",
             self.reports_dir(),
         ]
 
@@ -267,6 +291,8 @@ class Project:
             d = self.strip_dir(item_id)
         elif module == MODULE_INVERSION:
             d = self.inversion_dir(item_id)
+        elif module == MODULE_HVSR_ANALYSIS:
+            d = self.analysis_dir(item_id)
         else:
             d = self.path / module / item_id
 
