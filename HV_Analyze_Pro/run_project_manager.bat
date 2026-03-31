@@ -1,4 +1,4 @@
-@echo off
+@echo on
 echo ================================================
 echo    HVSR Pro - Project Manager
 echo ================================================
@@ -20,12 +20,14 @@ echo Starting HVSR Pro with Project Manager...
 echo Working directory: %CD%
 echo.
 
-REM Launch the GUI (Welcome Dialog → Project Manager)
-%PYTHON% -X faulthandler launch_gui.py
+REM Launch the GUI with unbuffered output so all prints/errors appear in real-time
+%PYTHON% -u -X faulthandler launch_gui.py 2>&1
 
 if %ERRORLEVEL% neq 0 (
     echo.
+    echo ======================================================================
     echo Application exited with error code %ERRORLEVEL%
+    echo ======================================================================
 )
 echo.
 echo ================================================
