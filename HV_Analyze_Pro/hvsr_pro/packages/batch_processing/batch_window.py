@@ -250,6 +250,9 @@ class BatchProcessingWindow(QMainWindow):
                 processed_results=result_dicts,
                 data_worker_results=self.processed_results or [],
                 settings=self.hvsr_settings,
+                time_windows=self._time_windows_data,
+                manual_peaks=self._manual_median_peaks,
+                fig_settings=self._fig_export_settings,
             )
 
             project.log_activity('batch_processing', f'State saved for {batch_id}')
@@ -282,6 +285,17 @@ class BatchProcessingWindow(QMainWindow):
             saved_settings = state.get('settings', {})
             if saved_settings:
                 self.hvsr_settings.update(saved_settings)
+
+            # Restore extra state
+            tw = state.get('time_windows')
+            if tw:
+                self._time_windows_data = tw
+            mp = state.get('manual_peaks')
+            if mp:
+                self._manual_median_peaks = mp
+            fs = state.get('fig_settings')
+            if fs:
+                self._fig_export_settings = fs
 
             # Restore output dir
             if hasattr(self, 'output_dir_edit'):

@@ -784,6 +784,21 @@ class HVSRMainWindow(QMainWindow):
                                 if ov_spin:
                                     ov_spin.setValue(int(proc["overlap"] * 100))
 
+                    # Restore QC settings
+                    if "qc_settings" in sd:
+                        self.custom_qc_settings = sd["qc_settings"]
+                        if hasattr(self, 'processing_tab') and hasattr(self.processing_tab, 'unified_qc_panel'):
+                            panel = self.processing_tab.unified_qc_panel
+                            if hasattr(panel, 'apply_advanced_settings'):
+                                try:
+                                    panel.apply_advanced_settings(sd["qc_settings"])
+                                except Exception:
+                                    pass
+
+                    # Restore load_mode
+                    if "load_mode" in sd:
+                        self.load_mode = sd["load_mode"]
+
                     # Restore data objects
                     self.restore_session_gui(
                         loaded["hvsr_result"],
@@ -1355,11 +1370,33 @@ class HVSRMainWindow(QMainWindow):
                 "n_frequencies": proc_panel.n_freq_spin.value(),
             }
 
+        # QC settings
+        qc_settings = self._get_custom_qc_settings_from_ui()
+        if qc_settings:
+            state_dict["qc_settings"] = qc_settings
+
         # File info
         current_file = getattr(self, 'current_file', '')
         if isinstance(current_file, list):
             current_file = ';'.join(str(f) for f in current_file)
         state_dict["file_path"] = str(current_file) if current_file else ''
+        state_dict["load_mode"] = getattr(self, 'load_mode', 'single')
+
+        # Window states (active/rejection per window)
+        windows = getattr(self, 'windows', None)
+        if windows and hasattr(windows, '__iter__'):
+            try:
+                win_states = []
+                for i, w in enumerate(windows):
+                    ws = {"index": i}
+                    if hasattr(w, 'is_active'):
+                        ws["is_active"] = bool(w.is_active)
+                    if hasattr(w, 'rejection_reason'):
+                        ws["rejection_reason"] = str(w.rejection_reason) if w.rejection_reason else None
+                    win_states.append(ws)
+                state_dict["window_states"] = win_states
+            except Exception:
+                pass
 
         # Peak summary
         hvsr_result = getattr(self, 'hvsr_result', None)
@@ -1367,7 +1404,16 @@ class HVSRMainWindow(QMainWindow):
             state_dict["peak_frequency"] = hvsr_result.primary_peak.frequency
             state_dict["peak_amplitude"] = hvsr_result.primary_peak.amplitude
 
-        windows = getattr(self, 'windows', None)
+        # Metadata
+        if windows:
+            try:
+                n_total = len(windows)
+                n_active = sum(1 for w in windows if getattr(w, 'is_active', True))
+                state_dict["n_total_windows"] = n_total
+                state_dict["n_active_windows"] = n_active
+            except Exception:
+                pass
+
         seismic_data = getattr(self, 'seismic_data', None) or getattr(self, 'data', None)
         azimuthal_result = None
         if hasattr(self, 'azimuthal_tab') and hasattr(self.azimuthal_tab, 'result'):

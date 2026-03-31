@@ -17,6 +17,9 @@ def save_batch_state(
     processed_results: Optional[List[Dict[str, Any]]] = None,
     data_worker_results: Optional[List[Dict[str, Any]]] = None,
     settings: Optional[Dict[str, Any]] = None,
+    time_windows: Optional[Dict[str, Any]] = None,
+    manual_peaks: Optional[List] = None,
+    fig_settings: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save batch processing state to a project batch folder.
 
@@ -33,6 +36,12 @@ def save_batch_state(
         Used to reload HVSR results from disk on restore.
     settings : dict, optional
         Processing settings snapshot.
+    time_windows : dict, optional
+        Time window configuration (timezone, windows, station_assignments).
+    manual_peaks : list, optional
+        User-picked median peaks from the Results canvas.
+    fig_settings : dict, optional
+        Figure export preferences.
     """
     batch_dir = Path(batch_dir)
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -41,6 +50,9 @@ def save_batch_state(
         "station_entries": station_entries,
         "processed_results": processed_results or [],
         "data_worker_results": data_worker_results or [],
+        "time_windows": time_windows or {},
+        "manual_peaks": manual_peaks or [],
+        "fig_settings": fig_settings,
     }
     with open(batch_dir / "state.json", "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False, default=str)
@@ -67,6 +79,9 @@ def load_batch_state(
         "processed_results": [],
         "data_worker_results": [],
         "settings": {},
+        "time_windows": {},
+        "manual_peaks": [],
+        "fig_settings": None,
     }
 
     state_file = batch_dir / "state.json"
@@ -76,6 +91,9 @@ def load_batch_state(
         result["station_entries"] = data.get("station_entries", [])
         result["processed_results"] = data.get("processed_results", [])
         result["data_worker_results"] = data.get("data_worker_results", [])
+        result["time_windows"] = data.get("time_windows", {})
+        result["manual_peaks"] = data.get("manual_peaks", [])
+        result["fig_settings"] = data.get("fig_settings")
 
     settings_file = batch_dir / "settings.json"
     if settings_file.exists():

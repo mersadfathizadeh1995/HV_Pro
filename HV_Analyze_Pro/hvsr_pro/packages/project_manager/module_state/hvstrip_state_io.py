@@ -23,6 +23,7 @@ def save_hvstrip_state(
     config: Optional[Dict[str, Any]] = None,
     results: Any = None,
     model_data: Any = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Save HV Strip analysis state to a project profile folder.
 
@@ -36,6 +37,8 @@ def save_hvstrip_state(
         Strip results to pickle.
     model_data : object, optional
         Soil model data to pickle.
+    extra : dict, optional
+        Extra metadata (loaded_profile_path, active_mode, last_strip_dir).
 
     Returns
     -------
@@ -48,6 +51,7 @@ def save_hvstrip_state(
     try:
         state = {
             "config": config or {},
+            "extra": extra or {},
             "has_results": results is not None,
             "has_model": model_data is not None,
         }
@@ -84,6 +88,7 @@ def load_hvstrip_state(
     profile_dir = Path(profile_dir)
     result: Dict[str, Any] = {
         "config": {},
+        "extra": {},
         "results": None,
         "model_data": None,
     }
@@ -93,6 +98,7 @@ def load_hvstrip_state(
         with open(state_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         result["config"] = data.get("config", {})
+        result["extra"] = data.get("extra", {})
 
     for key, filename in [
         ("results", RESULTS_FILE),
