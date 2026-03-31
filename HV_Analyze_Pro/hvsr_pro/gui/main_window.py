@@ -724,6 +724,12 @@ class HVSRMainWindow(QMainWindow):
             lambda aid: self._open_hvsr_with_project(project, aid)
         )
 
+        # When hub saves, also save main window's HVSR state
+        self._hub_window.save_all_requested.connect(
+            lambda: self._save_hvsr_to_project(
+                getattr(self, '_hvsr_project_context', None))
+        )
+
         self._hub_window.show()
 
     def _open_hvsr_with_project(self, project, analysis_id):
@@ -746,6 +752,10 @@ class HVSRMainWindow(QMainWindow):
             MODULE_HVSR_ANALYSIS, analysis_id)
         self._work_directory = str(analysis_dir)
         self.session_ctrl.set_work_directory(str(analysis_dir))
+
+        # Update the Work Directory field in the Data Load tab
+        if hasattr(self, 'data_load_tab') and hasattr(self.data_load_tab, 'work_dir_edit'):
+            self.data_load_tab.work_dir_edit.setText(str(analysis_dir))
 
         # Update window title
         self.setWindowTitle(
@@ -1346,6 +1356,8 @@ class HVSRMainWindow(QMainWindow):
 
     def _save_hvsr_to_project(self, ctx):
         """Persist current HVSR state into the project folder."""
+        if not ctx:
+            return
         from hvsr_pro.packages.project_manager.project import MODULE_HVSR_ANALYSIS
         from hvsr_pro.packages.project_manager.module_state.hvsr_state_io import (
             save_hvsr_state,
@@ -1668,6 +1680,20 @@ class HVSRMainWindow(QMainWindow):
             self.info_text.append(message)
             scrollbar = self.info_text.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
+
+    # ------------------------------------------------------------------
+    #  Close / auto-save
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event):
+        """Auto-save HVSR state into the project folder on close."""
+        ctx = getattr(self, '_hvsr_project_context', None)
+        if ctx:
+            try:
+                self._save_hvsr_to_project(ctx)
+            except Exception as e:
+                self.add_info(f"Warning: auto-save on close failed: {e}")
+        super().closeEvent(event)
     
 
 

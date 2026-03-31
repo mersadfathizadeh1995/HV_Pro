@@ -53,6 +53,7 @@ class ProjectHubWindow(QMainWindow):
     open_inversion_requested = pyqtSignal(str)
     open_hvsr_requested = pyqtSignal(str)
     generate_reports_requested = pyqtSignal()
+    save_all_requested = pyqtSignal()  # emitted so main window can save its state too
 
     def __init__(
         self,
@@ -267,6 +268,7 @@ class ProjectHubWindow(QMainWindow):
 
     def _on_save(self) -> None:
         self._project.registry = self.station_table.get_registry()
+        self.save_all_requested.emit()  # let main window save its state first
         self._project.save()
         self.statusBar().showMessage("Project saved.", 3000)
 
@@ -416,5 +418,6 @@ class ProjectHubWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         # Auto-save on close
         self._project.registry = self.station_table.get_registry()
+        self.save_all_requested.emit()  # let main window save its state
         self._project.save()
         super().closeEvent(event)
