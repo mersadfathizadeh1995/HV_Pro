@@ -809,12 +809,51 @@ class HVSRMainWindow(QMainWindow):
                     if "load_mode" in sd:
                         self.load_mode = sd["load_mode"]
 
-                    # Restore data objects
+                    # Restore current_file from saved path
+                    fp = sd.get("file_path", "")
+                    if fp:
+                        lm = sd.get("load_mode", "single")
+                        if lm == "single":
+                            self.current_file = fp
+                        else:
+                            self.current_file = fp.split(";") if ";" in fp else fp
+
+                    # Restore overall time range
+                    if "current_time_range" in sd:
+                        self.current_time_range = sd["current_time_range"]
+
+                    # Restore data objects (plots the HVSR curve)
+                    seismic_data = loaded.get("seismic_data")
                     self.restore_session_gui(
                         loaded["hvsr_result"],
                         loaded["windows"],
-                        loaded.get("seismic_data"),
+                        seismic_data,
                     )
+
+                    # ── Restore loaded-file list in Data Load & Processing tabs ──
+                    lf = sd.get("loaded_files")
+                    if lf and hasattr(self, 'data_load_tab'):
+                        tr_map = lf.get("time_ranges", {})
+                        for grp in lf.get("groups", []):
+                            gname = grp.get("name", "Restored")
+                            for fpath, meta in grp.get("files", {}).items():
+                                tr = tr_map.get(fpath)
+                                self.data_load_tab.add_loaded_file(
+                                    fpath,
+                                    seismic_data,
+                                    meta,
+                                    tr,
+                                    group_name=gname,
+                                )
+                        # Sync processing & azimuthal data panels
+                        if hasattr(self, 'processing_data_panel'):
+                            self.processing_data_panel.update_from_data_load_tab(
+                                self.data_load_tab)
+                        if (hasattr(self, 'azimuthal_tab')
+                                and hasattr(self.azimuthal_tab, 'data_panel')):
+                            self.azimuthal_tab.data_panel.update_from_data_load_tab(
+                                self.data_load_tab)
+                        self.processing_tab.process_btn.setEnabled(True)
 
                     # Azimuthal
                     if loaded.get("azimuthal_result") is not None:
@@ -1393,6 +1432,47 @@ class HVSRMainWindow(QMainWindow):
             current_file = ';'.join(str(f) for f in current_file)
         state_dict["file_path"] = str(current_file) if current_file else ''
         state_dict["load_mode"] = getattr(self, 'load_mode', 'single')
+
+        # ── Loaded files list (groups + per-file metadata + time ranges) ──
+        if hasattr(self, 'data_load_tab'):
+            dlt = self.data_load_tab
+            groups_out = []
+            time_ranges_out = {}
+            for gid, ginfo in getattr(dlt, 'data_groups', {}).items():
+                files_meta = {}
+                for fp, meta in ginfo.get('files', {}).items():
+                    # Keep only JSON-safe scalars
+                    files_meta[str(fp)] = {
+                        k: v for k, v in meta.items()
+                        if isinstance(v, (str, int, float, bool, type(None)))
+                    }
+                groups_out.append({
+                    "group_id": gid,
+                    "name": ginfo.get('name', ''),
+                    "files": files_meta,
+                })
+            for fp, cached in getattr(dlt, 'data_cache', {}).items():
+                tr = cached.get('time_range')
+                if tr is not None:
+                    time_ranges_out[str(fp)] = {
+                        k: v for k, v in tr.items()
+                        if isinstance(v, (str, int, float, bool, type(None)))
+                    }
+            state_dict["loaded_files"] = {
+                "groups": groups_out,
+                "time_ranges": time_ranges_out,
+            }
+
+        # Overall time range used for processing
+        ctr = getattr(self, 'current_time_range', None)
+        if ctr:
+            try:
+                state_dict["current_time_range"] = {
+                    k: (str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v)
+                    for k, v in ctr.items()
+                }
+            except Exception:
+                pass
 
         # Window states (active/rejection per window)
         windows = getattr(self, 'windows', None)
