@@ -9,7 +9,18 @@ Usage:
 """
 
 import sys
+import logging
 from pathlib import Path
+
+# Configure logging early so all modules output to console
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(levelname)s [%(name)s] %(message)s',
+    stream=sys.stdout,
+)
+# Quieten noisy third-party loggers
+for _noisy in ("matplotlib", "PIL", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # CRITICAL: For Windows multiprocessing support
 # This must be called before any other imports that might use multiprocessing
