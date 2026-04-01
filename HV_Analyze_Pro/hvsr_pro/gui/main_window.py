@@ -1796,17 +1796,15 @@ class HVSRMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
-        """Auto-save HVSR state into the project folder on close.
+        """Auto-save ALL module states on close.
 
+        Saves HVSR + batch + bedrock + hvstrip + inversion state while
+        the child widgets are still alive (before super() destroys them).
         If the Project Hub is still open, hide instead of closing so the
         hub can re-open a different analysis later.
         """
-        ctx = getattr(self, '_hvsr_project_context', None)
-        if ctx:
-            try:
-                self._save_hvsr_to_project(ctx)
-            except Exception as e:
-                self.add_info(f"Warning: auto-save on close failed: {e}")
+        # Save ALL modules (HVSR + sub-windows) while widgets are alive
+        self._save_all_module_states()
 
         # If the hub is alive, just hide — don't destroy the main window
         hub = getattr(self, '_hub_window', None)

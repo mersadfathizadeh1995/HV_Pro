@@ -84,6 +84,7 @@ class BatchProcessingWindow(QMainWindow):
         self._time_windows_data = {'timezone': 'CST', 'windows': []}
         self._fig_export_settings = None
         self._last_checked_ids = None  # Cache for selection change optimization
+        self._station_files_cache = []  # Python-level cache for save safety
         
         # Build UI
         self._build_ui()
@@ -229,6 +230,7 @@ class BatchProcessingWindow(QMainWindow):
 
             # Collect station entries from the table
             station_entries = []
+            table_has_data = False
             for row in range(self.station_table.rowCount()):
                 spin = self.station_table.cellWidget(
                     row, StationManager._COL_STATION)
@@ -236,11 +238,22 @@ class BatchProcessingWindow(QMainWindow):
                     row, StationManager._COL_FILES)
                 sensor_item = self.station_table.item(
                     row, StationManager._COL_SENSOR)
+                files = files_item.data(Qt.UserRole) if files_item else []
+                if files:
+                    table_has_data = True
                 station_entries.append({
                     'station_num': spin.value() if spin else row + 1,
-                    'files': files_item.data(Qt.UserRole) if files_item else [],
+                    'files': [str(f) for f in files] if files else [],
                     'sensor': sensor_item.text() if sensor_item else None,
                 })
+
+            # If table had no file data (e.g. called during widget
+            # destruction) fall back to the Python-level cache.
+            if not table_has_data and self._station_files_cache:
+                station_entries = self._station_files_cache
+            else:
+                # Update the cache for future safety-net use
+                self._station_files_cache = station_entries
 
             result_dicts = self._workflow_result_to_dicts()
 
@@ -274,12 +287,15 @@ class BatchProcessingWindow(QMainWindow):
             state = load_batch_state(batch_dir)
 
             # Restore station entries
-            for entry in state.get('station_entries', []):
+            entries_list = state.get('station_entries', [])
+            for entry in entries_list:
                 self._station_mgr.add_station_row(
                     station_num=entry.get('station_num'),
                     files=entry.get('files'),
                     sensor=entry.get('sensor'),
                 )
+            # Populate the Python-level cache from restored entries
+            self._station_files_cache = entries_list
 
             # Restore settings
             saved_settings = state.get('settings', {})
