@@ -724,13 +724,33 @@ class HVSRMainWindow(QMainWindow):
             lambda aid: self._open_hvsr_with_project(project, aid)
         )
 
-        # When hub saves, also save main window's HVSR state
-        self._hub_window.save_all_requested.connect(
-            lambda: self._save_hvsr_to_project(
-                getattr(self, '_hvsr_project_context', None))
-        )
+        # When hub saves, also save ALL open module windows
+        self._hub_window.save_all_requested.connect(self._save_all_module_states)
 
         self._hub_window.show()
+
+    # ------------------------------------------------------------------
+    #  Centralised project save (triggered by hub's Save / Close)
+    # ------------------------------------------------------------------
+
+    def _save_all_module_states(self):
+        """Save state for every open module window + main HVSR."""
+        # HVSR main window
+        ctx = getattr(self, '_hvsr_project_context', None)
+        if ctx:
+            try:
+                self._save_hvsr_to_project(ctx)
+            except Exception:
+                pass
+        # Sub-module windows — each has _save_project_state()
+        for attr in ('_batch_window', '_bedrock_window',
+                     '_hvstrip_window', '_invert_window'):
+            win = getattr(self, attr, None)
+            if win is not None and hasattr(win, '_save_project_state'):
+                try:
+                    win._save_project_state()
+                except Exception:
+                    pass
 
     def _open_hvsr_with_project(self, project, analysis_id):
         """Open the main HVSR window in project context.
