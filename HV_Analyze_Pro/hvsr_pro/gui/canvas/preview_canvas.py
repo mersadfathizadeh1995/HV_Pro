@@ -620,6 +620,12 @@ if HAS_PYQT5:
                 self.time_start = (start_dt_utc - data_start).total_seconds()
                 self.time_end = (end_dt_utc - data_start).total_seconds()
 
+                # Debug: print conversion for diagnosis
+                print(f"[TimeFilter] Picker: {start_dt_from_picker} to {end_dt_from_picker}")
+                print(f"[TimeFilter] TZ offset: {tz_offset_hours}h, UTC: {start_dt_utc} to {end_dt_utc}")
+                print(f"[TimeFilter] Data start (UTC): {data_start}, duration: {self.seismic_data.duration if self.seismic_data else '?'}s")
+                print(f"[TimeFilter] Seconds from start: {self.time_start:.1f} to {self.time_end:.1f}")
+
                 # Ensure valid range (clamp to data bounds)
                 if self.seismic_data:
                     self.time_start = max(0.0, self.time_start)
@@ -627,7 +633,11 @@ if HAS_PYQT5:
                     
                     # Additional validation: ensure we have a positive range after clamping
                     if self.time_end <= self.time_start:
-                        self.time_filter_info.setText("ERROR: Time range outside data bounds!")
+                        self.time_filter_info.setText(
+                            f"ERROR: Time range outside data bounds! "
+                            f"(UTC: {start_dt_utc.strftime('%Y-%m-%d %H:%M')} to {end_dt_utc.strftime('%H:%M')}, "
+                            f"data: {data_start.strftime('%Y-%m-%d %H:%M')})"
+                        )
                         self.time_filter_info.setStyleSheet("color: red; font-size: 9px; font-weight: bold;")
                         self.time_start = 0.0
                         self.time_end = self.seismic_data.duration

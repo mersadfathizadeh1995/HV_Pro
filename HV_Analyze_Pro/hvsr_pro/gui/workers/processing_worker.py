@@ -125,13 +125,13 @@ class ProcessingThread(QThread):
                 start_local = self.time_range['start']
                 end_local = self.time_range['end']
                 tz_offset = self.time_range['timezone_offset']
-                tz_name = self.time_range.get('timezone_name', f'UTC{tz_offset:+d}')
+                tz_name = self.time_range.get('timezone_name', f'UTC{tz_offset:+.0f}')
                 
                 self.progress.emit(17, f"Time range: {start_local.strftime('%Y-%m-%d %H:%M')} to {end_local.strftime('%H:%M')} ({tz_name})")
                 
                 try:
                     # Apply time slicing
-                    data = handler.slice_by_time(data, start_local, end_local, tz_offset)
+                    data = handler.slice_by_time(data, start_local, end_local, int(tz_offset))
                     
                     duration_hours = data.duration / 3600
                     self.progress.emit(20, f"Sliced to {duration_hours:.2f} hours")
