@@ -341,6 +341,10 @@ class HVSRAnalysis:
             n_frequencies=p.n_frequencies,
             parallel=p.use_parallel,
             n_cores=p.n_cores,
+            statistics_method=p.statistics_method,
+            peak_basis=p.peak_basis,
+            min_prominence=p.min_prominence,
+            min_amplitude=p.min_amplitude,
         )
         result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
 
@@ -473,9 +477,12 @@ class HVSRAnalysis:
     def save_plot(
         self, output_path: Union[str, Path],
         plot_type: str = "hvsr", dpi: int = 150,
+        show_median: bool = True, show_mean: bool = False,
     ) -> None:
         from hvsr_pro.api.standard.export import save_plot
-        save_plot(self._result, self._windows, output_path, plot_type=plot_type, dpi=dpi)
+        save_plot(self._result, self._windows, output_path,
+                  plot_type=plot_type, dpi=dpi,
+                  show_median=show_median, show_mean=show_mean)
 
     def generate_report(
         self, output_dir: Union[str, Path],

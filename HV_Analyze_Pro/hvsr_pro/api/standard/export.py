@@ -89,6 +89,8 @@ def save_plot(
     output_path: Union[str, Path],
     plot_type: str = "hvsr",
     dpi: int = 150,
+    show_median: bool = True,
+    show_mean: bool = False,
 ) -> None:
     """Render and save a single plot to *output_path*."""
     if result is None or result.hvsr_result is None:
@@ -105,7 +107,8 @@ def save_plot(
     r = result.hvsr_result
 
     if plot_type == "hvsr":
-        fig = plotter.plot_result(r, show_peaks=True)
+        fig = plotter.plot_result(r, show_peaks=True,
+                                  show_median=show_median, show_mean=show_mean)
     elif plot_type == "windows" and r.window_spectra:
         fig = plotter.plot_with_windows(r)
     elif plot_type == "quality" and windows:
@@ -197,7 +200,8 @@ def generate_report(
         files[name.replace(".png", "")] = str(p)
 
     try:
-        _save(plotter.plot_result(r, show_peaks=True), "hvsr_curve.png")
+        _save(plotter.plot_result(r, show_peaks=True, show_median=True, show_mean=False),
+              "hvsr_curve.png")
     except Exception as exc:
         logger.warning("hvsr_curve plot failed: %s", exc)
 

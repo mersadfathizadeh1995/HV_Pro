@@ -86,6 +86,7 @@ def plot_hvsr_curve(result: HVSRResult,
                    show_uncertainty: bool = True,
                    show_peaks: bool = True,
                    show_median: bool = True,
+                   show_mean: bool = False,
                    uncertainty_type: str = 'percentile',
                    title: Optional[str] = None,
                    **kwargs) -> Axes:
@@ -97,7 +98,8 @@ def plot_hvsr_curve(result: HVSRResult,
         ax: Matplotlib axes (creates new if None)
         show_uncertainty: Show uncertainty band
         show_peaks: Mark detected peaks
-        show_median: Show median curve
+        show_median: Show median curve (primary)
+        show_mean: Show mean curve (secondary)
         uncertainty_type: 'percentile' (16-84) or 'std' (±1σ)
         title: Plot title
         **kwargs: Additional plot kwargs
@@ -110,10 +112,11 @@ def plot_hvsr_curve(result: HVSRResult,
 
     frequencies = result.frequencies
 
-    # Check for degenerate data (all zeros or extremely small values)
-    mean_max = np.max(np.abs(result.mean_hvsr))
-    data_range = np.ptp(result.mean_hvsr)  # peak-to-peak range
-    is_degenerate = (data_range < 1e-10) or (mean_max < 1e-10)
+    # Choose reference curve for degenerate check and Y-limits
+    ref_curve = result.median_hvsr if result.median_hvsr is not None else result.mean_hvsr
+    ref_max = np.max(np.abs(ref_curve))
+    data_range = np.ptp(ref_curve)
+    is_degenerate = (data_range < 1e-10) or (ref_max < 1e-10)
 
     line_color = kwargs.pop('color', '#1976D2')
     line_width = kwargs.pop('linewidth', 1.5)
@@ -140,10 +143,17 @@ def plot_hvsr_curve(result: HVSRResult,
                    color='#D32F2F', linewidth=2.5, linestyle='-',
                    label='Median H/V', zorder=101)
 
-    # Plot mean HVSR (secondary curve)
-    ax.semilogx(frequencies, result.mean_hvsr,
-               color=line_color, linewidth=line_width,
-               label='Mean H/V', zorder=100, **kwargs)
+    # Plot mean HVSR (secondary curve) — only if explicitly requested
+    if show_mean and not is_degenerate:
+        ax.semilogx(frequencies, result.mean_hvsr,
+                   color=line_color, linewidth=line_width,
+                   label='Mean H/V', zorder=100, alpha=0.6, **kwargs)
+
+    # If neither median nor mean shown, plot median as fallback
+    if not show_median and not show_mean and not is_degenerate:
+        ax.semilogx(frequencies, result.median_hvsr if result.median_hvsr is not None else result.mean_hvsr,
+                   color='#D32F2F', linewidth=2.5, linestyle='-',
+                   label='H/V', zorder=101)
     
     # Mark peaks
     if show_peaks and result.peaks:
@@ -158,12 +168,10 @@ def plot_hvsr_curve(result: HVSRResult,
             
             # Annotate primary peak
             if i == 0:
-                # Calculate smart position
                 x_off, y_off, ha, va = _calculate_smart_annotation_position(
-                    peak.frequency, peak.amplitude, ax, frequencies, result.mean_hvsr
+                    peak.frequency, peak.amplitude, ax, frequencies, ref_curve
                 )
                 
-                # Use LaTeX formatting for subscript to ensure proper rendering when saving
                 ax.annotate(f'$f_0$ = {peak.frequency:.2f} Hz\nA = {peak.amplitude:.2f}',
                            xy=(peak.frequency, peak.amplitude),
                            xytext=(x_off, y_off), textcoords='offset points',
@@ -186,17 +194,16 @@ def plot_hvsr_curve(result: HVSRResult,
     ax.legend(loc='best', fontsize=10)
     ax.set_xlim(frequencies[0], frequencies[-1])
 
-    # Smart Y-limit: clip at zero, cap at robust upper bound
+    # Y-limit based on median (robust) or percentile_84
     if not is_degenerate:
-        ylim_candidates = [np.max(result.mean_hvsr) * 1.5]
+        ylim_candidates = [np.max(ref_curve) * 1.5]
         if result.percentile_84 is not None:
             ylim_candidates.append(np.max(result.percentile_84) * 1.2)
         ax.set_ylim(0, max(ylim_candidates))
 
-    # Handle degenerate data - set reasonable y-limits
+    # Handle degenerate data
     if is_degenerate:
         ax.set_ylim(-0.1, 0.1)
-        # Add warning
         ax.text(0.5, 0.5,
                '⚠️ WARNING: HVSR values are extremely small or zero\n'
                'Check input data quality',
@@ -358,7 +365,7 @@ def plot_peak_analysis(peak: Peak,
     # Annotations with smart positioning
     x_off, y_off, ha, va = _calculate_smart_annotation_position(
         peak.frequency, peak.amplitude, ax, 
-        result.frequencies, result.mean_hvsr
+        frequencies, hvsr
     )
     
     # Use LaTeX formatting for subscript to ensure proper rendering when saving
@@ -396,10 +403,10 @@ def plot_hvsr_statistics(result: HVSRResult,
     if fig is None:
         fig = plt.figure(figsize=(14, 10))
     
-    # Panel 1: Mean with uncertainty
+    # Panel 1: Median with uncertainty
     ax1 = fig.add_subplot(2, 2, 1)
-    plot_hvsr_curve(result, ax=ax1, show_peaks=True, 
-                   title='Mean H/V with Uncertainty')
+    plot_hvsr_curve(result, ax=ax1, show_peaks=True, show_median=True, show_mean=False,
+                   title='Median H/V with Uncertainty')
     
     # Panel 2: Mean vs Median
     ax2 = fig.add_subplot(2, 2, 2)

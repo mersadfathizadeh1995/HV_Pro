@@ -32,17 +32,21 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 class ProcessingConfig:
     """Spectral-analysis and windowing parameters."""
 
-    window_length: float = 30.0
+    window_length: float = 60.0
     overlap: float = 0.5
     smoothing_method: str = "konno_ohmachi"
     smoothing_bandwidth: float = 40.0
     horizontal_method: str = "geometric_mean"
     freq_min: float = 0.2
     freq_max: float = 20.0
-    n_frequencies: int = 100
+    n_frequencies: int = 300
     manual_sampling_rate: Optional[float] = None
-    use_parallel: bool = True
+    use_parallel: bool = False
     n_cores: Optional[int] = None
+    statistics_method: str = "lognormal"
+    peak_basis: str = "median"
+    min_prominence: float = 0.3
+    min_amplitude: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -57,22 +61,30 @@ class ProcessingConfig:
             "manual_sampling_rate": self.manual_sampling_rate,
             "use_parallel": self.use_parallel,
             "n_cores": self.n_cores,
+            "statistics_method": self.statistics_method,
+            "peak_basis": self.peak_basis,
+            "min_prominence": self.min_prominence,
+            "min_amplitude": self.min_amplitude,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProcessingConfig":
         return cls(
-            window_length=data.get("window_length", 30.0),
+            window_length=data.get("window_length", 60.0),
             overlap=data.get("overlap", 0.5),
             smoothing_method=data.get("smoothing_method", "konno_ohmachi"),
             smoothing_bandwidth=data.get("smoothing_bandwidth", 40.0),
             horizontal_method=data.get("horizontal_method", "geometric_mean"),
             freq_min=data.get("freq_min", 0.2),
             freq_max=data.get("freq_max", 20.0),
-            n_frequencies=data.get("n_frequencies", 100),
+            n_frequencies=data.get("n_frequencies", 300),
             manual_sampling_rate=data.get("manual_sampling_rate"),
             use_parallel=data.get("use_parallel", False),
             n_cores=data.get("n_cores"),
+            statistics_method=data.get("statistics_method", "lognormal"),
+            peak_basis=data.get("peak_basis", "median"),
+            min_prominence=data.get("min_prominence", 0.3),
+            min_amplitude=data.get("min_amplitude", 1.0),
         )
 
 

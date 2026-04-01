@@ -100,6 +100,10 @@ def set_processing_params(
     n_frequencies: Optional[int] = None,
     use_parallel: Optional[bool] = None,
     n_cores: Optional[int] = None,
+    statistics_method: Optional[str] = None,
+    peak_basis: Optional[str] = None,
+    min_prominence: Optional[float] = None,
+    min_amplitude: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Adjust individual processing parameters without replacing the whole config.
 
@@ -130,6 +134,14 @@ def set_processing_params(
         p.use_parallel = use_parallel
     if n_cores is not None:
         p.n_cores = n_cores
+    if statistics_method is not None:
+        p.statistics_method = statistics_method
+    if peak_basis is not None:
+        p.peak_basis = peak_basis
+    if min_prominence is not None:
+        p.min_prominence = min_prominence
+    if min_amplitude is not None:
+        p.min_amplitude = min_amplitude
     return p.to_dict()
 
 
@@ -268,7 +280,8 @@ def export_plot(
         Confirmation message.
     """
     analysis = _get_analysis(session_id)
-    analysis.save_plot(output_path, plot_type=plot_type, dpi=dpi)
+    analysis.save_plot(output_path, plot_type=plot_type, dpi=dpi,
+                       show_median=True, show_mean=False)
     return f"Plot saved to {output_path}"
 
 

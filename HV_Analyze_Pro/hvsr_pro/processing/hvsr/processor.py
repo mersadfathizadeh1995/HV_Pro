@@ -303,22 +303,25 @@ class HVSRProcessor:
         hvsr_array = np.array(hvsr_curves)
         
         # Compute statistics
-        mean_hvsr = np.mean(hvsr_array, axis=0)
-        std_hvsr = np.std(hvsr_array, axis=0, ddof=self.std_ddof)
-        
         if self.statistics_method == 'lognormal':
-            # Lognormal statistics (matches old system)
+            # Log-space statistics: compute parameters directly from per-window
+            # log(H/V) values.  This is robust to outlier windows because the
+            # mean and std are estimated in log-space before exponentiating.
             from scipy.stats import lognorm
-            # Guard against zero/negative means
-            safe_mean = np.maximum(mean_hvsr, 1e-10)
-            safe_std = np.maximum(std_hvsr, 1e-10)
-            zeta = np.sqrt(np.log1p((safe_std ** 2) / (safe_mean ** 2)))
-            lam = np.log(safe_mean) - 0.5 * zeta ** 2
-            median_hvsr = lognorm.median(s=zeta, scale=np.exp(lam))
-            percentile_16, percentile_84 = (
-                lognorm.ppf(p, s=zeta, scale=np.exp(lam)) for p in (0.16, 0.84))
+            safe_hvsr = np.maximum(hvsr_array, 1e-10)
+            log_hvsr = np.log(safe_hvsr)
+            lam = np.mean(log_hvsr, axis=0)
+            zeta = np.std(log_hvsr, axis=0, ddof=self.std_ddof)
+
+            median_hvsr = np.exp(lam)
+            mean_hvsr = np.exp(lam + 0.5 * zeta ** 2)
+            std_hvsr = mean_hvsr * np.sqrt(np.expm1(zeta ** 2))
+            percentile_16 = lognorm.ppf(0.16, s=zeta, scale=np.exp(lam))
+            percentile_84 = lognorm.ppf(0.84, s=zeta, scale=np.exp(lam))
         else:
             # Direct numpy statistics
+            mean_hvsr = np.mean(hvsr_array, axis=0)
+            std_hvsr = np.std(hvsr_array, axis=0, ddof=self.std_ddof)
             median_hvsr = np.median(hvsr_array, axis=0)
             percentile_16 = np.percentile(hvsr_array, 16, axis=0)
             percentile_84 = np.percentile(hvsr_array, 84, axis=0)
