@@ -272,25 +272,25 @@ if HAS_PYQT5:
                 self.selected_timezone = 'UTC+0 (GMT)'
 
                 # Convert to QDateTime for the pickers
-                # IMPORTANT: Use UTC time spec to prevent automatic local timezone conversion
-                # All times are handled as UTC internally, timezone conversion is manual via combo box
+                # NOTE: Do NOT use setTimeSpec(Qt.UTC) — it causes date corruption on
+                # some Windows locales. All timezone math is done manually via _current_tz_offset.
                 dt = self.data_start_datetime
                 start_qdatetime = QDateTime(
                     QDate(dt.year, dt.month, dt.day),
                     QTime(dt.hour, dt.minute, dt.second)
                 )
-                start_qdatetime.setTimeSpec(Qt.UTC)
 
-                end_qdatetime = start_qdatetime.addMSecs(int(seismic_data.duration * 1000))
+                end_dt = dt + timedelta(seconds=seismic_data.duration)
+                end_qdatetime = QDateTime(
+                    QDate(end_dt.year, end_dt.month, end_dt.day),
+                    QTime(end_dt.hour, end_dt.minute, end_dt.second)
+                )
 
-                # Set datetime range - block signals to prevent auto-conversion
+                # Set datetime range - block signals to prevent cascade
                 self.datetime_start.blockSignals(True)
                 self.datetime_end.blockSignals(True)
 
-                self.datetime_start.setTimeSpec(Qt.UTC)  # Ensure picker interprets as UTC
                 self.datetime_start.setDateTime(start_qdatetime)
-
-                self.datetime_end.setTimeSpec(Qt.UTC)  # Ensure picker interprets as UTC
                 self.datetime_end.setDateTime(end_qdatetime)
 
                 self.datetime_start.blockSignals(False)
@@ -302,16 +302,13 @@ if HAS_PYQT5:
                         if isinstance(time_range['start'], (datetime,)):
                             s = time_range['start']
                             e = time_range['end']
-                            # Use Qt.UTC to match the widget's timeSpec
                             self.datetime_start.setDateTime(QDateTime(
                                 QDate(s.year, s.month, s.day),
-                                QTime(s.hour, s.minute, s.second),
-                                Qt.UTC
+                                QTime(s.hour, s.minute, s.second)
                             ))
                             self.datetime_end.setDateTime(QDateTime(
                                 QDate(e.year, e.month, e.day),
-                                QTime(e.hour, e.minute, e.second),
-                                Qt.UTC
+                                QTime(e.hour, e.minute, e.second)
                             ))
                             # Calculate seconds from start
                             self.time_start = (time_range['start'] - self.data_start_datetime).total_seconds()
@@ -320,9 +317,17 @@ if HAS_PYQT5:
                             # If seconds provided
                             self.time_start = time_range['start']
                             self.time_end = time_range['end']
-                            # Update datetime pickers
-                            self.datetime_start.setDateTime(start_qdatetime.addMSecs(int(self.time_start * 1000)))
-                            self.datetime_end.setDateTime(start_qdatetime.addMSecs(int(self.time_end * 1000)))
+                            # Update datetime pickers from seconds
+                            s = dt + timedelta(seconds=self.time_start)
+                            e = dt + timedelta(seconds=self.time_end)
+                            self.datetime_start.setDateTime(QDateTime(
+                                QDate(s.year, s.month, s.day),
+                                QTime(s.hour, s.minute, s.second)
+                            ))
+                            self.datetime_end.setDateTime(QDateTime(
+                                QDate(e.year, e.month, e.day),
+                                QTime(e.hour, e.minute, e.second)
+                            ))
 
                         self.time_filter_enabled = True
                         self.time_filter_checkbox.setChecked(True)
@@ -566,18 +571,32 @@ if HAS_PYQT5:
 
                 # Get user input times from datetime pickers
                 # These are in the currently selected timezone (may be UTC or local)
-                start_dt_from_picker = self.datetime_start.dateTime().toPyDateTime()
-                end_dt_from_picker = self.datetime_end.dateTime().toPyDateTime()
+                qdt_start = self.datetime_start.dateTime()
+                qdt_end = self.datetime_end.dateTime()
+                
+                # Extract via QDateTime methods to avoid any toPyDateTime() locale issues
+                start_dt_from_picker = datetime(
+                    qdt_start.date().year(), qdt_start.date().month(), qdt_start.date().day(),
+                    qdt_start.time().hour(), qdt_start.time().minute(), qdt_start.time().second()
+                )
+                end_dt_from_picker = datetime(
+                    qdt_end.date().year(), qdt_end.date().month(), qdt_end.date().day(),
+                    qdt_end.time().hour(), qdt_end.time().minute(), qdt_end.time().second()
+                )
+
+                # Debug: show exactly what we read from the pickers
+                print(f"[TimeFilter] QDateTime start: {qdt_start.toString('yyyy-MM-dd HH:mm:ss')} "
+                      f"(y={qdt_start.date().year()}, m={qdt_start.date().month()}, d={qdt_start.date().day()})")
+                print(f"[TimeFilter] Python start:    {start_dt_from_picker}")
 
                 # Validate time range BEFORE any conversion
                 if end_dt_from_picker <= start_dt_from_picker:
                     self.time_filter_info.setText("ERROR: End time must be after start time!")
                     self.time_filter_info.setStyleSheet("color: red; font-size: 9px; font-weight: bold;")
-                    # Reset to full data range to avoid negative values
                     if self.seismic_data:
                         self.time_start = 0.0
                         self.time_end = self.seismic_data.duration
-                    return  # Don't apply invalid range
+                    return
 
                 # Get timezone offset in hours
                 tz_offset_hours = self._parse_timezone_offset(self.selected_timezone)
@@ -621,9 +640,8 @@ if HAS_PYQT5:
                 self.time_end = (end_dt_utc - data_start).total_seconds()
 
                 # Debug: print conversion for diagnosis
-                print(f"[TimeFilter] Picker: {start_dt_from_picker} to {end_dt_from_picker}")
                 print(f"[TimeFilter] TZ offset: {tz_offset_hours}h, UTC: {start_dt_utc} to {end_dt_utc}")
-                print(f"[TimeFilter] Data start (UTC): {data_start}, duration: {self.seismic_data.duration if self.seismic_data else '?'}s")
+                print(f"[TimeFilter] Data start (UTC): {data_start}")
                 print(f"[TimeFilter] Seconds from start: {self.time_start:.1f} to {self.time_end:.1f}")
 
                 # Ensure valid range (clamp to data bounds)

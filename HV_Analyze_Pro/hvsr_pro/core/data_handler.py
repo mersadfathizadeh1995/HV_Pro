@@ -763,18 +763,28 @@ class HVSRDataHandler:
         logger.info(f"  Elapsed from data start: {elapsed_start:.1f}s to {elapsed_end:.1f}s")
         
         # Step 4: Validate range is within data bounds
+        # Allow small tolerance (2s) for sub-second precision loss from UI widgets
+        # (QDateTimeEdit truncates fractional seconds)
         if elapsed_start < 0:
-            raise ValueError(
-                f"Start time {start_gmt} (GMT) is before data start {data.start_time} (GMT). "
-                f"Requested time is {abs(elapsed_start):.1f} seconds too early."
-            )
+            if elapsed_start > -2.0:
+                logger.info(f"  Clamping start to data start (was {elapsed_start:.3f}s early)")
+                elapsed_start = 0.0
+            else:
+                raise ValueError(
+                    f"Start time {start_gmt} (GMT) is before data start {data.start_time} (GMT). "
+                    f"Requested time is {abs(elapsed_start):.1f} seconds too early."
+                )
         
         if elapsed_end > data.duration:
-            raise ValueError(
-                f"End time {end_gmt} (GMT) exceeds data duration. "
-                f"Data ends at {data.start_time + timedelta(seconds=data.duration)}, "
-                f"requested time is {elapsed_end - data.duration:.1f} seconds too late."
-            )
+            if (elapsed_end - data.duration) < 2.0:
+                logger.info(f"  Clamping end to data end (was {elapsed_end - data.duration:.3f}s late)")
+                elapsed_end = data.duration
+            else:
+                raise ValueError(
+                    f"End time {end_gmt} (GMT) exceeds data duration. "
+                    f"Data ends at {data.start_time + timedelta(seconds=data.duration)}, "
+                    f"requested time is {elapsed_end - data.duration:.1f} seconds too late."
+                )
         
         # Step 5: Calculate sample indices
         sr = data.sampling_rate

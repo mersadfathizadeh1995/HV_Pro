@@ -1031,8 +1031,9 @@ class HVSRMainWindow(QMainWindow):
             # Enable time filter checkbox
             preview_canvas.time_filter_checkbox.setChecked(True)
             
-            # Set datetime pickers
-            from PyQt5.QtCore import QDateTime, QDate, QTime, Qt as QtConst
+            # Set datetime pickers — do NOT use Qt.UTC timeSpec.
+            # All timezone math is manual via _current_tz_offset.
+            from PyQt5.QtCore import QDateTime, QDate, QTime
             
             start_dt = time_range['start']
             end_dt = time_range['end']
@@ -1051,19 +1052,14 @@ class HVSRMainWindow(QMainWindow):
             preview_canvas.selected_timezone = tz_name
             preview_canvas._current_tz_offset = tz_offset
             
-            # CRITICAL: Create QDateTime with Qt.UTC timeSpec to match the
-            # widget's timeSpec. Without this, Qt auto-converts LocalTime→UTC
-            # which corrupts the displayed datetime.
-            # The start_dt/end_dt are already in the user's local timezone.
+            # Create plain QDateTime (no timeSpec) — values are in user's local timezone
             start_qdt = QDateTime(
                 QDate(start_dt.year, start_dt.month, start_dt.day),
-                QTime(start_dt.hour, start_dt.minute, start_dt.second),
-                QtConst.UTC
+                QTime(start_dt.hour, start_dt.minute, start_dt.second)
             )
             end_qdt = QDateTime(
                 QDate(end_dt.year, end_dt.month, end_dt.day),
-                QTime(end_dt.hour, end_dt.minute, end_dt.second),
-                QtConst.UTC
+                QTime(end_dt.hour, end_dt.minute, end_dt.second)
             )
             preview_canvas.datetime_start.setDateTime(start_qdt)
             preview_canvas.datetime_end.setDateTime(end_qdt)
