@@ -16,7 +16,7 @@ Quick start::
     analysis.save_results("results.json")
 """
 
-from hvsr_pro.api.analysis import HVSRAnalysis, AnalysisResult, QCSummary
+from hvsr_pro.api.standard import HVSRAnalysis, AnalysisResult, QCSummary
 from hvsr_pro.api.config import (
     HVSRAnalysisConfig,
     ProcessingConfig,

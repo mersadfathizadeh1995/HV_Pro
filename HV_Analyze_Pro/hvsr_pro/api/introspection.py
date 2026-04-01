@@ -34,11 +34,23 @@ def get_supported_formats() -> List[Dict[str, Any]]:
 def get_smoothing_methods() -> List[Dict[str, Any]]:
     """Return all available smoothing methods with default bandwidths.
 
-    Each dict contains: ``name``, ``default_bandwidth``,
+    Each dict contains: ``id``, ``name``, ``default_bandwidth``,
     ``bandwidth_range``, ``description``.
     """
     from hvsr_pro.processing.smoothing.settings import list_available_methods
-    return list_available_methods()
+
+    result = []
+    for m in list_available_methods():
+        method_str = str(m.get("method", ""))
+        short_id = method_str.split(".")[-1].lower() if "." in method_str else method_str
+        result.append({
+            "id": short_id,
+            "name": m.get("display_name", short_id),
+            "default_bandwidth": m.get("default_bandwidth"),
+            "bandwidth_range": m.get("bandwidth_range"),
+            "description": m.get("description", ""),
+        })
+    return result
 
 
 def get_qc_presets() -> List[Dict[str, str]]:

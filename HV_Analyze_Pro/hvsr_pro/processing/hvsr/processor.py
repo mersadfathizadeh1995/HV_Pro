@@ -152,7 +152,8 @@ class HVSRProcessor:
                  f_min: float = 0.2,
                  f_max: float = 30.0,
                  n_frequencies: int = 300,
-                 parallel: bool = False,
+                 parallel: bool = True,
+                 n_cores: Optional[int] = None,
                  horizontal_method: str = 'geometric_mean',
                  taper: Optional[str] = 'tukey',
                  detrend: str = 'linear',
@@ -176,7 +177,8 @@ class HVSRProcessor:
             f_min: Minimum frequency in Hz (default: 0.2)
             f_max: Maximum frequency in Hz (default: 30.0)
             n_frequencies: Number of frequency points (default: 300)
-            parallel: Enable parallel processing for windows (default: False)
+            parallel: Enable parallel processing for windows (default: True)
+            n_cores: Number of worker processes (default: cpu_count - 1)
             horizontal_method: Method for combining horizontal components
             taper: Taper window type ('hann', 'hamming', 'blackman', 'tukey', None)
             detrend: Detrend method ('linear', 'mean', 'none'). Default 'linear'
@@ -197,6 +199,7 @@ class HVSRProcessor:
         self.f_max = f_max
         self.n_frequencies = n_frequencies
         self.parallel = parallel
+        self.n_cores = n_cores
         self.horizontal_method = horizontal_method
         self.taper = taper if taper else None
         self.detrend = detrend
@@ -252,9 +255,8 @@ class HVSRProcessor:
         hvsr_curves = []
         failed_windows = []
         
-        if self.parallel and len(window_list) > 20:
-            # Parallel processing for large datasets
-            n_workers = max(1, cpu_count() - 1)
+        if self.parallel and len(window_list) > 4:
+            n_workers = self.n_cores if self.n_cores else max(1, cpu_count() - 1)
             logger.info(f"Using parallel processing with {n_workers} workers")
             
             args_list = [

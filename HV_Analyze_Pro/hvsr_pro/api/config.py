@@ -41,7 +41,7 @@ class ProcessingConfig:
     freq_max: float = 20.0
     n_frequencies: int = 100
     manual_sampling_rate: Optional[float] = None
-    use_parallel: bool = False
+    use_parallel: bool = True
     n_cores: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -206,8 +206,8 @@ class STALTAAlgoConfig:
     enabled: bool = True
     sta_length: float = 1.0
     lta_length: float = 30.0
-    min_ratio: float = 0.2
-    max_ratio: float = 2.5
+    min_ratio: float = 0.1
+    max_ratio: float = 5.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
