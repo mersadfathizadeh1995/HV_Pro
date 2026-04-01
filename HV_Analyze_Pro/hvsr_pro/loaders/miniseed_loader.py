@@ -171,13 +171,21 @@ class MiniSeedLoader(BaseDataLoader):
             for trace in stream:
                 channel = trace.stats.channel.upper()
 
-                # Identify component from channel code
-                if channel.endswith('E') or 'E' in channel or 'EAST' in channel.upper():
-                    components['E'] = trace
-                elif channel.endswith('N') or 'N' in channel or 'NORTH' in channel.upper():
-                    components['N'] = trace
-                elif channel.endswith('Z') or 'Z' in channel or 'VERT' in channel.upper():
-                    components['Z'] = trace
+                # For standard SEED channel codes (3 chars), the last
+                # character is the component indicator (E/N/Z/1/2).
+                last = channel[-1] if channel else ''
+                if last in ('E', '1'):
+                    components.setdefault('E', trace)
+                elif last in ('N', '2'):
+                    components.setdefault('N', trace)
+                elif last in ('Z', '3'):
+                    components.setdefault('Z', trace)
+                elif 'EAST' in channel:
+                    components.setdefault('E', trace)
+                elif 'NORTH' in channel:
+                    components.setdefault('N', trace)
+                elif 'VERT' in channel:
+                    components.setdefault('Z', trace)
 
         # Validate we have all three
         required = {'E', 'N', 'Z'}
