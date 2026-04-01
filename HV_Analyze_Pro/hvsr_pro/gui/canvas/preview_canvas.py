@@ -567,7 +567,7 @@ if HAS_PYQT5:
         def apply_time_filter(self):
             """Apply time filter and refresh plot."""
             if self.time_filter_enabled and self.data_start_datetime:
-                from datetime import timedelta
+                from datetime import datetime, timedelta
 
                 # Get user input times from datetime pickers
                 # These are in the currently selected timezone (may be UTC or local)
