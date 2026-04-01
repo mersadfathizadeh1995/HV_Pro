@@ -61,6 +61,75 @@ class FullProcessingSettings:
     load_mode: str = 'single'
     time_range: Optional[Dict] = None
 
+    def to_analysis_config(self):
+        """Convert to ``hvsr_pro.api.config.HVSRAnalysisConfig``."""
+        from hvsr_pro.api.config import (
+            HVSRAnalysisConfig, ProcessingConfig, DataLoadConfig,
+            TimeRangeConfig, QCConfig, CoxFDWRAConfig,
+        )
+
+        processing = ProcessingConfig(
+            window_length=self.window_length,
+            overlap=self.overlap,
+            smoothing_method=self.smoothing_method,
+            smoothing_bandwidth=self.smoothing_bandwidth,
+            horizontal_method=self.horizontal_method,
+            freq_min=self.freq_min,
+            freq_max=self.freq_max,
+            n_frequencies=self.n_frequencies,
+            manual_sampling_rate=self.manual_sampling_rate if self.override_sampling else None,
+            use_parallel=self.use_parallel,
+            n_cores=self.n_cores,
+        )
+
+        data_load = DataLoadConfig(load_mode=self.load_mode)
+
+        time_range = TimeRangeConfig()
+        if self.time_range and self.time_range.get('enabled'):
+            time_range.enabled = True
+            s = self.time_range.get('start')
+            e = self.time_range.get('end')
+            time_range.start = s.isoformat() if hasattr(s, 'isoformat') else str(s) if s else None
+            time_range.end = e.isoformat() if hasattr(e, 'isoformat') else str(e) if e else None
+            time_range.timezone_offset = int(self.time_range.get('timezone_offset', 0))
+
+        qc = QCConfig(
+            enabled=self.qc_enabled,
+            mode=self.qc_mode if self.qc_mode in ('sesame', 'custom') else 'sesame',
+            phase1_enabled=self.phase1_enabled,
+            phase2_enabled=self.phase2_enabled,
+            cox_fdwra=CoxFDWRAConfig(
+                enabled=self.cox_enabled,
+                n=self.cox_n,
+                max_iterations=self.cox_max_iterations,
+                min_iterations=self.cox_min_iterations,
+                distribution=self.cox_distribution,
+            ),
+        )
+
+        if self.custom_qc_settings:
+            qc = QCConfig.from_dict({
+                'enabled': self.qc_enabled,
+                'mode': self.qc_mode,
+                'phase1_enabled': self.phase1_enabled,
+                'phase2_enabled': self.phase2_enabled,
+                'algorithms': self.custom_qc_settings.get('algorithms', {}),
+                'cox_fdwra': {
+                    'enabled': self.cox_enabled,
+                    'n': self.cox_n,
+                    'max_iterations': self.cox_max_iterations,
+                    'min_iterations': self.cox_min_iterations,
+                    'distribution': self.cox_distribution,
+                },
+            })
+
+        return HVSRAnalysisConfig(
+            processing=processing,
+            data_load=data_load,
+            time_range=time_range,
+            qc=qc,
+        )
+
 
 if HAS_PYQT5:
     from hvsr_pro.gui.components import CollapsibleDataPanel

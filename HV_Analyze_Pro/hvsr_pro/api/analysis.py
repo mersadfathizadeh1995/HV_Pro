@@ -1,604 +1,812 @@
 """
-HVSR Pro API - Analysis Class
-=============================
+HVSR Pro API -- Analysis Pipeline
+===================================
 
-High-level interface for HVSR analysis.
+``HVSRAnalysis`` is the single, headless implementation of the HVSR
+processing pipeline.  Both the GUI (``ProcessingThread``) and a future
+MCP server delegate to this class.
+
+Usage::
+
+    from hvsr_pro.api import HVSRAnalysis
+    from hvsr_pro.api.config import HVSRAnalysisConfig
+
+    config = HVSRAnalysisConfig.sesame_default()
+    analysis = HVSRAnalysis(config)
+    analysis.load_data("record.mseed")
+    result = analysis.process()
+
+    print(result.hvsr_result.primary_peak)
+    analysis.save_results("out.json")
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Union
-from datetime import datetime
+from __future__ import annotations
+
 import json
+import logging
+import pickle
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
+
 import numpy as np
+
+from hvsr_pro.api.config import HVSRAnalysisConfig
+
+logger = logging.getLogger(__name__)
+
+ProgressCallback = Optional[Callable[[int, str], None]]
+
+
+# ---------------------------------------------------------------------------
+# Result container
+# ---------------------------------------------------------------------------
+
+@dataclass
+class QCSummary:
+    """Human-readable summary of what QC did."""
+
+    phase1_applied: bool = False
+    phase2_applied: bool = False
+    fdwra_applied: bool = False
+    post_hvsr_applied: bool = False
+    total_windows: int = 0
+    active_windows: int = 0
+    phase1_detail: Optional[str] = None
+    fdwra_detail: Optional[str] = None
+    post_hvsr_detail: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "phase1_applied": self.phase1_applied,
+            "phase2_applied": self.phase2_applied,
+            "fdwra_applied": self.fdwra_applied,
+            "post_hvsr_applied": self.post_hvsr_applied,
+            "total_windows": self.total_windows,
+            "active_windows": self.active_windows,
+            "phase1_detail": self.phase1_detail,
+            "fdwra_detail": self.fdwra_detail,
+            "post_hvsr_detail": self.post_hvsr_detail,
+            "warnings": list(self.warnings),
+            "errors": list(self.errors),
+        }
 
 
 @dataclass
-class ProcessingConfig:
-    """Configuration for HVSR processing."""
-    window_length: float = 30.0
-    overlap: float = 0.5
-    smoothing_method: str = 'konno_ohmachi'
-    smoothing_bandwidth: float = 40.0
-    freq_min: float = 0.2
-    freq_max: float = 20.0
-    n_frequencies: int = 100
-    qc_mode: Optional[str] = 'balanced'
-    apply_cox_fdwra: bool = False
-    parallel: bool = False
-    n_cores: Optional[int] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            'window_length': self.window_length,
-            'overlap': self.overlap,
-            'smoothing_method': self.smoothing_method,
-            'smoothing_bandwidth': self.smoothing_bandwidth,
-            'freq_min': self.freq_min,
-            'freq_max': self.freq_max,
-            'n_frequencies': self.n_frequencies,
-            'qc_mode': self.qc_mode,
-            'apply_cox_fdwra': self.apply_cox_fdwra,
-            'parallel': self.parallel,
-            'n_cores': self.n_cores
-        }
+class AnalysisResult:
+    """Bundle returned by ``HVSRAnalysis.process()``.
 
+    Carries the same triple that the GUI's
+    ``ProcessingThread.finished.emit(result, windows, data)`` sends,
+    plus a structured QC summary.
+    """
+
+    hvsr_result: Any  # HVSRResult
+    windows: Any  # WindowCollection
+    data: Any  # SeismicData
+    config: HVSRAnalysisConfig
+    qc_summary: QCSummary = field(default_factory=QCSummary)
+    azimuthal_result: Any = None  # AzimuthalHVSRResult | None
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Produce a JSON-safe summary dict."""
+        summary: Dict[str, Any] = {"config": self.config.to_dict()}
+
+        if self.data is not None:
+            summary["data"] = {
+                "duration_seconds": self.data.duration,
+                "sampling_rate": self.data.east.sampling_rate,
+                "n_samples": len(self.data.east.data),
+                "start_time": str(self.data.start_time) if self.data.start_time else None,
+            }
+
+        if self.windows is not None:
+            summary["windows"] = {
+                "total": self.windows.n_windows,
+                "active": self.windows.n_active,
+                "acceptance_rate": self.windows.acceptance_rate,
+            }
+
+        r = self.hvsr_result
+        if r is not None:
+            summary["result"] = {
+                "total_windows": r.total_windows,
+                "valid_windows": r.valid_windows,
+                "frequencies": {
+                    "min": float(r.frequencies[0]),
+                    "max": float(r.frequencies[-1]),
+                    "n_points": len(r.frequencies),
+                },
+            }
+            if r.primary_peak:
+                summary["result"]["primary_peak"] = {
+                    "frequency": r.primary_peak.frequency,
+                    "amplitude": r.primary_peak.amplitude,
+                }
+
+        summary["qc"] = self.qc_summary.to_dict()
+        return summary
+
+
+# ---------------------------------------------------------------------------
+# Main analysis class
+# ---------------------------------------------------------------------------
 
 class HVSRAnalysis:
+    """Headless, config-driven HVSR processing pipeline.
+
+    Parameters
+    ----------
+    config : HVSRAnalysisConfig, optional
+        Pre-built config.  Can also be set later with ``configure()``.
     """
-    High-level API for HVSR analysis.
-    
-    This class provides a simple interface for loading seismic data,
-    configuring processing parameters, and computing HVSR curves.
-    
-    Example:
-        >>> analysis = HVSRAnalysis()
-        >>> analysis.load_data('data.mseed')
-        >>> analysis.configure(window_length=30, qc_mode='balanced')
-        >>> result = analysis.process()
-        >>> print(f"Peak: {result.primary_peak.frequency} Hz")
-        >>> analysis.save_results('results.json')
-    """
-    
-    def __init__(self):
-        """Initialize HVSR Analysis."""
+
+    def __init__(self, config: Optional[HVSRAnalysisConfig] = None):
+        self._config = config or HVSRAnalysisConfig()
         self._data = None
         self._windows = None
-        self._result = None
-        self._config = ProcessingConfig()
-        self._time_range = None
-        self._file_path = None
-    
+        self._result: Optional[AnalysisResult] = None
+
+    # -- properties --------------------------------------------------------
+
+    @property
+    def config(self) -> HVSRAnalysisConfig:
+        return self._config
+
+    @config.setter
+    def config(self, value: HVSRAnalysisConfig):
+        self._config = value
+
     @property
     def data(self):
-        """Get loaded seismic data."""
+        """Loaded ``SeismicData``."""
         return self._data
-    
+
     @property
     def windows(self):
-        """Get window collection."""
+        """``WindowCollection`` (available after ``process()``)."""
         return self._windows
-    
+
     @property
-    def result(self):
-        """Get HVSR result."""
+    def result(self) -> Optional[AnalysisResult]:
+        """Last ``AnalysisResult`` (available after ``process()``)."""
         return self._result
-    
-    @property
-    def config(self) -> ProcessingConfig:
-        """Get processing configuration."""
-        return self._config
-    
-    def load_data(self, 
-                  file_path: Union[str, Path, List[str]],
-                  format: str = 'auto',
-                  degrees_from_north: Optional[float] = None,
-                  start_time: Optional[str] = None,
-                  end_time: Optional[str] = None,
-                  timezone_offset: int = 0) -> 'HVSRAnalysis':
-        """
-        Load seismic data from a file or files.
-        
-        Supports multiple formats:
-        - Single file formats: TXT, MiniSEED, SAF, GCF
-        - Multi-file formats: SAC (3 files), PEER (3 files)
-        
-        Args:
-            file_path: Path to data file, or list of 3 paths for SAC/PEER
-            format: Format hint: 'auto', 'txt', 'miniseed', 'saf', 'gcf',
-                   'sac', 'peer'. Default: auto-detect
-            degrees_from_north: Sensor orientation (optional). Required for
-                               numeric component naming (123/12Z patterns)
-            start_time: Optional start time filter (ISO format)
-            end_time: Optional end time filter (ISO format)
-            timezone_offset: Timezone offset from UTC in hours
-            
-        Returns:
-            self for method chaining
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            ValueError: If file format is not supported
-            
-        Example:
-            # Single file
-            >>> analysis.load_data('data.saf', format='saf')
-            
-            # Multi-file (SAC)
-            >>> analysis.load_data([
-            ...     'data_n.sac', 'data_e.sac', 'data_z.sac'
-            ... ], format='sac')
-        """
-        from hvsr_pro.core import HVSRDataHandler
-        from hvsr_pro.loaders import FORMAT_INFO
-        
-        handler = HVSRDataHandler()
-        
-        # Handle multi-file input (list of paths)
-        if isinstance(file_path, (list, tuple)):
-            # Validate all files exist
-            for fp in file_path:
-                p = Path(fp)
-                if not p.exists():
-                    raise FileNotFoundError(f"File not found: {fp}")
-            
-            self._file_path = file_path[0]  # Store first for reference
-            
-            # Use multi-component loading
-            self._data = handler.load_multi_component(
-                list(file_path),
-                format=format,
-                degrees_from_north=degrees_from_north
-            )
-        else:
-            # Single file
-            file_path = Path(file_path)
-            if not file_path.exists():
-                raise FileNotFoundError(f"File not found: {file_path}")
-            
-            self._file_path = file_path
-            
-            # Load data with format and orientation options
-            self._data = handler.load_data(
-                str(file_path),
-                format=format,
-                degrees_from_north=degrees_from_north
-            )
-        
-        # Apply time range filter if specified
-        if start_time or end_time:
-            self._time_range = {
-                'enabled': True,
-                'start': datetime.fromisoformat(start_time) if start_time else None,
-                'end': datetime.fromisoformat(end_time) if end_time else None,
-                'timezone_offset': timezone_offset
-            }
-            
-            if start_time and end_time:
-                self._data = handler.slice_by_time(
-                    self._data,
-                    self._time_range['start'],
-                    self._time_range['end'],
-                    timezone_offset
-                )
-        
-        return self
-    
-    def configure(self, **kwargs) -> 'HVSRAnalysis':
-        """
-        Configure processing parameters.
-        
-        Args:
-            window_length: Window length in seconds (default: 30)
-            overlap: Window overlap as fraction 0-1 (default: 0.5)
-            smoothing_method: Smoothing method (default: 'konno_ohmachi')
-                Options: 'konno_ohmachi', 'parzen', 'savitzky_golay',
-                        'linear_rectangular', 'log_rectangular',
-                        'linear_triangular', 'log_triangular', 'none'
-            smoothing_bandwidth: Smoothing bandwidth (default: 40)
-                - Konno-Ohmachi: inverse width (20-80 typical)
-                - Parzen/rectangular/triangular: window width in Hz or log10
-                - Savitzky-Golay: number of points (odd integer)
-            freq_min: Minimum frequency in Hz (default: 0.2)
-            freq_max: Maximum frequency in Hz (default: 20)
-            n_frequencies: Number of frequency points (default: 100)
-            qc_mode: Quality control mode (default: 'balanced')
-                Options: 'conservative', 'balanced', 'aggressive', 'sesame', 'publication', None
-            apply_cox_fdwra: Apply Cox FDWRA rejection (default: False)
-            parallel: Enable parallel processing (default: False)
-            n_cores: Number of CPU cores for parallel processing
-            
-        Returns:
-            self for method chaining
+
+    # -- configuration helpers ---------------------------------------------
+
+    def configure(self, **kwargs) -> "HVSRAnalysis":
+        """Set processing parameters by keyword.
+
+        Accepted top-level keys are the fields of ``ProcessingConfig``
+        (e.g. ``window_length``, ``overlap``, ``freq_min``).  For deeper
+        config, manipulate ``self.config`` directly.
+
+        Returns ``self`` for method chaining.
         """
         for key, value in kwargs.items():
-            if hasattr(self._config, key):
-                setattr(self._config, key, value)
+            if hasattr(self._config.processing, key):
+                setattr(self._config.processing, key, value)
             else:
-                raise ValueError(f"Unknown configuration parameter: {key}")
-        
+                raise ValueError(f"Unknown processing parameter: {key}")
         return self
-    
-    def configure_smoothing(self, 
-                            method: str = 'konno_ohmachi',
-                            bandwidth: Optional[float] = None) -> 'HVSRAnalysis':
+
+    # -- data loading ------------------------------------------------------
+
+    def load_data(
+        self,
+        file_path: Union[str, Path, List[str], Dict[str, str]],
+        *,
+        format: str = "auto",
+        degrees_from_north: Optional[float] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        timezone_offset: int = 0,
+    ) -> "HVSRAnalysis":
+        """Load seismic data from one or more files.
+
+        Accepts a single path, a list of MiniSEED paths, or a dict
+        mapping component letters to paths (``{'N': …, 'E': …, 'Z': …}``).
+
+        Returns ``self`` for chaining.
         """
-        Configure smoothing method.
-        
-        Convenience method for setting smoothing parameters.
-        
-        Args:
-            method: Smoothing method name
-                Options: 'konno_ohmachi', 'parzen', 'savitzky_golay',
-                        'linear_rectangular', 'log_rectangular',
-                        'linear_triangular', 'log_triangular', 'none'
-            bandwidth: Method-specific bandwidth (uses default if None)
-                - Konno-Ohmachi: 40 (inverse width, higher = less smoothing)
-                - Parzen: 0.5 Hz
-                - Savitzky-Golay: 9 (odd integer, number of points)
-                - Linear/log rectangular/triangular: 0.5 Hz or 0.05 log10
-                
-        Returns:
-            self for method chaining
-        """
-        from hvsr_pro.processing.smoothing import SmoothingMethod, DEFAULT_BANDWIDTHS
-        
-        # Normalize method name
-        method = method.lower().replace(" ", "_").replace("-", "_")
-        
-        # Validate method
-        try:
-            smoothing_method = SmoothingMethod.from_string(method)
-        except ValueError:
-            valid = [m.value for m in SmoothingMethod]
-            raise ValueError(f"Invalid smoothing method: {method}. Valid: {valid}")
-        
-        # Get default bandwidth if not specified
-        if bandwidth is None:
-            bandwidth = DEFAULT_BANDWIDTHS.get(smoothing_method, 40.0)
-        
-        self._config.smoothing_method = method
-        self._config.smoothing_bandwidth = bandwidth
-        
+        from hvsr_pro.core import HVSRDataHandler
+
+        handler = HVSRDataHandler()
+        dl = self._config.data_load
+
+        if format != "auto":
+            dl.file_format = format
+        if degrees_from_north is not None:
+            dl.degrees_from_north = degrees_from_north
+
+        if isinstance(file_path, dict):
+            dl.load_mode = "multi_component"
+            files = [str(file_path.get(c)) for c in ("N", "E", "Z") if c in file_path]
+            self._data = handler.load_multi_component(
+                files,
+                format=dl.file_format,
+                degrees_from_north=dl.degrees_from_north,
+            )
+        elif isinstance(file_path, (list, tuple)):
+            if len(file_path) <= 3 and dl.file_format != "auto":
+                dl.load_mode = "multi_component"
+                self._data = handler.load_multi_component(
+                    [str(p) for p in file_path],
+                    format=dl.file_format,
+                    degrees_from_north=dl.degrees_from_north,
+                )
+            else:
+                dl.load_mode = "multi_type1"
+                self._data = handler.load_multi_miniseed_type1([str(p) for p in file_path])
+        else:
+            p = Path(file_path)
+            if not p.exists():
+                raise FileNotFoundError(f"File not found: {p}")
+            dl.load_mode = "single"
+            self._data = handler.load_data(str(p), format=dl.file_format)
+
+        if start_time or end_time:
+            tr = self._config.time_range
+            tr.enabled = True
+            tr.start = start_time
+            tr.end = end_time
+            tr.timezone_offset = timezone_offset
+            rt = tr.to_runtime_dict()
+            if rt:
+                self._data = handler.slice_by_time(
+                    self._data, rt["start"], rt["end"], rt["timezone_offset"]
+                )
+
         return self
-    
-    def process(self) -> 'HVSRResult':
-        """
-        Process the loaded data to compute HVSR.
-        
-        Returns:
-            HVSRResult object containing computed HVSR curves and statistics
-            
-        Raises:
-            ValueError: If no data is loaded
+
+    # -- main pipeline -----------------------------------------------------
+
+    def process(self, *, progress_callback: ProgressCallback = None) -> AnalysisResult:
+        """Run the full HVSR pipeline.
+
+        This mirrors every step of the GUI's ``ProcessingThread.run()``
+        so that changes here automatically apply everywhere.
         """
         if self._data is None:
             raise ValueError("No data loaded. Call load_data() first.")
-        
+
+        cfg = self._config
+        p = cfg.processing
+        qc_cfg = cfg.qc
+        qc_summary = QCSummary()
+
+        def _progress(pct: int, msg: str):
+            if progress_callback is not None:
+                progress_callback(pct, msg)
+
+        from hvsr_pro.core import HVSRDataHandler
         from hvsr_pro.processing import WindowManager, RejectionEngine, HVSRProcessor
-        
-        # Create windows
-        manager = WindowManager(
-            window_length=self._config.window_length,
-            overlap=self._config.overlap
-        )
-        self._windows = manager.create_windows(self._data, calculate_quality=True)
-        
-        # Apply QC if enabled
-        if self._config.qc_mode:
-            engine = RejectionEngine()
-            engine.create_default_pipeline(mode=self._config.qc_mode)
-            engine.evaluate(self._windows, auto_apply=True)
-        
-        # Compute HVSR
-        processor = HVSRProcessor(
-            smoothing_method=self._config.smoothing_method,
-            smoothing_bandwidth=self._config.smoothing_bandwidth,
-            f_min=self._config.freq_min,
-            f_max=self._config.freq_max,
-            n_frequencies=self._config.n_frequencies,
-            parallel=self._config.parallel
-        )
-        self._result = processor.process(
-            self._windows,
-            detect_peaks_flag=True,
-            save_window_spectra=True
-        )
-        
-        # Apply Cox FDWRA if enabled
-        if self._config.apply_cox_fdwra and self._config.qc_mode:
-            engine = RejectionEngine()
-            fdwra_result = engine.evaluate_fdwra(
-                self._windows,
-                self._result,
-                n=2.0,
-                distribution_fn="lognormal",
-                distribution_mc="lognormal",
-                search_range_hz=(self._config.freq_min, self._config.freq_max),
-                auto_apply=True
-            )
-            
-            # Recompute HVSR if windows were rejected
-            if fdwra_result['n_rejected'] > 0 and self._windows.n_active > 0:
-                self._result = processor.process(
-                    self._windows,
-                    detect_peaks_flag=True,
-                    save_window_spectra=True
-                )
-        
-        return self._result
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """
-        Get a summary of the analysis.
-        
-        Returns:
-            Dictionary containing analysis summary
-        """
-        summary = {
-            'file': str(self._file_path) if self._file_path else None,
-            'config': self._config.to_dict()
-        }
-        
-        if self._data:
-            summary['data'] = {
-                'duration_seconds': self._data.duration,
-                'sampling_rate': self._data.east.sampling_rate,
-                'n_samples': len(self._data.east.data),
-                'start_time': str(self._data.start_time) if self._data.start_time else None
-            }
-        
-        if self._windows:
-            summary['windows'] = {
-                'total': self._windows.n_windows,
-                'active': self._windows.n_active,
-                'acceptance_rate': self._windows.acceptance_rate
-            }
-        
-        if self._result:
-            summary['result'] = {
-                'total_windows': self._result.total_windows,
-                'valid_windows': self._result.valid_windows,
-                'frequencies': {
-                    'min': float(self._result.frequencies[0]),
-                    'max': float(self._result.frequencies[-1]),
-                    'n_points': len(self._result.frequencies)
-                }
-            }
-            if self._result.primary_peak:
-                summary['result']['primary_peak'] = {
-                    'frequency': self._result.primary_peak.frequency,
-                    'amplitude': self._result.primary_peak.amplitude
-                }
-        
-        return summary
-    
-    def save_results(self, 
-                     output_path: Union[str, Path],
-                     format: str = 'json') -> None:
-        """
-        Save processing results to a file.
-        
-        Args:
-            output_path: Output file path
-            format: Output format ('json', 'csv', 'mat')
-        """
-        if self._result is None:
-            raise ValueError("No results to save. Call process() first.")
-        
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if format == 'json':
-            self._save_json(output_path)
-        elif format == 'csv':
-            self._save_csv(output_path)
-        elif format == 'mat':
-            self._save_mat(output_path)
+        from hvsr_pro.processing.hvsr import HVSRResult
+
+        data = self._data
+        handler = HVSRDataHandler()
+
+        # -- Step 1.2: manual sampling-rate override -----------------------
+        if p.manual_sampling_rate:
+            _progress(12, f"Overriding sampling rate to {p.manual_sampling_rate:.4f} Hz...")
+            data.east.sampling_rate = p.manual_sampling_rate
+            data.north.sampling_rate = p.manual_sampling_rate
+            data.vertical.sampling_rate = p.manual_sampling_rate
+
+        # -- Step 1.5: time-range slice ------------------------------------
+        rt = cfg.time_range.to_runtime_dict()
+        if rt is not None:
+            _progress(15, "Applying time range filter...")
+            data = handler.slice_by_time(data, rt["start"], rt["end"], rt["timezone_offset"])
+            _progress(20, f"Sliced to {data.duration / 3600:.2f} hours")
+
+        # -- Step 2: create windows ----------------------------------------
+        _progress(30, "Creating windows...")
+        wm = WindowManager(window_length=p.window_length, overlap=p.overlap)
+        windows = wm.create_windows(data, calculate_quality=True)
+        qc_summary.total_windows = windows.n_windows
+
+        # -- Step 3: Phase 1 QC (pre-HVSR) --------------------------------
+        engine = RejectionEngine()
+        qc_disabled = not qc_cfg.enabled
+        eval_result = None
+
+        if qc_disabled:
+            _progress(50, "Quality control disabled (skipping)...")
+        elif not qc_cfg.phase1_enabled:
+            _progress(50, "Phase 1 QC disabled (skipping pre-HVSR rejection)...")
+        elif qc_cfg.mode == "sesame":
+            _progress(50, "Applying quality control (SESAME standard)...")
+            engine.create_default_pipeline(mode="sesame")
+            eval_result = engine.evaluate(windows, auto_apply=True)
+            qc_summary.phase1_applied = True
+        elif qc_cfg.mode == "custom":
+            _progress(50, "Applying quality control (custom settings)...")
+            self._apply_custom_qc_phase1(engine, qc_cfg)
+            eval_result = engine.evaluate(windows, auto_apply=True)
+            qc_summary.phase1_applied = True
         else:
-            raise ValueError(f"Unknown format: {format}")
-    
-    def _save_json(self, output_path: Path) -> None:
-        """Save results as JSON."""
-        data = {
-            'config': self._config.to_dict(),
-            'summary': self.get_summary(),
-            'frequencies': self._result.frequencies.tolist(),
-            'mean_hvsr': self._result.mean_hvsr.tolist(),
-            'median_hvsr': self._result.median_hvsr.tolist(),
-            'std_hvsr': self._result.std_hvsr.tolist(),
-            'percentile_16': self._result.percentile_16.tolist(),
-            'percentile_84': self._result.percentile_84.tolist(),
-            'peaks': [
-                {'frequency': p.frequency, 'amplitude': p.amplitude}
-                for p in self._result.peaks
-            ] if self._result.peaks else []
-        }
-        
-        with open(output_path, 'w') as f:
-            json.dump(data, f, indent=2)
-    
-    def _save_csv(self, output_path: Path) -> None:
-        """Save results as CSV."""
-        import csv
-        
-        with open(output_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['frequency', 'mean_hvsr', 'median_hvsr', 'std_hvsr', 
-                           'percentile_16', 'percentile_84'])
-            for i, freq in enumerate(self._result.frequencies):
-                writer.writerow([
-                    freq,
-                    self._result.mean_hvsr[i],
-                    self._result.median_hvsr[i],
-                    self._result.std_hvsr[i],
-                    self._result.percentile_16[i],
-                    self._result.percentile_84[i]
-                ])
-    
-    def _save_mat(self, output_path: Path) -> None:
-        """Save results as MATLAB .mat file."""
-        try:
-            from scipy.io import savemat
-        except ImportError:
-            raise ImportError("scipy is required for MAT export. Install with: pip install scipy")
-        
-        mat_data = {
-            'frequency': self._result.frequencies,
-            'mean_hvsr': self._result.mean_hvsr,
-            'median_hvsr': self._result.median_hvsr,
-            'std_hvsr': self._result.std_hvsr,
-            'percentile_16': self._result.percentile_16,
-            'percentile_84': self._result.percentile_84,
-            'total_windows': self._result.total_windows,
-            'valid_windows': self._result.valid_windows
-        }
-        
-        if self._result.primary_peak:
-            mat_data['peak_frequency'] = self._result.primary_peak.frequency
-            mat_data['peak_amplitude'] = self._result.primary_peak.amplitude
-        
-        savemat(str(output_path), mat_data)
-    
-    def load_results(self, file_path: Union[str, Path]) -> 'HVSRAnalysis':
-        """
-        Load previously saved results from a JSON file.
-        
-        Args:
-            file_path: Path to the results JSON file
-            
-        Returns:
-            self for method chaining
-        """
-        from hvsr_pro.processing.hvsr import HVSRResult, Peak
-        
-        file_path = Path(file_path)
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        
-        # Reconstruct config
-        if 'config' in data:
-            for key, value in data['config'].items():
-                if hasattr(self._config, key):
-                    setattr(self._config, key, value)
-        
-        # Reconstruct result
-        peaks = [
-            Peak(frequency=p['frequency'], amplitude=p['amplitude'])
-            for p in data.get('peaks', [])
-        ]
-        
-        self._result = HVSRResult(
-            frequencies=np.array(data['frequencies']),
-            mean_hvsr=np.array(data['mean_hvsr']),
-            median_hvsr=np.array(data['median_hvsr']),
-            std_hvsr=np.array(data['std_hvsr']),
-            percentile_16=np.array(data['percentile_16']),
-            percentile_84=np.array(data['percentile_84']),
-            window_spectra=[],
-            peaks=peaks,
-            total_windows=data.get('summary', {}).get('result', {}).get('total_windows', 0),
-            valid_windows=data.get('summary', {}).get('result', {}).get('valid_windows', 0),
-            metadata={}
+            _progress(50, f"Unknown QC mode '{qc_cfg.mode}', using SESAME standard...")
+            engine.create_default_pipeline(mode="sesame")
+            eval_result = engine.evaluate(windows, auto_apply=True)
+            qc_summary.phase1_applied = True
+
+        qc_msg = (
+            f"QC: {windows.n_active}/{windows.n_windows} windows active "
+            f"({windows.acceptance_rate * 100:.1f}%)"
         )
-        
+        if eval_result is not None:
+            qc_msg += f"  [{RejectionEngine.format_qc_summary(eval_result)}]"
+            qc_summary.phase1_detail = qc_msg
+        _progress(60, qc_msg)
+
+        # -- Step 3b: zero-window guard ------------------------------------
+        if windows.n_active == 0:
+            _progress(65, f"ERROR: No windows passed QC (0/{windows.n_windows})")
+            dummy = self._make_dummy_result(p, windows, "No windows passed QC")
+            qc_summary.active_windows = 0
+            qc_summary.errors.append("No windows passed QC")
+            self._windows = windows
+            self._result = AnalysisResult(
+                hvsr_result=dummy, windows=windows, data=data,
+                config=cfg, qc_summary=qc_summary,
+            )
+            return self._result
+
+        if windows.n_active < 10 and windows.n_windows > 50:
+            qc_summary.warnings.append(
+                f"Only {windows.n_active} windows passed QC out of {windows.n_windows}"
+            )
+
+        # -- Step 4: compute HVSR ------------------------------------------
+        _progress(70, "Computing HVSR...")
+        processor = HVSRProcessor(
+            smoothing_method=p.smoothing_method,
+            smoothing_bandwidth=p.smoothing_bandwidth,
+            horizontal_method=p.horizontal_method,
+            f_min=p.freq_min,
+            f_max=p.freq_max,
+            n_frequencies=p.n_frequencies,
+            parallel=p.use_parallel,
+        )
+        result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+
+        # -- Step 5: Cox FDWRA ---------------------------------------------
+        apply_fdwra = self._should_apply_fdwra(qc_cfg)
+        if apply_fdwra:
+            _progress(85, "Applying Cox FDWRA (peak consistency)...")
+            raw_window_spectra = list(result.window_spectra)
+
+            cox = qc_cfg.cox_fdwra
+            fdwra_result = engine.evaluate_fdwra(
+                windows, result,
+                n=cox.n,
+                max_iterations=cox.max_iterations,
+                min_iterations=cox.min_iterations,
+                distribution_fn=cox.distribution,
+                distribution_mc=cox.distribution,
+                search_range_hz=(p.freq_min, p.freq_max),
+                auto_apply=True,
+            )
+            n_rej = fdwra_result["n_rejected"]
+            iters = fdwra_result["iterations"]
+            qc_summary.fdwra_applied = True
+            qc_summary.fdwra_detail = (
+                f"Cox FDWRA: {n_rej} rejected, converged in {iters} iterations"
+            )
+            _progress(90, qc_summary.fdwra_detail)
+
+            if n_rej > 0:
+                if windows.n_active == 0:
+                    _progress(92, "ERROR: Cox FDWRA rejected all windows")
+                    dummy = self._make_dummy_result(p, windows, "Cox FDWRA rejected all windows")
+                    qc_summary.active_windows = 0
+                    qc_summary.errors.append("Cox FDWRA rejected all windows")
+                    self._windows = windows
+                    self._result = AnalysisResult(
+                        hvsr_result=dummy, windows=windows, data=data,
+                        config=cfg, qc_summary=qc_summary,
+                    )
+                    return self._result
+                _progress(92, "Recomputing HVSR after Cox FDWRA...")
+                result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
+                result.metadata["raw_window_spectra"] = raw_window_spectra
+            else:
+                result.metadata["raw_window_spectra"] = raw_window_spectra
+
+        # -- Step 6: post-HVSR QC ------------------------------------------
+        if qc_cfg.enabled and qc_cfg.phase2_enabled and windows.n_active > 0:
+            post_algos = self._build_post_hvsr_algos(qc_cfg)
+            if post_algos:
+                _progress(95, "Applying post-HVSR rejection algorithms...")
+                engine.post_hvsr_algorithms = post_algos
+                post_result = engine.evaluate_post_hvsr(windows, result, auto_apply=True)
+                n_post = post_result.get("n_rejected", 0)
+                qc_summary.post_hvsr_applied = True
+                qc_summary.post_hvsr_detail = (
+                    f"Post-HVSR: {n_post} rejected, {windows.n_active} remaining"
+                )
+                if n_post > 0 and windows.n_active > 0:
+                    _progress(97, f"Post-HVSR: {n_post} windows rejected, recomputing...")
+                    result = processor.process(
+                        windows, detect_peaks_flag=True, save_window_spectra=True
+                    )
+                _progress(98, qc_summary.post_hvsr_detail)
+
+        qc_summary.active_windows = windows.n_active
+        qc_summary.phase2_applied = qc_summary.fdwra_applied or qc_summary.post_hvsr_applied
+        _progress(100, "Complete!")
+
+        self._windows = windows
+        self._result = AnalysisResult(
+            hvsr_result=result, windows=windows, data=data,
+            config=cfg, qc_summary=qc_summary,
+        )
+        return self._result
+
+    # -- azimuthal ---------------------------------------------------------
+
+    def process_azimuthal(
+        self, *, progress_callback: ProgressCallback = None
+    ) -> Any:
+        """Run azimuthal analysis on already-processed data.
+
+        Returns the ``AzimuthalHVSRResult``.
+        """
+        if self._windows is None:
+            raise ValueError("Run process() before process_azimuthal().")
+        from hvsr_pro.processing.azimuthal import AzimuthalHVSRProcessor
+
+        az = AzimuthalHVSRProcessor()
+        az_result = az.process(self._windows, progress_callback=progress_callback)
+        if self._result is not None:
+            self._result.azimuthal_result = az_result
+        return az_result
+
+    # -- session save / load -----------------------------------------------
+
+    def save_session(self, session_dir: Union[str, Path]) -> Path:
+        """Persist config + results + pickles to *session_dir*."""
+        sd = Path(session_dir)
+        sd.mkdir(parents=True, exist_ok=True)
+
+        cfg_path = sd / "analysis_config.json"
+        self._config.save(cfg_path)
+
+        if self._windows is not None:
+            with open(sd / "windows.pkl", "wb") as f:
+                pickle.dump(self._windows, f)
+
+        r = self._result
+        if r is not None and r.hvsr_result is not None:
+            with open(sd / "hvsr_result.pkl", "wb") as f:
+                pickle.dump(r.hvsr_result, f)
+            if r.azimuthal_result is not None:
+                with open(sd / "azimuthal_result.pkl", "wb") as f:
+                    pickle.dump(r.azimuthal_result, f)
+
+        if self._data is not None:
+            with open(sd / "seismic_data.pkl", "wb") as f:
+                pickle.dump(self._data, f)
+
+        # Write a session.json compatible with SessionManager
+        from hvsr_pro.config.session import SessionState, FileInfo
+        from hvsr_pro.config.session import ProcessingSettings as SPS
+        from hvsr_pro.config.session import QCSettings as SQC
+
+        p = self._config.processing
+        qc = self._config.qc
+        state = SessionState(
+            version="2.0",
+            created=datetime.now().isoformat(),
+            session_folder=str(sd),
+            processing=SPS(
+                window_length=p.window_length,
+                overlap=p.overlap,
+                smoothing_bandwidth=p.smoothing_bandwidth,
+                f_min=p.freq_min,
+                f_max=p.freq_max,
+                n_frequencies=p.n_frequencies,
+            ),
+            qc=SQC(
+                enabled=qc.enabled,
+                mode=qc.mode,
+                cox_fdwra_enabled=qc.cox_fdwra.enabled,
+                cox_n=qc.cox_fdwra.n,
+                cox_max_iterations=qc.cox_fdwra.max_iterations,
+                cox_min_iterations=qc.cox_fdwra.min_iterations,
+                cox_distribution=qc.cox_fdwra.distribution,
+            ),
+            windows_file="windows.pkl",
+            hvsr_result_file="hvsr_result.pkl",
+            seismic_data_file="seismic_data.pkl",
+            has_results=r is not None and r.hvsr_result is not None,
+            has_full_data=True,
+            has_azimuthal=r is not None and r.azimuthal_result is not None,
+            azimuthal_result_file="azimuthal_result.pkl" if (
+                r is not None and r.azimuthal_result is not None
+            ) else "",
+        )
+
+        if r is not None and r.hvsr_result is not None:
+            pk = r.hvsr_result.primary_peak
+            if pk:
+                state.peak_frequency = pk.frequency
+                state.peak_amplitude = pk.amplitude
+            state.n_total_windows = r.hvsr_result.total_windows
+            state.n_active_windows = r.hvsr_result.valid_windows
+
+        if self._windows is not None:
+            from hvsr_pro.config.session import WindowState as WS
+            for i, w in enumerate(self._windows.windows):
+                state.window_states.append(WS(
+                    index=i,
+                    active=w.state.is_usable if hasattr(w.state, "is_usable") else w.active,
+                    rejection_reason=getattr(w, "rejection_reason", None),
+                ))
+
+        with open(sd / "session.json", "w", encoding="utf-8") as f:
+            json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
+
+        return sd
+
+    def load_session(self, session_dir: Union[str, Path]) -> "HVSRAnalysis":
+        """Restore from a session directory.
+
+        Returns ``self`` for chaining.
+        """
+        sd = Path(session_dir)
+
+        cfg_path = sd / "analysis_config.json"
+        if cfg_path.exists():
+            self._config = HVSRAnalysisConfig.load(cfg_path)
+
+        if (sd / "seismic_data.pkl").exists():
+            with open(sd / "seismic_data.pkl", "rb") as f:
+                self._data = pickle.load(f)
+
+        windows = None
+        if (sd / "windows.pkl").exists():
+            with open(sd / "windows.pkl", "rb") as f:
+                windows = pickle.load(f)
+            self._windows = windows
+
+        hvsr_result = None
+        if (sd / "hvsr_result.pkl").exists():
+            with open(sd / "hvsr_result.pkl", "rb") as f:
+                hvsr_result = pickle.load(f)
+
+        az_result = None
+        if (sd / "azimuthal_result.pkl").exists():
+            with open(sd / "azimuthal_result.pkl", "rb") as f:
+                az_result = pickle.load(f)
+
+        if hvsr_result is not None:
+            self._result = AnalysisResult(
+                hvsr_result=hvsr_result,
+                windows=windows,
+                data=self._data,
+                config=self._config,
+                azimuthal_result=az_result,
+            )
+
         return self
-    
-    def save_plots(self, 
-                   output_dir: Union[str, Path],
-                   plot_types: Optional[List[str]] = None,
-                   dpi: int = 150) -> List[Path]:
+
+    # -- export helpers ----------------------------------------------------
+
+    def save_results(self, output_path: Union[str, Path], fmt: str = "json") -> None:
+        """Save HVSR curves to *output_path*.
+
+        *fmt* is ``"json"``, ``"csv"``, or ``"mat"``.
         """
-        Save visualization plots.
-        
-        Args:
-            output_dir: Directory to save plots
-            plot_types: List of plot types to save. Options:
-                'hvsr', 'windows', 'quality', 'statistics', 'dashboard'
-                Default: ['hvsr', 'quality']
-            dpi: Resolution of saved plots
-            
-        Returns:
-            List of saved file paths
-        """
-        if self._result is None:
-            raise ValueError("No results to plot. Call process() first.")
-        
-        from hvsr_pro.visualization import HVSRPlotter
-        import matplotlib.pyplot as plt
-        
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        if plot_types is None:
-            plot_types = ['hvsr', 'quality']
-        
-        plotter = HVSRPlotter()
-        saved_files = []
-        
-        for plot_type in plot_types:
-            try:
-                if plot_type == 'hvsr':
-                    fig = plotter.plot_result(self._result, show_peaks=True)
-                elif plot_type == 'windows' and self._result.window_spectra:
-                    fig = plotter.plot_with_windows(self._result)
-                elif plot_type == 'quality' and self._windows:
-                    fig = plotter.plot_quality_metrics(self._windows)
-                elif plot_type == 'statistics':
-                    fig = plotter.plot_statistics(self._result)
-                elif plot_type == 'dashboard' and self._windows:
-                    fig = plotter.plot_dashboard(self._result, self._windows)
-                else:
-                    continue
-                
-                filepath = output_dir / f"{plot_type}.png"
-                fig.savefig(filepath, dpi=dpi, bbox_inches='tight')
-                plt.close(fig)
-                saved_files.append(filepath)
-                
-            except Exception:
-                continue
-        
-        return saved_files
-    
-    def save_plot(self,
-                  output_path: Union[str, Path],
-                  plot_type: str = 'hvsr',
-                  dpi: int = 150) -> None:
-        """
-        Save a single plot.
-        
-        Args:
-            output_path: Path to save the plot
-            plot_type: Type of plot to save
-            dpi: Resolution of saved plot
-        """
-        if self._result is None:
-            raise ValueError("No results to plot. Call process() first.")
-        
-        from hvsr_pro.visualization import HVSRPlotter
-        import matplotlib.pyplot as plt
-        
+        if self._result is None or self._result.hvsr_result is None:
+            raise ValueError("No results to save. Call process() first.")
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
+        r = self._result.hvsr_result
+        if fmt == "json":
+            payload = {
+                "config": self._config.to_dict(),
+                "summary": self._result.get_summary(),
+                "frequencies": r.frequencies.tolist(),
+                "mean_hvsr": r.mean_hvsr.tolist(),
+                "median_hvsr": r.median_hvsr.tolist(),
+                "std_hvsr": r.std_hvsr.tolist(),
+                "percentile_16": r.percentile_16.tolist(),
+                "percentile_84": r.percentile_84.tolist(),
+                "peaks": [
+                    {"frequency": pk.frequency, "amplitude": pk.amplitude}
+                    for pk in (r.peaks or [])
+                ],
+            }
+            with open(output_path, "w") as f:
+                json.dump(payload, f, indent=2)
+        elif fmt == "csv":
+            import csv
+
+            with open(output_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["frequency", "mean_hvsr", "median_hvsr",
+                                 "std_hvsr", "percentile_16", "percentile_84"])
+                for i in range(len(r.frequencies)):
+                    writer.writerow([
+                        r.frequencies[i], r.mean_hvsr[i], r.median_hvsr[i],
+                        r.std_hvsr[i], r.percentile_16[i], r.percentile_84[i],
+                    ])
+        elif fmt == "mat":
+            from scipy.io import savemat
+
+            mat = {
+                "frequency": r.frequencies,
+                "mean_hvsr": r.mean_hvsr,
+                "median_hvsr": r.median_hvsr,
+                "std_hvsr": r.std_hvsr,
+                "percentile_16": r.percentile_16,
+                "percentile_84": r.percentile_84,
+                "total_windows": r.total_windows,
+                "valid_windows": r.valid_windows,
+            }
+            pk = r.primary_peak
+            if pk:
+                mat["peak_frequency"] = pk.frequency
+                mat["peak_amplitude"] = pk.amplitude
+            savemat(str(output_path), mat)
+        else:
+            raise ValueError(f"Unknown format: {fmt}")
+
+    def save_plot(
+        self,
+        output_path: Union[str, Path],
+        plot_type: str = "hvsr",
+        dpi: int = 150,
+    ) -> None:
+        """Render and save a plot to *output_path*."""
+        if self._result is None or self._result.hvsr_result is None:
+            raise ValueError("No results to plot. Call process() first.")
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from hvsr_pro.visualization import HVSRPlotter
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         plotter = HVSRPlotter()
-        
-        if plot_type == 'hvsr':
-            fig = plotter.plot_result(self._result, show_peaks=True)
-        elif plot_type == 'windows' and self._result.window_spectra:
-            fig = plotter.plot_with_windows(self._result)
-        elif plot_type == 'quality' and self._windows:
+        r = self._result.hvsr_result
+
+        if plot_type == "hvsr":
+            fig = plotter.plot_result(r, show_peaks=True)
+        elif plot_type == "windows" and r.window_spectra:
+            fig = plotter.plot_with_windows(r)
+        elif plot_type == "quality" and self._windows:
             fig = plotter.plot_quality_metrics(self._windows)
-        elif plot_type == 'statistics':
-            fig = plotter.plot_statistics(self._result)
-        elif plot_type == 'comparison' and self._windows:
-            from hvsr_pro.visualization.comparison_plot import plot_raw_vs_adjusted_from_result
-            fig = plot_raw_vs_adjusted_from_result(self._result, self._windows)
+        elif plot_type == "statistics":
+            fig = plotter.plot_statistics(r)
+        elif plot_type == "dashboard" and self._windows:
+            fig = plotter.plot_dashboard(r, self._windows)
         else:
             raise ValueError(f"Unknown or unavailable plot type: {plot_type}")
-        
-        fig.savefig(output_path, dpi=dpi, bbox_inches='tight')
+
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
 
+    def get_summary(self) -> Dict[str, Any]:
+        """Return a JSON-safe summary of the last analysis."""
+        if self._result is not None:
+            return self._result.get_summary()
+        summary: Dict[str, Any] = {"config": self._config.to_dict()}
+        if self._data:
+            summary["data"] = {
+                "duration_seconds": self._data.duration,
+                "sampling_rate": self._data.east.sampling_rate,
+                "n_samples": len(self._data.east.data),
+                "start_time": str(self._data.start_time) if self._data.start_time else None,
+            }
+        return summary
+
+    # -- internals ---------------------------------------------------------
+
+    @staticmethod
+    def _make_dummy_result(p, windows, message: str):
+        from hvsr_pro.processing.hvsr import HVSRResult
+
+        freqs = np.logspace(np.log10(p.freq_min), np.log10(p.freq_max), p.n_frequencies)
+        ones = np.ones_like(freqs)
+        return HVSRResult(
+            frequencies=freqs,
+            mean_hvsr=ones,
+            median_hvsr=ones,
+            std_hvsr=np.zeros_like(freqs),
+            percentile_16=ones * 0.9,
+            percentile_84=ones * 1.1,
+            window_spectra=[],
+            peaks=[],
+            total_windows=windows.n_windows,
+            valid_windows=0,
+            metadata={"qc_failure": True, "message": message},
+        )
+
+    @staticmethod
+    def _apply_custom_qc_phase1(engine, qc_cfg):
+        """Wire pre-HVSR (Phase 1) algorithms from ``QCConfig``."""
+        from hvsr_pro.processing.rejection import (
+            AmplitudeRejection,
+            QualityThresholdRejection,
+            STALTARejection,
+            FrequencyDomainRejection,
+            StatisticalOutlierRejection,
+        )
+
+        a = qc_cfg.amplitude
+        if a.enabled:
+            engine.add_algorithm(AmplitudeRejection(
+                max_amplitude=a.max_amplitude,
+                min_rms=a.min_rms,
+                clipping_threshold=a.clipping_threshold,
+            ))
+
+        qt = qc_cfg.quality_threshold
+        if qt.enabled:
+            engine.add_algorithm(QualityThresholdRejection(threshold=qt.threshold))
+
+        sl = qc_cfg.sta_lta
+        if sl.enabled:
+            engine.add_algorithm(STALTARejection(
+                sta_length=sl.sta_length,
+                lta_length=sl.lta_length,
+                min_ratio=sl.min_ratio,
+                max_ratio=sl.max_ratio,
+            ))
+
+        fd = qc_cfg.frequency_domain
+        if fd.enabled:
+            engine.add_algorithm(FrequencyDomainRejection(spike_threshold=fd.spike_threshold))
+
+        so = qc_cfg.statistical_outlier
+        if so.enabled:
+            engine.add_algorithm(StatisticalOutlierRejection(
+                method=so.method, threshold=so.threshold,
+            ))
+
+    @staticmethod
+    def _should_apply_fdwra(qc_cfg) -> bool:
+        if not qc_cfg.enabled or not qc_cfg.phase2_enabled:
+            return False
+        if qc_cfg.cox_fdwra.enabled:
+            return True
+        if qc_cfg.mode == "sesame":
+            return True
+        return False
+
+    @staticmethod
+    def _build_post_hvsr_algos(qc_cfg) -> list:
+        from hvsr_pro.processing.rejection import (
+            HVSRAmplitudeRejection,
+            FlatPeakRejection,
+            CurveOutlierRejection,
+        )
+
+        algos = []
+        ha = qc_cfg.hvsr_amplitude
+        if ha.enabled:
+            algos.append(HVSRAmplitudeRejection(min_amplitude=ha.min_amplitude))
+
+        fp = qc_cfg.flat_peak
+        if fp.enabled:
+            algos.append(FlatPeakRejection(flatness_threshold=fp.flatness_threshold))
+
+        co = qc_cfg.curve_outlier
+        if co.enabled:
+            algos.append(CurveOutlierRejection(
+                threshold=co.threshold,
+                max_iterations=co.max_iterations,
+                metric=co.metric,
+            ))
+
+        return algos
