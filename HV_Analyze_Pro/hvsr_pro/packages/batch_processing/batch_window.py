@@ -271,7 +271,9 @@ class BatchProcessingWindow(QMainWindow):
             project.log_activity('batch_processing', f'State saved for {batch_id}')
             project.save()
         except Exception as e:
+            import traceback
             self._log(f"Warning: failed to save project state: {e}")
+            print(f"[BatchProcessing] Save failed: {e}\n{traceback.format_exc()}")
 
     def _restore_project_state(self, project, batch_id):
         """Restore batch state from a previous session. Returns True if restored."""
@@ -280,7 +282,7 @@ class BatchProcessingWindow(QMainWindow):
                 has_batch_state, load_batch_state,
             )
 
-            batch_dir = project.module_dir('batch_processing', batch_id)
+            batch_dir = project.ensure_module_dir('batch_processing', batch_id)
             if batch_dir is None or not has_batch_state(batch_dir):
                 return False
 
@@ -336,7 +338,9 @@ class BatchProcessingWindow(QMainWindow):
             self._log(f"Restored batch state from {batch_id}")
             return True
         except Exception as e:
+            import traceback
             self._log(f"Warning: failed to restore state: {e}")
+            print(f"[BatchProcessing] Restore failed: {e}\n{traceback.format_exc()}")
             return False
 
     def _scan_batch_dir_for_results(self, batch_dir):

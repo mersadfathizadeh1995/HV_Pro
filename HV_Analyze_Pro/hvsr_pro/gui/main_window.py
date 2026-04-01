@@ -740,8 +740,8 @@ class HVSRMainWindow(QMainWindow):
         if ctx:
             try:
                 self._save_hvsr_to_project(ctx)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SaveAll] HVSR save failed: {e}")
         # Sub-module windows — each has _save_project_state()
         for attr in ('_batch_window', '_bedrock_window',
                      '_hvstrip_window', '_invert_window'):
@@ -749,8 +749,8 @@ class HVSRMainWindow(QMainWindow):
             if win is not None and hasattr(win, '_save_project_state'):
                 try:
                     win._save_project_state()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[SaveAll] {attr} save failed: {e}")
 
     def _open_hvsr_with_project(self, project, analysis_id):
         """Open the main HVSR window in project context.
