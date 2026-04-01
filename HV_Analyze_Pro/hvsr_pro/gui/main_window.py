@@ -742,6 +742,15 @@ class HVSRMainWindow(QMainWindow):
         """
         from hvsr_pro.packages.project_manager.project import MODULE_HVSR_ANALYSIS
 
+        # ── Save & clear previous analysis before switching ──
+        old_ctx = getattr(self, '_hvsr_project_context', None)
+        if old_ctx:
+            try:
+                self._save_hvsr_to_project(old_ctx)
+            except Exception:
+                pass
+        self._on_data_cleared()  # reset data, plots, file list
+
         self._hvsr_project_context = {
             'project': project,
             'analysis_id': analysis_id,
@@ -873,7 +882,8 @@ class HVSRMainWindow(QMainWindow):
         else:
             self.add_info(f"New analysis: {analysis_id}")
 
-        # Bring main window to front
+        # Bring main window to front (re-show if it was hidden)
+        self.show()
         self.raise_()
         self.activateWindow()
 
@@ -1766,13 +1776,25 @@ class HVSRMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
-        """Auto-save HVSR state into the project folder on close."""
+        """Auto-save HVSR state into the project folder on close.
+
+        If the Project Hub is still open, hide instead of closing so the
+        hub can re-open a different analysis later.
+        """
         ctx = getattr(self, '_hvsr_project_context', None)
         if ctx:
             try:
                 self._save_hvsr_to_project(ctx)
             except Exception as e:
                 self.add_info(f"Warning: auto-save on close failed: {e}")
+
+        # If the hub is alive, just hide — don't destroy the main window
+        hub = getattr(self, '_hub_window', None)
+        if hub is not None and hub.isVisible():
+            event.ignore()
+            self.hide()
+            return
+
         super().closeEvent(event)
     
 
