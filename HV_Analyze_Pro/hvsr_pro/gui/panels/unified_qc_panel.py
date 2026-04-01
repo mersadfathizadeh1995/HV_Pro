@@ -62,7 +62,8 @@ SESAME_DEFAULTS = {
             }
         },
         'hvsr_amplitude': {'enabled': False, 'params': {'min_amplitude': 1.0}},
-        'flat_peak': {'enabled': False, 'params': {'flatness_threshold': 0.15}}
+        'flat_peak': {'enabled': False, 'params': {'flatness_threshold': 0.15}},
+        'curve_outlier': {'enabled': True, 'params': {'threshold': 3.0, 'max_iterations': 5, 'metric': 'mean'}}
     }
 }
 
@@ -297,6 +298,15 @@ if HAS_PYQT5:
             )
             layout.addWidget(self.flat_peak_row['widget'])
             
+            self.curve_outlier_row = self._create_algorithm_row(
+                "Curve Outlier Rejection",
+                "Iterative median-MAD sigma clipping on H/V curves.\n"
+                "Rejects windows whose H/V curve deviates strongly\n"
+                "from the population median (robust outlier detection).",
+                'curve_outlier'
+            )
+            layout.addWidget(self.curve_outlier_row['widget'])
+            
             return group
         
         def _create_algorithm_row(self, name: str, tooltip: str, algo_key: str) -> Dict[str, Any]:
@@ -352,7 +362,7 @@ if HAS_PYQT5:
         
         def _get_phase2_rows(self):
             """Get all Phase 2 algorithm rows."""
-            return [self.fdwra_row, self.hvsr_amp_row, self.flat_peak_row]
+            return [self.fdwra_row, self.hvsr_amp_row, self.flat_peak_row, self.curve_outlier_row]
         
         def _on_master_toggled(self, checked: bool):
             """Handle master enable checkbox toggle."""
@@ -467,6 +477,7 @@ if HAS_PYQT5:
             self.fdwra_row['checkbox'].setChecked(algos['fdwra']['enabled'])
             self.hvsr_amp_row['checkbox'].setChecked(algos['hvsr_amplitude']['enabled'])
             self.flat_peak_row['checkbox'].setChecked(algos['flat_peak']['enabled'])
+            self.curve_outlier_row['checkbox'].setChecked(algos.get('curve_outlier', {}).get('enabled', True))
             
             self._update_phase1_enabled()
             self._update_phase2_enabled()
@@ -502,6 +513,8 @@ if HAS_PYQT5:
                 algos.get('hvsr_amplitude', {}).get('enabled', False))
             self.flat_peak_row['checkbox'].setChecked(
                 algos.get('flat_peak', {}).get('enabled', False))
+            self.curve_outlier_row['checkbox'].setChecked(
+                algos.get('curve_outlier', {}).get('enabled', True))
             
             self._update_phase1_enabled()
             self._update_phase2_enabled()
@@ -542,6 +555,10 @@ if HAS_PYQT5:
                     'flat_peak': {
                         'enabled': self.flat_peak_row['checkbox'].isChecked(),
                         'params': self._get_algorithm_params('flat_peak')
+                    },
+                    'curve_outlier': {
+                        'enabled': self.curve_outlier_row['checkbox'].isChecked(),
+                        'params': self._get_algorithm_params('curve_outlier')
                     }
                 }
             }
@@ -643,6 +660,9 @@ if HAS_PYQT5:
             qc.hvsr_amplitude.params = algos['hvsr_amplitude']['params']
             qc.flat_peak.enabled = algos['flat_peak']['enabled']
             qc.flat_peak.params = algos['flat_peak']['params']
+            if 'curve_outlier' in algos:
+                qc.curve_outlier.enabled = algos['curve_outlier']['enabled']
+                qc.curve_outlier.params = algos['curve_outlier']['params']
             
             # FDWRA
             fdwra = algos['fdwra']

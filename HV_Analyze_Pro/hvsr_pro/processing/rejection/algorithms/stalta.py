@@ -21,6 +21,16 @@ class STALTARejection(BaseRejectionAlgorithm):
     
     Reference: Classic earthquake detection algorithm adapted for HVSR.
     Uses industry-standard min/max bounds for robust detection.
+
+    Edge handling
+    -------------
+    ``np.convolve(..., mode='same')`` zero-pads both ends, which deflates
+    the LTA near the edges of the window and can produce spurious
+    min/max ratios.  To avoid false rejections the algorithm trims
+    ``lta_samples // 2`` from each end of the ratio trace before
+    computing the summary statistics.  Percentile-based extremes
+    (1st / 99th) are used instead of the absolute min/max so that a
+    single anomalous sample cannot trigger rejection on its own.
     """
     
     def __init__(self,
@@ -41,7 +51,6 @@ class STALTARejection(BaseRejectionAlgorithm):
             threshold: Legacy parameter (if provided, used as max_ratio)
             name: Algorithm name
         """
-        # Backward compatibility: if threshold provided, use it as max_ratio
         if threshold is not None:
             max_ratio = threshold
             super().__init__(name, threshold)
@@ -57,40 +66,41 @@ class STALTARejection(BaseRejectionAlgorithm):
         """Evaluate window using STA/LTA ratio with min/max bounds."""
         sampling_rate = window.data.sampling_rate
         
-        # Convert lengths to samples
         sta_samples = int(self.sta_length * sampling_rate)
         lta_samples = int(self.lta_length * sampling_rate)
+
+        # Number of edge samples to discard (dominated by zero-padding)
+        trim = lta_samples // 2
         
-        # Calculate STA/LTA for each component
         ratios_max = []
         ratios_min = []
         
         for component_name in ['east', 'north', 'vertical']:
             component = window.data.get_component(component_name)
-            data = np.abs(component.data)  # Envelope (absolute value)
+            data = np.abs(component.data)
             
-            # Calculate STA and LTA
             sta = self._moving_average(data, sta_samples)
             lta = self._moving_average(data, lta_samples)
             
-            # Calculate ratio (avoid division by zero)
             ratio = np.divide(sta, lta, out=np.zeros_like(sta), where=lta > 1e-10)
-            
-            # Get maximum and minimum ratios
-            ratios_max.append(np.max(ratio))
-            ratios_min.append(np.min(ratio))
+
+            # Trim unreliable edge samples caused by zero-padded convolution
+            if 0 < trim < len(ratio) // 2:
+                ratio_core = ratio[trim:-trim]
+            else:
+                ratio_core = ratio
+
+            # Use robust percentiles instead of absolute min/max
+            ratios_max.append(float(np.percentile(ratio_core, 99)))
+            ratios_min.append(float(np.percentile(ratio_core, 1)))
         
-        # Use maximum across all components for upper bound check
         max_sta_lta = max(ratios_max)
-        # Use minimum across all components for lower bound check
         min_sta_lta = min(ratios_min)
         
-        # Check both bounds
         exceeds_max = max_sta_lta > self.max_ratio
         below_min = min_sta_lta < self.min_ratio
         should_reject = exceeds_max or below_min
         
-        # Build reason string
         reasons = []
         if exceeds_max:
             reasons.append(f"Max STA/LTA = {max_sta_lta:.2f} > {self.max_ratio:.2f}")
@@ -99,7 +109,6 @@ class STALTARejection(BaseRejectionAlgorithm):
         
         reason = " AND ".join(reasons) if reasons else f"STA/LTA within bounds ({min_sta_lta:.2f} - {max_sta_lta:.2f})"
         
-        # Rejection score
         if exceeds_max:
             rejection_score = min(1.0, (max_sta_lta - self.max_ratio) / self.max_ratio)
         elif below_min:
@@ -133,7 +142,6 @@ class STALTARejection(BaseRejectionAlgorithm):
         if window_size <= 0 or window_size > len(data):
             window_size = len(data)
         
-        # Use convolution for moving average
         kernel = np.ones(window_size) / window_size
         return np.convolve(data, kernel, mode='same')
 

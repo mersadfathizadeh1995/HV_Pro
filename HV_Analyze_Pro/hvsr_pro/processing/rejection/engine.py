@@ -436,6 +436,30 @@ class RejectionEngine:
         
         logger.info(f"Created {mode} rejection pipeline with {len(self.algorithms)} algorithms")
     
+    @staticmethod
+    def format_qc_summary(eval_result: Dict[str, Any]) -> str:
+        """Return a one-line, human-readable breakdown of per-algorithm rejections.
+
+        Parameters
+        ----------
+        eval_result : dict
+            The dictionary returned by :meth:`evaluate` or :meth:`evaluate_post_hvsr`.
+
+        Returns
+        -------
+        str
+            e.g. ``"QC breakdown: Amplitude 2, STA/LTA 5 | 43/50 active"``
+        """
+        parts = []
+        for ar in eval_result.get('algorithm_results', []):
+            n = ar.get('n_rejected', 0)
+            if n > 0:
+                parts.append(f"{ar['algorithm']} {n}")
+        n_active = eval_result.get('n_active', '?')
+        n_total = eval_result.get('n_windows', '?')
+        breakdown = ", ".join(parts) if parts else "none"
+        return f"QC breakdown: {breakdown} | {n_active}/{n_total} active"
+
     def __repr__(self) -> str:
         return f"RejectionEngine(algorithms={len(self.algorithms)}, post_hvsr={len(self.post_hvsr_algorithms)}, history={len(self.history)})"
 

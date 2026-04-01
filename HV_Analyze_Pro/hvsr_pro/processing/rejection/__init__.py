@@ -32,6 +32,7 @@ from hvsr_pro.processing.rejection.settings import (
     StatisticalOutlierSettings,
     HVSRAmplitudeSettings,
     FlatPeakSettings,
+    CurveOutlierSettings,
     CoxFDWRASettings,
     IsolationForestSettings,
     PRESET_DESCRIPTIONS,
@@ -49,6 +50,7 @@ from hvsr_pro.processing.rejection.algorithms import (
     # HVSR-specific
     HVSRAmplitudeRejection,
     FlatPeakRejection,
+    CurveOutlierRejection,
     CoxFDWRARejection,
 )
 
@@ -72,6 +74,7 @@ __all__ = [
     'StatisticalOutlierSettings',
     'HVSRAmplitudeSettings',
     'FlatPeakSettings',
+    'CurveOutlierSettings',
     'CoxFDWRASettings',
     'IsolationForestSettings',
     'PRESET_DESCRIPTIONS',
@@ -84,6 +87,7 @@ __all__ = [
     'FrequencyDomainRejection',
     'HVSRAmplitudeRejection',
     'FlatPeakRejection',
+    'CurveOutlierRejection',
     'CoxFDWRARejection',
 ]
 

@@ -228,6 +228,19 @@ class AdvancedQCDialog(QDialog):
         )
         layout.addWidget(self.flat_peak_group)
 
+        # Curve Outlier Rejection
+        self.curve_outlier_group = self._create_algorithm_group(
+            "Curve Outlier Rejection (Median-MAD)",
+            "Iterative sigma clipping on H/V curves. Rejects windows whose curve deviates strongly from the population median.",
+            [
+                ("Threshold (sigma):", "threshold", 1.0, 10.0, 3.0, 1, 0.5,
+                 "Number of scaled-MAD units to flag as outlier (lower = stricter)"),
+                ("Max Iterations:", "max_iterations", 1.0, 20.0, 5.0, 0, 1.0,
+                 "Maximum sigma-clipping iterations"),
+            ]
+        )
+        layout.addWidget(self.curve_outlier_group)
+
         layout.addStretch()
         return widget
 

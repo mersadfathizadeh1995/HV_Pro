@@ -4,16 +4,23 @@ Time Windows Dialog
 
 Dialog for managing multiple time windows with timezone conversion.
 Supports CSV import/export and CST/CDT/UTC timezone handling.
+
+Uses QDateTimeEdit widgets for intuitive date/time entry with calendar popup.
 """
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QDateTimeEdit,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDateTime
 from datetime import datetime, timedelta
+from typing import Optional
 import csv
+
+
+_DT_FORMAT = "yyyy-MM-dd  HH:mm:ss"
+_DT_PARSE = "%Y-%m-%d %H:%M:%S"
 
 
 class TimeWindowsDialog(QDialog):
@@ -22,11 +29,10 @@ class TimeWindowsDialog(QDialog):
     Optionally supports per-station assignment when *station_ids* is provided.
     """
 
-    # Timezone offsets (hours to ADD to local time to get UTC)
     TZ_OFFSETS = {
         'UTC': 0,
-        'CST': 6,   # Central Standard Time -> UTC+6
-        'CDT': 5,   # Central Daylight Time -> UTC+5
+        'CST': 6,
+        'CDT': 5,
     }
 
     def __init__(self, parent=None, time_windows=None, timezone='CST',
@@ -38,12 +44,12 @@ class TimeWindowsDialog(QDialog):
             Station numbers available for assignment. If provided,
             an "Assigned Stations" column is added to the table.
         station_assignments : dict, optional
-            Maps config_name → list of station_ids pre-assigned.
+            Maps config_name -> list of station_ids pre-assigned.
         """
         super().__init__(parent)
         self.setWindowTitle("Time Windows Configuration")
         self.setModal(True)
-        self.setMinimumSize(750, 450)
+        self.setMinimumSize(800, 480)
 
         self._time_windows = time_windows or []
         self._timezone = timezone
@@ -53,6 +59,10 @@ class TimeWindowsDialog(QDialog):
         self._build_ui()
         self._load_windows()
 
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
@@ -60,34 +70,43 @@ class TimeWindowsDialog(QDialog):
         tz_layout = QHBoxLayout()
         tz_layout.addWidget(QLabel("Input times are in:"))
         self.tz_combo = QComboBox()
-        self.tz_combo.addItems(['CST (Central Standard, +6h to UTC)',
-                                'CDT (Central Daylight, +5h to UTC)',
-                                'UTC (no conversion)'])
+        self.tz_combo.addItems([
+            'CST (Central Standard, +6h to UTC)',
+            'CDT (Central Daylight, +5h to UTC)',
+            'UTC (no conversion)',
+        ])
         if self._timezone == 'CDT':
             self.tz_combo.setCurrentIndex(1)
         elif self._timezone == 'UTC':
             self.tz_combo.setCurrentIndex(2)
         else:
             self.tz_combo.setCurrentIndex(0)
-        self.tz_combo.setToolTip("Select timezone of your input times.\nTimes will be converted to UTC for processing.")
+        self.tz_combo.setToolTip(
+            "Select timezone of your input times.\n"
+            "Times will be converted to UTC for processing."
+        )
         tz_layout.addWidget(self.tz_combo)
         tz_layout.addStretch()
         layout.addLayout(tz_layout)
 
         # Info label
         if self._has_stations:
-            info_label = QLabel("Define time windows and assign stations to each. "
-                                "Use Auto-Distribute to assign automatically.")
+            info_label = QLabel(
+                "Define time windows and assign stations to each. "
+                "Use Auto-Distribute to assign automatically."
+            )
         else:
-            info_label = QLabel("Each row defines a time window. "
-                                "All windows will be processed for each station.")
+            info_label = QLabel(
+                "Each row defines a time window. "
+                "All windows will be processed for each station."
+            )
         info_label.setStyleSheet("color: #666; font-style: italic;")
         layout.addWidget(info_label)
 
         # Table for time windows
         n_cols = 4 if self._has_stations else 3
         self.table = QTableWidget(0, n_cols)
-        headers = ['Config Name', 'Start Time', 'End Time']
+        headers = ['Config Name', 'Start  (Date  &  Time)', 'End  (Date  &  Time)']
         if self._has_stations:
             headers.append('Assigned Stations')
         self.table.setHorizontalHeaderLabels(headers)
@@ -96,7 +115,7 @@ class TimeWindowsDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         if self._has_stations:
             self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.table.setToolTip("Format: YYYY-MM-DD HH:MM:SS")
+        self.table.verticalHeader().setDefaultSectionSize(36)
         layout.addWidget(self.table)
 
         # Buttons for row management
@@ -130,7 +149,7 @@ class TimeWindowsDialog(QDialog):
             btn_seq = QPushButton("Sequential Split")
             btn_seq.setToolTip(
                 "Divide stations equally among time windows.\n"
-                "E.g. 24 stations / 4 windows → 1-6, 7-12, 13-18, 19-24"
+                "E.g. 24 stations / 4 windows -> 1-6, 7-12, 13-18, 19-24"
             )
             btn_seq.clicked.connect(self._auto_distribute_sequential)
             dist_layout.addWidget(btn_seq)
@@ -142,7 +161,7 @@ class TimeWindowsDialog(QDialog):
             dist_layout.addStretch()
             layout.addLayout(dist_layout)
 
-        # OK/Cancel buttons
+        # OK / Cancel buttons
         dialog_btns = QHBoxLayout()
         dialog_btns.addStretch()
 
@@ -157,25 +176,57 @@ class TimeWindowsDialog(QDialog):
 
         layout.addLayout(dialog_btns)
 
-    def _add_row(self, config_name="", start_time="", end_time="",
-                 assigned_stations=None):
+    # ------------------------------------------------------------------
+    # Helpers for creating QDateTimeEdit widgets inside the table
+    # ------------------------------------------------------------------
+
+    def _make_dt_widget(self, dt: datetime = None) -> QDateTimeEdit:
+        """Create a QDateTimeEdit configured for use inside the table."""
+        w = QDateTimeEdit()
+        w.setCalendarPopup(True)
+        w.setDisplayFormat(_DT_FORMAT)
+        if dt:
+            w.setDateTime(QDateTime(
+                dt.year, dt.month, dt.day,
+                dt.hour, dt.minute, dt.second
+            ))
+        else:
+            w.setDateTime(QDateTime.currentDateTime())
+        return w
+
+    def _get_row_start_dt(self, row: int) -> Optional[datetime]:
+        """Read start datetime from the widget in *row*."""
+        w = self.table.cellWidget(row, 1)
+        if isinstance(w, QDateTimeEdit):
+            return w.dateTime().toPyDateTime()
+        return None
+
+    def _get_row_end_dt(self, row: int) -> Optional[datetime]:
+        """Read end datetime from the widget in *row*."""
+        w = self.table.cellWidget(row, 2)
+        if isinstance(w, QDateTimeEdit):
+            return w.dateTime().toPyDateTime()
+        return None
+
+    # ------------------------------------------------------------------
+    # Row management
+    # ------------------------------------------------------------------
+
+    def _add_row(self, config_name="", start_dt: datetime = None,
+                 end_dt: datetime = None, assigned_stations=None):
         """Add a new row to the table."""
         row = self.table.rowCount()
         self.table.insertRow(row)
 
         # Config name
-        name_item = QTableWidgetItem(config_name or f"Config_{row+1}")
+        name_item = QTableWidgetItem(config_name or f"Config_{row + 1}")
         self.table.setItem(row, 0, name_item)
 
-        # Start time
-        start_item = QTableWidgetItem(start_time)
-        start_item.setToolTip("YYYY-MM-DD HH:MM:SS")
-        self.table.setItem(row, 1, start_item)
+        # Start time widget
+        self.table.setCellWidget(row, 1, self._make_dt_widget(start_dt))
 
-        # End time
-        end_item = QTableWidgetItem(end_time)
-        end_item.setToolTip("YYYY-MM-DD HH:MM:SS")
-        self.table.setItem(row, 2, end_item)
+        # End time widget
+        self.table.setCellWidget(row, 2, self._make_dt_widget(end_dt))
 
         # Assigned stations (editable text, comma-separated station IDs)
         if self._has_stations:
@@ -191,7 +242,15 @@ class TimeWindowsDialog(QDialog):
 
     def _remove_selected(self):
         """Remove selected rows."""
-        rows = set(item.row() for item in self.table.selectedItems())
+        rows = set()
+        for item in self.table.selectedItems():
+            rows.add(item.row())
+        for idx in self.table.selectionModel().selectedRows():
+            rows.add(idx.row())
+        # Also count rows where a cell widget is focused
+        current = self.table.currentRow()
+        if current >= 0:
+            rows.add(current)
         for row in sorted(rows, reverse=True):
             self.table.removeRow(row)
 
@@ -200,16 +259,37 @@ class TimeWindowsDialog(QDialog):
         for win in self._time_windows:
             name = win.get('name', '')
             assigned = self._station_assignments.get(name, [])
+
+            start_dt = None
+            end_dt = None
+            if 'start_dt' in win:
+                start_dt = win['start_dt']
+            elif 'start_local' in win and win['start_local']:
+                try:
+                    start_dt = datetime.strptime(win['start_local'], _DT_PARSE)
+                except ValueError:
+                    pass
+            if 'end_dt' in win:
+                end_dt = win['end_dt']
+            elif 'end_local' in win and win['end_local']:
+                try:
+                    end_dt = datetime.strptime(win['end_local'], _DT_PARSE)
+                except ValueError:
+                    pass
+
             self._add_row(
                 config_name=name,
-                start_time=win.get('start_local', ''),
-                end_time=win.get('end_local', ''),
+                start_dt=start_dt,
+                end_dt=end_dt,
                 assigned_stations=assigned,
             )
 
-        # Add an empty row if no windows
         if self.table.rowCount() == 0:
             self._add_row()
+
+    # ------------------------------------------------------------------
+    # Timezone helpers
+    # ------------------------------------------------------------------
 
     def _get_timezone(self):
         """Get selected timezone key."""
@@ -221,41 +301,47 @@ class TimeWindowsDialog(QDialog):
         tz = self._get_timezone()
         return self.TZ_OFFSETS.get(tz, 0)
 
+    # ------------------------------------------------------------------
+    # CSV import / export
+    # ------------------------------------------------------------------
+
     def _import_csv(self):
         """Import time windows from CSV file."""
-        path, _ = QFileDialog.getOpenFileName(self, "Import Time Windows CSV", "", "CSV files (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Time Windows CSV", "", "CSV files (*.csv)"
+        )
         if not path:
             return
 
         try:
             with open(path, 'r', newline='') as f:
                 reader = csv.reader(f)
-                header = next(reader, None)
+                next(reader, None)  # skip header
 
-                # Clear existing rows
                 self.table.setRowCount(0)
 
-                for row in reader:
-                    if len(row) < 13:
+                for row_data in reader:
+                    if len(row_data) < 13:
                         continue
 
-                    # Parse CSV format: Config, S_Year, S_Month, S_Day, S_Hour, S_Min, S_Sec, E_Year, ...
-                    config_name = row[0].strip()
+                    config_name = row_data[0].strip()
                     try:
-                        s_year, s_month, s_day = int(row[1]), int(row[2]), int(row[3])
-                        s_hour, s_min, s_sec = int(row[4]), int(row[5]), int(row[6])
-                        e_year, e_month, e_day = int(row[7]), int(row[8]), int(row[9])
-                        e_hour, e_min, e_sec = int(row[10]), int(row[11]), int(row[12])
-
-                        start_str = f"{s_year:04d}-{s_month:02d}-{s_day:02d} {s_hour:02d}:{s_min:02d}:{s_sec:02d}"
-                        end_str = f"{e_year:04d}-{e_month:02d}-{e_day:02d} {e_hour:02d}:{e_min:02d}:{e_sec:02d}"
-
-                        self._add_row(config_name, start_str, end_str)
+                        s = datetime(
+                            int(row_data[1]), int(row_data[2]), int(row_data[3]),
+                            int(row_data[4]), int(row_data[5]), int(row_data[6]),
+                        )
+                        e = datetime(
+                            int(row_data[7]), int(row_data[8]), int(row_data[9]),
+                            int(row_data[10]), int(row_data[11]), int(row_data[12]),
+                        )
+                        self._add_row(config_name, start_dt=s, end_dt=e)
                     except (ValueError, IndexError):
                         continue
 
-                QMessageBox.information(self, "Import Complete",
-                    f"Imported {self.table.rowCount()} time window(s) from:\n{path}")
+                QMessageBox.information(
+                    self, "Import Complete",
+                    f"Imported {self.table.rowCount()} time window(s) from:\n{path}"
+                )
         except Exception as e:
             QMessageBox.critical(self, "Import Error", f"Could not read CSV:\n{e}")
 
@@ -266,35 +352,39 @@ class TimeWindowsDialog(QDialog):
             QMessageBox.warning(self, "No Windows", "No valid time windows to export.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Export Time Windows CSV",
-                                               "time_windows.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Time Windows CSV", "time_windows.csv", "CSV files (*.csv)"
+        )
         if not path:
             return
 
         try:
             with open(path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Config', 'S_Year', 'S_Month', 'S_Day', 'S_Hour', 'S_Min', 'S_Sec',
-                                'E_Year', 'E_Month', 'E_Day', 'E_Hour', 'E_Min', 'E_Sec'])
+                writer.writerow([
+                    'Config', 'S_Year', 'S_Month', 'S_Day', 'S_Hour', 'S_Min', 'S_Sec',
+                    'E_Year', 'E_Month', 'E_Day', 'E_Hour', 'E_Min', 'E_Sec',
+                ])
 
                 for win in windows:
-                    start = win['start_dt']
-                    end = win['end_dt']
+                    s = win['start_dt']
+                    e = win['end_dt']
                     writer.writerow([
                         win['name'],
-                        start.year, start.month, start.day, start.hour, start.minute, start.second,
-                        end.year, end.month, end.day, end.hour, end.minute, end.second
+                        s.year, s.month, s.day, s.hour, s.minute, s.second,
+                        e.year, e.month, e.day, e.hour, e.minute, e.second,
                     ])
 
             QMessageBox.information(self, "Export Complete", f"Exported to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Could not write CSV:\n{e}")
 
-    def _auto_distribute_sequential(self):
-        """Distribute stations evenly across time windows.
+    # ------------------------------------------------------------------
+    # Station distribution helpers
+    # ------------------------------------------------------------------
 
-        E.g. 24 stations / 4 windows → stations 1-6, 7-12, 13-18, 19-24.
-        """
+    def _auto_distribute_sequential(self):
+        """Distribute stations evenly across time windows."""
         n_windows = self.table.rowCount()
         if n_windows == 0 or not self._station_ids:
             return
@@ -305,7 +395,6 @@ class TimeWindowsDialog(QDialog):
 
         idx = 0
         for row in range(n_windows):
-            # Distribute remainder across first rows
             n = chunk_size + (1 if row < remainder else 0)
             chunk = sorted_ids[idx:idx + n]
             idx += n
@@ -344,17 +433,18 @@ class TimeWindowsDialog(QDialog):
                     pass
         return result
 
-    def get_station_assignments(self) -> dict:
-        """Return dict mapping config_name → [station_ids].
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-        Only meaningful when station_ids were provided at construction.
-        """
+    def get_station_assignments(self) -> dict:
+        """Return dict mapping config_name -> [station_ids]."""
         assignments = {}
         for row in range(self.table.rowCount()):
             name_item = self.table.item(row, 0)
             if not name_item:
                 continue
-            name = name_item.text().strip() or f"Window_{row+1}"
+            name = name_item.text().strip() or f"Window_{row + 1}"
             stations = self._parse_assigned_stations(row)
             if stations:
                 assignments[name] = stations
@@ -365,32 +455,26 @@ class TimeWindowsDialog(QDialog):
         windows = []
         for row in range(self.table.rowCount()):
             name_item = self.table.item(row, 0)
-            start_item = self.table.item(row, 1)
-            end_item = self.table.item(row, 2)
-
-            if not all([name_item, start_item, end_item]):
+            if not name_item:
                 continue
 
             name = name_item.text().strip()
-            start_str = start_item.text().strip()
-            end_str = end_item.text().strip()
+            start_dt = self._get_row_start_dt(row)
+            end_dt = self._get_row_end_dt(row)
 
-            if not start_str or not end_str:
+            if start_dt is None or end_dt is None:
                 continue
 
-            try:
-                start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
-                end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+            start_str = start_dt.strftime(_DT_PARSE)
+            end_str = end_dt.strftime(_DT_PARSE)
 
-                windows.append({
-                    'name': name or f"Window_{row+1}",
-                    'start_local': start_str,
-                    'end_local': end_str,
-                    'start_dt': start_dt,
-                    'end_dt': end_dt,
-                })
-            except ValueError:
-                continue
+            windows.append({
+                'name': name or f"Window_{row + 1}",
+                'start_local': start_str,
+                'end_local': end_str,
+                'start_dt': start_dt,
+                'end_dt': end_dt,
+            })
 
         return windows
 
@@ -409,8 +493,8 @@ class TimeWindowsDialog(QDialog):
                 'name': win['name'],
                 'start_local': win['start_local'],
                 'end_local': win['end_local'],
-                'start_utc': start_utc.strftime("%Y-%m-%d %H:%M:%S"),
-                'end_utc': end_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                'start_utc': start_utc.strftime(_DT_PARSE),
+                'end_utc': end_utc.strftime(_DT_PARSE),
                 'start_dt_utc': start_utc,
                 'end_dt_utc': end_utc,
             })

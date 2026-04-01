@@ -85,7 +85,7 @@ def plot_hvsr_curve(result: HVSRResult,
                    ax: Optional[Axes] = None,
                    show_uncertainty: bool = True,
                    show_peaks: bool = True,
-                   show_median: bool = False,
+                   show_median: bool = True,
                    uncertainty_type: str = 'percentile',
                    title: Optional[str] = None,
                    **kwargs) -> Axes:
@@ -115,35 +115,35 @@ def plot_hvsr_curve(result: HVSRResult,
     data_range = np.ptp(result.mean_hvsr)  # peak-to-peak range
     is_degenerate = (data_range < 1e-10) or (mean_max < 1e-10)
 
-    # Plot mean HVSR
-    line_color = kwargs.pop('color', 'blue')
-    line_width = kwargs.pop('linewidth', 2)
+    line_color = kwargs.pop('color', '#1976D2')
+    line_width = kwargs.pop('linewidth', 1.5)
 
-    ax.semilogx(frequencies, result.mean_hvsr,
-               color=line_color, linewidth=line_width,
-               label='Mean H/V', **kwargs)
-
-    # Plot median if requested
-    if show_median and not is_degenerate:
-        ax.semilogx(frequencies, result.median_hvsr,
-                   color='green', linewidth=1.5, linestyle='--',
-                   label='Median H/V')
-
-    # Plot uncertainty (skip if degenerate)
+    # Plot uncertainty band first (behind curves), clipped at zero
     if show_uncertainty and not is_degenerate:
         if uncertainty_type == 'percentile':
-            lower = result.percentile_16
+            lower = np.maximum(result.percentile_16, 0)
             upper = result.percentile_84
             label = '16th-84th percentile'
         elif uncertainty_type == 'std':
-            lower = result.mean_hvsr - result.std_hvsr
+            lower = np.maximum(result.mean_hvsr - result.std_hvsr, 0)
             upper = result.mean_hvsr + result.std_hvsr
             label = 'Mean ± 1σ'
         else:
             raise ValueError(f"Unknown uncertainty_type: {uncertainty_type}")
 
         ax.fill_between(frequencies, lower, upper,
-                       alpha=0.3, color=line_color, label=label)
+                       alpha=0.2, color='#9C27B0', label=label)
+
+    # Plot median (primary curve) if requested
+    if show_median and not is_degenerate and result.median_hvsr is not None:
+        ax.semilogx(frequencies, result.median_hvsr,
+                   color='#D32F2F', linewidth=2.5, linestyle='-',
+                   label='Median H/V', zorder=101)
+
+    # Plot mean HVSR (secondary curve)
+    ax.semilogx(frequencies, result.mean_hvsr,
+               color=line_color, linewidth=line_width,
+               label='Mean H/V', zorder=100, **kwargs)
     
     # Mark peaks
     if show_peaks and result.peaks:
@@ -185,6 +185,13 @@ def plot_hvsr_curve(result: HVSRResult,
     ax.grid(True, which='both', alpha=0.3, linestyle=':')
     ax.legend(loc='best', fontsize=10)
     ax.set_xlim(frequencies[0], frequencies[-1])
+
+    # Smart Y-limit: clip at zero, cap at robust upper bound
+    if not is_degenerate:
+        ylim_candidates = [np.max(result.mean_hvsr) * 1.5]
+        if result.percentile_84 is not None:
+            ylim_candidates.append(np.max(result.percentile_84) * 1.2)
+        ax.set_ylim(0, max(ylim_candidates))
 
     # Handle degenerate data - set reasonable y-limits
     if is_degenerate:

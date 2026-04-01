@@ -968,7 +968,8 @@ class BatchProcessingWindow(QMainWindow):
             'smoothing_method': 'konno_ohmachi',
             'qc_amplitude': True, 'qc_stalta': True,
             'qc_fdwra': True, 'qc_hvsr_amp': False,
-            'qc_flat_peak': False, 'qc_statistical': True,
+            'qc_flat_peak': False, 'qc_curve_outlier': True,
+            'qc_statistical': True,
             'qc_params': {
                 'amplitude': ALGORITHM_DEFAULTS['amplitude'].copy(),
                 'sta_lta': ALGORITHM_DEFAULTS['sta_lta'].copy(),
@@ -1075,14 +1076,22 @@ class BatchProcessingWindow(QMainWindow):
         self._update_task_status_display()
 
         # Build QC settings for the worker
+        _qc_p = self.hvsr_settings.get('qc_params', {})
         qc_settings = {
             'qc_stalta': self.hvsr_settings.get('qc_stalta', True),
             'qc_amplitude': self.hvsr_settings.get('qc_amplitude', True),
             'qc_fdwra': self.hvsr_settings.get('qc_fdwra', True),
             'qc_statistical': self.hvsr_settings.get('qc_statistical', False),
-            'sta_lta_params': self.hvsr_settings.get('qc_params', {}).get('sta_lta', {}),
-            'fdwra_params': self.hvsr_settings.get('qc_params', {}).get('fdwra', {}),
-            'statistical_params': self.hvsr_settings.get('qc_params', {}).get('statistical_outlier', {}),
+            'qc_hvsr_amp': self.hvsr_settings.get('qc_hvsr_amp', False),
+            'qc_flat_peak': self.hvsr_settings.get('qc_flat_peak', False),
+            'qc_curve_outlier': self.hvsr_settings.get('qc_curve_outlier', True),
+            'sta_lta_params': _qc_p.get('sta_lta', {}),
+            'amplitude_params': _qc_p.get('amplitude', {}),
+            'fdwra_params': _qc_p.get('fdwra', {}),
+            'statistical_params': _qc_p.get('statistical_outlier', {}),
+            'hvsr_amplitude_params': _qc_p.get('hvsr_amplitude', {}),
+            'flat_peak_params': _qc_p.get('flat_peak', {}),
+            'curve_outlier_params': _qc_p.get('curve_outlier', {}),
         }
 
         worker_settings = {

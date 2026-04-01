@@ -20,7 +20,7 @@ try:
         QRadioButton, QPushButton, QButtonGroup, QMainWindow,
         QCheckBox, QLabel, QDoubleSpinBox, QDateTimeEdit, QComboBox
     )
-    from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
+    from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QDate, QTime
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_qt5agg import (
         FigureCanvasQTAgg as FigureCanvas,
@@ -48,6 +48,7 @@ if HAS_PYQT5:
         # Signals
         detached = pyqtSignal()
         attached = pyqtSignal()
+        time_range_applied = pyqtSignal(dict)  # Emitted when user applies time filter
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -62,6 +63,7 @@ if HAS_PYQT5:
             self.time_end = None  # None means end of data
             self.data_start_datetime = None  # Store actual datetime from data
             self.selected_timezone = 'UTC+0 (GMT)'  # Default timezone for input interpretation
+            self._current_tz_offset = 0.0  # Current timezone offset of displayed times (hours)
 
             # Detached window reference
             self.detached_window = None
@@ -184,6 +186,10 @@ if HAS_PYQT5:
             self.datetime_start.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
             self.datetime_start.setCalendarPopup(True)
             self.datetime_start.setEnabled(False)
+            # Force C locale to prevent system-locale date input issues (MM/DD vs DD/MM)
+            from PyQt5.QtCore import QLocale
+            c_locale = QLocale(QLocale.C)
+            self.datetime_start.setLocale(c_locale)
             self.datetime_start.dateTimeChanged.connect(self.on_time_range_changed)
             start_layout.addWidget(self.datetime_start)
             datetime_layout.addLayout(start_layout)
@@ -195,6 +201,7 @@ if HAS_PYQT5:
             self.datetime_end.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
             self.datetime_end.setCalendarPopup(True)
             self.datetime_end.setEnabled(False)
+            self.datetime_end.setLocale(c_locale)
             self.datetime_end.dateTimeChanged.connect(self.on_time_range_changed)
             end_layout.addWidget(self.datetime_end)
             datetime_layout.addLayout(end_layout)
@@ -257,11 +264,22 @@ if HAS_PYQT5:
                 self.time_start = 0.0
                 self.time_end = seismic_data.duration
 
+                # Reset timezone tracking — data loads as UTC
+                self._current_tz_offset = 0.0
+                self.timezone_combo.blockSignals(True)
+                self.timezone_combo.setCurrentText("UTC+0 (GMT)")
+                self.timezone_combo.blockSignals(False)
+                self.selected_timezone = 'UTC+0 (GMT)'
+
                 # Convert to QDateTime for the pickers
                 # IMPORTANT: Use UTC time spec to prevent automatic local timezone conversion
                 # All times are handled as UTC internally, timezone conversion is manual via combo box
-                start_qdatetime = QDateTime(self.data_start_datetime)
-                start_qdatetime.setTimeSpec(Qt.UTC)  # Changed from LocalTime to UTC
+                dt = self.data_start_datetime
+                start_qdatetime = QDateTime(
+                    QDate(dt.year, dt.month, dt.day),
+                    QTime(dt.hour, dt.minute, dt.second)
+                )
+                start_qdatetime.setTimeSpec(Qt.UTC)
 
                 end_qdatetime = start_qdatetime.addMSecs(int(seismic_data.duration * 1000))
 
@@ -282,9 +300,19 @@ if HAS_PYQT5:
                 if time_range:
                     if 'start' in time_range and 'end' in time_range:
                         if isinstance(time_range['start'], (datetime,)):
-                            # If datetime objects provided
-                            self.datetime_start.setDateTime(QDateTime(time_range['start']))
-                            self.datetime_end.setDateTime(QDateTime(time_range['end']))
+                            s = time_range['start']
+                            e = time_range['end']
+                            # Use Qt.UTC to match the widget's timeSpec
+                            self.datetime_start.setDateTime(QDateTime(
+                                QDate(s.year, s.month, s.day),
+                                QTime(s.hour, s.minute, s.second),
+                                Qt.UTC
+                            ))
+                            self.datetime_end.setDateTime(QDateTime(
+                                QDate(e.year, e.month, e.day),
+                                QTime(e.hour, e.minute, e.second),
+                                Qt.UTC
+                            ))
                             # Calculate seconds from start
                             self.time_start = (time_range['start'] - self.data_start_datetime).total_seconds()
                             self.time_end = (time_range['end'] - self.data_start_datetime).total_seconds()
@@ -466,11 +494,32 @@ if HAS_PYQT5:
             self.apply_time_filter()
 
         def on_timezone_changed(self, tz_text):
-            """Handle timezone selection change."""
-            # Extract timezone name for storage
+            """Handle timezone selection change — convert displayed times to new timezone."""
+            old_offset = self._current_tz_offset
+            new_offset = self._parse_timezone_offset(tz_text)
             self.selected_timezone = tz_text
 
-            # Update info label to remind user
+            if self.data_start_datetime is not None:
+                # Convert displayed times: old_local → UTC → new_local
+                # UTC = displayed - old_offset;  new_local = UTC + new_offset
+                from datetime import timedelta
+                delta = timedelta(hours=(new_offset - old_offset))
+
+                self.datetime_start.blockSignals(True)
+                self.datetime_end.blockSignals(True)
+
+                old_start = self.datetime_start.dateTime()
+                old_end = self.datetime_end.dateTime()
+
+                self.datetime_start.setDateTime(old_start.addSecs(int(delta.total_seconds())))
+                self.datetime_end.setDateTime(old_end.addSecs(int(delta.total_seconds())))
+
+                self.datetime_start.blockSignals(False)
+                self.datetime_end.blockSignals(False)
+
+            self._current_tz_offset = new_offset
+
+            # Update info label
             if self.time_filter_enabled:
                 start_str = self.datetime_start.dateTime().toString("yyyy-MM-dd HH:mm:ss")
                 end_str = self.datetime_end.dateTime().toString("yyyy-MM-dd HH:mm:ss")
@@ -516,7 +565,7 @@ if HAS_PYQT5:
                 from datetime import timedelta
 
                 # Get user input times from datetime pickers
-                # Since we set timeSpec to UTC, these are already in UTC
+                # These are in the currently selected timezone (may be UTC or local)
                 start_dt_from_picker = self.datetime_start.dateTime().toPyDateTime()
                 end_dt_from_picker = self.datetime_end.dateTime().toPyDateTime()
 
@@ -590,6 +639,17 @@ if HAS_PYQT5:
                 tz_name = self.selected_timezone.split('(')[0].strip()
                 self.time_filter_info.setText(f"Applied: {start_dt_from_picker.strftime('%H:%M:%S')} to {end_dt_from_picker.strftime('%H:%M:%S')} ({tz_name}) - {duration_str}")
                 self.time_filter_info.setStyleSheet("color: green; font-size: 9px; font-weight: bold;")
+
+                # Emit signal so main_window can update current_time_range for processing
+                # The displayed times are in the selected timezone (local), which is
+                # what processing_worker expects as 'start'/'end' (local times)
+                self.time_range_applied.emit({
+                    'enabled': True,
+                    'start': start_dt_from_picker,
+                    'end': end_dt_from_picker,
+                    'timezone_offset': tz_offset_hours,
+                    'timezone_name': self.selected_timezone,
+                })
 
             # Refresh current view
             if self.radio_e.isChecked():

@@ -202,8 +202,12 @@ if HAS_PYQT5:
 
             # Initialize datetime pickers with data range
             if self.data_start_datetime:
-                from PyQt5.QtCore import QDateTime, Qt
-                start_qdatetime = QDateTime(self.data_start_datetime)
+                from PyQt5.QtCore import QDateTime, QDate, QTime, Qt
+                dt = self.data_start_datetime
+                start_qdatetime = QDateTime(
+                    QDate(dt.year, dt.month, dt.day),
+                    QTime(dt.hour, dt.minute, dt.second)
+                )
                 start_qdatetime.setTimeSpec(Qt.UTC)
 
                 # Block signals during initialization

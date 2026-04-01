@@ -53,6 +53,11 @@ ALGORITHM_DEFAULTS = {
     },
     'flat_peak': {
         'flatness_threshold': 0.15
+    },
+    'curve_outlier': {
+        'threshold': 3.0,
+        'max_iterations': 5,
+        'metric': 'mean'
     }
 }
 
@@ -535,6 +540,63 @@ if HAS_PYQT5:
         
         def _apply_params(self, params: Dict[str, Any]):
             self.threshold_spin.setValue(params.get('flatness_threshold', 0.15))
+
+
+    class CurveOutlierSettingsDialog(BaseAlgorithmDialog):
+        """Settings dialog for Curve Outlier Rejection (iterative median-MAD)."""
+        
+        def __init__(self, parent, current_params: Dict[str, Any]):
+            super().__init__(
+                parent,
+                "Curve Outlier Rejection",
+                "Iterative median-MAD sigma clipping on per-window H/V curves.\n"
+                "Rejects windows whose H/V deviates strongly from the population median.",
+                current_params
+            )
+        
+        def _setup_parameters(self):
+            row = 0
+            
+            self.params_layout.addWidget(QLabel("Threshold (sigma):"), row, 0)
+            self.threshold_spin = QDoubleSpinBox()
+            self.threshold_spin.setRange(1.0, 10.0)
+            self.threshold_spin.setDecimals(1)
+            self.threshold_spin.setSingleStep(0.5)
+            self.threshold_spin.setValue(self._current_params.get('threshold', 3.0))
+            self.params_layout.addWidget(self.threshold_spin, row, 1)
+            row += 1
+            
+            self.params_layout.addWidget(QLabel("Max Iterations:"), row, 0)
+            self.iter_spin = QSpinBox()
+            self.iter_spin.setRange(1, 20)
+            self.iter_spin.setValue(self._current_params.get('max_iterations', 5))
+            self.params_layout.addWidget(self.iter_spin, row, 1)
+            row += 1
+            
+            self.params_layout.addWidget(QLabel("Deviation Metric:"), row, 0)
+            self.metric_combo = QComboBox()
+            self.metric_combo.addItems(['mean', 'max'])
+            idx = self.metric_combo.findText(self._current_params.get('metric', 'mean'))
+            if idx >= 0:
+                self.metric_combo.setCurrentIndex(idx)
+            self.params_layout.addWidget(self.metric_combo, row, 1)
+        
+        def _get_defaults(self) -> Dict[str, Any]:
+            return ALGORITHM_DEFAULTS['curve_outlier'].copy()
+        
+        def _collect_params(self) -> Dict[str, Any]:
+            return {
+                'threshold': self.threshold_spin.value(),
+                'max_iterations': self.iter_spin.value(),
+                'metric': self.metric_combo.currentText()
+            }
+        
+        def _apply_params(self, params: Dict[str, Any]):
+            self.threshold_spin.setValue(params.get('threshold', 3.0))
+            self.iter_spin.setValue(params.get('max_iterations', 5))
+            idx = self.metric_combo.findText(params.get('metric', 'mean'))
+            if idx >= 0:
+                self.metric_combo.setCurrentIndex(idx)
 
 
     class StatisticalOutlierSettingsDialog(BaseAlgorithmDialog):

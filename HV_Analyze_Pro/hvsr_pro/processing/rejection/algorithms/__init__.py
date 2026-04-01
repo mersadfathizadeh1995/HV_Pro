@@ -29,6 +29,9 @@ from hvsr_pro.processing.rejection.algorithms.hvsr_qc import (
     HVSRAmplitudeRejection,
     FlatPeakRejection,
 )
+from hvsr_pro.processing.rejection.algorithms.curve_outlier import (
+    CurveOutlierRejection,
+)
 from hvsr_pro.processing.rejection.algorithms.cox_fdwra import (
     CoxFDWRARejection,
 )
@@ -55,6 +58,7 @@ __all__ = [
     # HVSR-specific
     'HVSRAmplitudeRejection',
     'FlatPeakRejection',
+    'CurveOutlierRejection',
     'CoxFDWRARejection',
 ]
 

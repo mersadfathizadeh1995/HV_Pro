@@ -157,34 +157,31 @@ class ProcessingThread(QThread):
                 # Also check settings-level enable flag
                 qc_disabled = qc_disabled or not self.custom_qc_settings.get('enabled', True)
             
+            eval_result = None
             if qc_disabled:
                 self.progress.emit(50, "Quality control disabled (skipping)...")
-                # Skip QC entirely - all windows remain active
             elif not self.phase1_enabled:
                 self.progress.emit(50, "Phase 1 QC disabled (skipping pre-HVSR rejection)...")
-                # Skip Phase 1 but Phase 2 (FDWRA) may still run after HVSR
             elif self.qc_mode == 'sesame':
-                # Use SESAME preset (industry standard)
                 self.progress.emit(50, "Applying quality control (SESAME standard)...")
                 engine.create_default_pipeline(mode='sesame')
-                engine.evaluate(windows, auto_apply=True)
+                eval_result = engine.evaluate(windows, auto_apply=True)
             elif self.qc_mode == 'custom' and self.custom_qc_settings:
-                # Use custom QC settings (Phase 1 algorithms)
                 self.progress.emit(50, "Applying quality control (custom settings)...")
                 self._apply_custom_qc(engine, self.custom_qc_settings)
-                engine.evaluate(windows, auto_apply=True)
+                eval_result = engine.evaluate(windows, auto_apply=True)
             elif self.qc_mode == 'custom':
-                # Custom mode but no settings provided - skip pre-HVSR QC
                 self.progress.emit(50, "Custom QC mode with no settings (skipping pre-HVSR)...")
-                # Phase 2 (FDWRA) may still run after HVSR if enabled
             else:
-                # Unknown mode - use SESAME as fallback
                 self.progress.emit(50, f"Unknown QC mode '{self.qc_mode}', using SESAME standard...")
                 engine.create_default_pipeline(mode='sesame')
-                engine.evaluate(windows, auto_apply=True)
+                eval_result = engine.evaluate(windows, auto_apply=True)
             
-            # Log QC results
-            self.progress.emit(60, f"QC: {windows.n_active}/{windows.n_windows} windows active ({windows.acceptance_rate*100:.1f}%)")
+            # Log QC results with per-algorithm breakdown
+            qc_msg = f"QC: {windows.n_active}/{windows.n_windows} windows active ({windows.acceptance_rate*100:.1f}%)"
+            if eval_result is not None:
+                qc_msg += f"  [{RejectionEngine.format_qc_summary(eval_result)}]"
+            self.progress.emit(60, qc_msg)
             
             # Check if NO windows passed QC
             if windows.n_active == 0:
@@ -317,24 +314,34 @@ class ProcessingThread(QThread):
                     # No rejection, raw and final are the same
                     result.metadata['raw_window_spectra'] = raw_window_spectra
             
-            # Step 6: Apply post-HVSR algorithms (HVSR amplitude, flat peak)
-            if self.qc_enabled and self.phase2_enabled and self.custom_qc_settings:
-                algos = self.custom_qc_settings.get('algorithms', {})
+            # Step 6: Apply post-HVSR algorithms (HVSR amplitude, flat peak, curve outlier)
+            if self.qc_enabled and self.phase2_enabled:
+                if self.custom_qc_settings:
+                    algos = self.custom_qc_settings.get('algorithms', {})
+                else:
+                    algos = {
+                        'curve_outlier': {'enabled': True, 'params': {
+                            'threshold': 3.0, 'max_iterations': 5, 'metric': 'mean'
+                        }}
+                    }
                 
                 hvsr_amp = algos.get('hvsr_amplitude', {})
                 flat_peak = algos.get('flat_peak', {})
+                curve_outlier = algos.get('curve_outlier', {})
                 
                 has_post_hvsr = (
                     hvsr_amp.get('enabled', False) or 
-                    flat_peak.get('enabled', False)
+                    flat_peak.get('enabled', False) or
+                    curve_outlier.get('enabled', False)
                 )
                 
                 if has_post_hvsr and windows.n_active > 0:
-                    from hvsr_pro.processing.rejection import HVSRAmplitudeRejection, FlatPeakRejection
+                    from hvsr_pro.processing.rejection import (
+                        HVSRAmplitudeRejection, FlatPeakRejection, CurveOutlierRejection
+                    )
                     
                     self.progress.emit(95, "Applying post-HVSR rejection algorithms...")
                     
-                    # Add post-HVSR algorithms to engine
                     engine.post_hvsr_algorithms = []
                     
                     if hvsr_amp.get('enabled', False):
@@ -349,7 +356,16 @@ class ProcessingThread(QThread):
                             FlatPeakRejection(flatness_threshold=params.get('flatness_threshold', 0.15))
                         )
                     
-                    # Run post-HVSR evaluation
+                    if curve_outlier.get('enabled', False):
+                        params = curve_outlier.get('params', {})
+                        engine.post_hvsr_algorithms.append(
+                            CurveOutlierRejection(
+                                threshold=params.get('threshold', 3.0),
+                                max_iterations=params.get('max_iterations', 5),
+                                metric=params.get('metric', 'mean'),
+                            )
+                        )
+                    
                     post_result = engine.evaluate_post_hvsr(windows, result, auto_apply=True)
                     n_post_rejected = post_result.get('n_rejected', 0)
                     

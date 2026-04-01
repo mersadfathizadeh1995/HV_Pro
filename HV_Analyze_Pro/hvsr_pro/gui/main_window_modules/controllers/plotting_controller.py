@@ -151,29 +151,38 @@ if HAS_PYQT5:
             ax.set_ylim(-1, len(windows.windows))
             ax.invert_yaxis()
         
+        @staticmethod
+        def _compute_smart_ylim(hvsr_result):
+            """Compute a robust Y-axis upper limit that ignores extreme outliers."""
+            candidates = [np.max(hvsr_result.mean_hvsr) * 1.5]
+            if hvsr_result.percentile_84 is not None:
+                candidates.append(np.max(hvsr_result.percentile_84) * 1.2)
+            if hvsr_result.std_hvsr is not None:
+                candidates.append(np.max(hvsr_result.mean_hvsr + hvsr_result.std_hvsr) * 1.1)
+            return max(candidates)
+        
         def _plot_hvsr_curves(self, ax, hvsr_result, windows, properties=None):
             """Plot HVSR curves on axis."""
             self.window_lines = {}
             color_palette = self.get_color_palette()
             
-            # Build a mapping from window_index to spectrum for efficient lookup
-            # This handles the case where only active windows have spectra
             spectra_by_index = {}
             for spectrum in hvsr_result.window_spectra:
                 spectra_by_index[spectrum.window_index] = spectrum
             
             # Plot individual windows
             plotted_count = 0
+            n_active = 0
             for i, window in enumerate(windows.windows):
                 window_idx = window.index
+                if window.is_active():
+                    n_active += 1
                 
-                # Look up spectrum by window index, not loop index
                 if window_idx in spectra_by_index:
                     plotted_count += 1
                     window_spectrum = spectra_by_index[window_idx]
                     window_hvsr = window_spectrum.hvsr
                     
-                    # Color based on active state
                     if window.is_active():
                         color = color_palette[i % len(color_palette)]
                         alpha = 0.5
@@ -189,44 +198,47 @@ if HAS_PYQT5:
                     )
                     self.window_lines[window_idx] = line
             
-            # Plot percentile shading (16th-84th) - behind other curves
+            # Percentile shading (16th-84th), clipped at zero
             percentile_fill = None
             if (hasattr(hvsr_result, 'percentile_16') and hvsr_result.percentile_16 is not None
                     and hasattr(hvsr_result, 'percentile_84') and hvsr_result.percentile_84 is not None):
                 percentile_fill = ax.fill_between(
                     hvsr_result.frequencies,
-                    hvsr_result.percentile_16,
+                    np.maximum(hvsr_result.percentile_16, 0),
                     hvsr_result.percentile_84,
                     color='#9C27B0', alpha=0.15, zorder=50,
                     label='16th-84th percentile'
                 )
             
-            # Plot mean
-            mean_line, = ax.plot(
-                hvsr_result.frequencies, hvsr_result.mean_hvsr,
-                'k-', linewidth=2.5, label='Mean', zorder=100
-            )
-            
-            # Plot median
+            # Median (primary curve - thick, solid)
             median_line = None
             if hasattr(hvsr_result, 'median_hvsr') and hvsr_result.median_hvsr is not None:
                 median_line, = ax.plot(
                     hvsr_result.frequencies, hvsr_result.median_hvsr,
-                    color='#1565C0', linewidth=2.0, linestyle='--',
-                    label='Median', zorder=100
+                    color='#D32F2F', linewidth=2.5, linestyle='-',
+                    label='Median H/V', zorder=101
                 )
             
-            # Plot std bands
+            # Mean (secondary curve - thinner)
+            mean_line, = ax.plot(
+                hvsr_result.frequencies, hvsr_result.mean_hvsr,
+                color='#1976D2', linewidth=1.5, linestyle='-',
+                label='Mean H/V', zorder=100
+            )
+            
+            # Std bands (clipped at zero)
             std_plus, = ax.plot(
                 hvsr_result.frequencies,
                 hvsr_result.mean_hvsr + hvsr_result.std_hvsr,
-                'k--', linewidth=1.0, alpha=0.7, label='+1σ', zorder=99
+                color='#FF5722', linestyle='--', linewidth=1.0,
+                alpha=0.7, label='+1σ', zorder=99
             )
             
             std_minus, = ax.plot(
                 hvsr_result.frequencies,
-                hvsr_result.mean_hvsr - hvsr_result.std_hvsr,
-                'k--', linewidth=1.0, alpha=0.7, label='-1σ', zorder=99
+                np.maximum(hvsr_result.mean_hvsr - hvsr_result.std_hvsr, 0),
+                color='#FF5722', linestyle='--', linewidth=1.0,
+                alpha=0.7, label='-1σ', zorder=99
             )
             
             self.stat_lines = {
@@ -239,13 +251,28 @@ if HAS_PYQT5:
             if percentile_fill is not None:
                 self.stat_lines['percentile_fill'] = percentile_fill
             
+            # Smart Y-limit
+            smart_ylim = self._compute_smart_ylim(hvsr_result)
+            ax.set_ylim(0, smart_ylim)
+            
             # Axis settings
             ax.set_xscale('log')
             ax.set_xlabel('Frequency (Hz)')
-            ax.set_ylabel('H/V Ratio')
+            ax.set_ylabel('H/V Spectral Ratio')
             ax.set_title('HVSR Curve')
-            ax.grid(True, which='both', alpha=0.3)
+            ax.grid(True, which='both', linestyle=':', alpha=0.3)
             ax.legend(loc='upper right', fontsize=8)
+            
+            # Acceptance badge
+            n_total = windows.n_windows
+            acceptance_pct = (n_active / n_total * 100) if n_total > 0 else 0
+            ax.text(
+                0.02, 0.98,
+                f'{n_active}/{n_total} windows ({acceptance_pct:.0f}%)',
+                transform=ax.transAxes, fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.7)
+            )
         
         def _plot_statistics(self, ax, windows):
             """Plot window quality statistics."""
@@ -304,27 +331,21 @@ if HAS_PYQT5:
         
         def recalculate_mean_from_visible(self):
             """
-            Recalculate mean HVSR from currently visible windows.
-            
-            Updates the mean and std lines in real-time.
+            Recalculate mean, median, std, and percentiles from currently
+            visible/active windows and update all stat lines in real-time.
             """
             if not self._hvsr_result or not self._windows or not self.stat_lines:
                 return
             
-            # Build index map for spectra
             spectra_by_index = {s.window_index: s for s in self._hvsr_result.window_spectra}
             
-            # Collect visible window HVSR curves
             visible_hvsr_curves = []
-            
             for window in self._windows.windows:
                 window_idx = window.index
                 if window.should_include_in_hvsr() and window_idx in spectra_by_index:
-                    window_spectrum = spectra_by_index[window_idx]
-                    visible_hvsr_curves.append(window_spectrum.hvsr)
+                    visible_hvsr_curves.append(spectra_by_index[window_idx].hvsr)
             
             if not visible_hvsr_curves:
-                # No visible windows - hide mean lines
                 for line in self.stat_lines.values():
                     line.set_visible(False)
                 if self.plot_manager:
@@ -332,20 +353,37 @@ if HAS_PYQT5:
                 self.mean_recalculated.emit(0)
                 return
             
-            # Compute new mean and std
-            visible_hvsr_array = np.array(visible_hvsr_curves)
-            new_mean = np.mean(visible_hvsr_array, axis=0)
-            new_std = np.std(visible_hvsr_array, axis=0)
+            arr = np.array(visible_hvsr_curves)
+            new_mean = np.mean(arr, axis=0)
+            new_std = np.std(arr, axis=0)
+            new_median = np.median(arr, axis=0)
+            new_p16 = np.percentile(arr, 16, axis=0)
+            new_p84 = np.percentile(arr, 84, axis=0)
             
-            # Update lines
             if 'mean' in self.stat_lines:
                 self.stat_lines['mean'].set_ydata(new_mean)
             if 'std_plus' in self.stat_lines:
                 self.stat_lines['std_plus'].set_ydata(new_mean + new_std)
             if 'std_minus' in self.stat_lines:
-                self.stat_lines['std_minus'].set_ydata(new_mean - new_std)
+                self.stat_lines['std_minus'].set_ydata(np.maximum(new_mean - new_std, 0))
+            if 'median' in self.stat_lines:
+                self.stat_lines['median'].set_ydata(new_median)
             
-            # Redraw
+            # Update percentile fill (replace the PolyCollection paths)
+            if 'percentile_fill' in self.stat_lines:
+                fill = self.stat_lines['percentile_fill']
+                ax = fill.axes
+                if ax is not None:
+                    fill.remove()
+                    new_fill = ax.fill_between(
+                        self._hvsr_result.frequencies,
+                        np.maximum(new_p16, 0),
+                        new_p84,
+                        color='#9C27B0', alpha=0.15, zorder=50,
+                        label='16th-84th percentile'
+                    )
+                    self.stat_lines['percentile_fill'] = new_fill
+            
             if self.plot_manager:
                 self.plot_manager.fig.canvas.draw_idle()
             
@@ -422,19 +460,32 @@ if HAS_PYQT5:
                         )
                         self.window_lines[window_idx] = line
             
-            # Plot percentile shading if enabled
+            self.stat_lines = {}
+            
+            # Plot percentile shading if enabled (clipped at zero)
             if properties.show_percentile_shading and result.percentile_16 is not None:
                 perc_color = getattr(properties, 'percentile_color', '#9C27B0')
-                ax_hvsr.fill_between(
+                percentile_fill = ax_hvsr.fill_between(
                     result.frequencies,
-                    result.percentile_16,
+                    np.maximum(result.percentile_16, 0),
                     result.percentile_84,
                     color=perc_color, alpha=0.2, zorder=50,
                     label='16th-84th percentile'
                 )
+                self.stat_lines['percentile_fill'] = percentile_fill
             
-            # Plot mean if enabled
-            self.stat_lines = {}
+            # Plot median if enabled (primary curve)
+            if properties.show_median and result.median_hvsr is not None:
+                median_color = getattr(properties, 'median_color', '#D32F2F')
+                median_lw = getattr(properties, 'median_linewidth', 2.5)
+                median_line, = ax_hvsr.plot(
+                    result.frequencies, result.median_hvsr,
+                    color=median_color, linewidth=median_lw,
+                    label='Median H/V', zorder=101
+                )
+                self.stat_lines['median'] = median_line
+            
+            # Plot mean if enabled (secondary)
             if properties.show_mean:
                 mean_color = getattr(properties, 'mean_color', '#1976D2')
                 mean_line, = ax_hvsr.plot(
@@ -444,7 +495,7 @@ if HAS_PYQT5:
                 )
                 self.stat_lines['mean'] = mean_line
             
-            # Plot std bands if enabled
+            # Plot std bands if enabled (clipped at zero)
             if properties.show_std_bands and result.std_hvsr is not None:
                 std_color = getattr(properties, 'std_color', '#FF5722')
                 std_lw = getattr(properties, 'std_linewidth', 1.5)
@@ -456,27 +507,20 @@ if HAS_PYQT5:
                 )
                 std_minus, = ax_hvsr.plot(
                     result.frequencies,
-                    result.mean_hvsr - result.std_hvsr,
+                    np.maximum(result.mean_hvsr - result.std_hvsr, 0),
                     color=std_color, linestyle='--', linewidth=std_lw,
                     label='-1σ', zorder=99
                 )
                 self.stat_lines['std_plus'] = std_plus
                 self.stat_lines['std_minus'] = std_minus
             
-            # Plot median if enabled
-            if properties.show_median and result.median_hvsr is not None:
-                median_color = getattr(properties, 'median_color', '#D32F2F')
-                median_lw = getattr(properties, 'median_linewidth', 1.5)
-                median_line, = ax_hvsr.plot(
-                    result.frequencies, result.median_hvsr,
-                    color=median_color, linewidth=median_lw,
-                    label='Median', zorder=98
-                )
-                self.stat_lines['median'] = median_line
-            
-            # Set Y-axis limits
-            y_min, y_max = self.plot_manager.calculate_y_limits(properties, result)
-            ax_hvsr.set_ylim(y_min, y_max)
+            # Set Y-axis limits (smart auto or manual)
+            if properties.y_mode == 'auto':
+                smart_ylim = self._compute_smart_ylim(result)
+                ax_hvsr.set_ylim(0, smart_ylim)
+            else:
+                y_min, y_max = self.plot_manager.calculate_y_limits(properties, result)
+                ax_hvsr.set_ylim(max(y_min, 0), y_max)
             
             # Axis settings
             ax_hvsr.set_xscale('log')

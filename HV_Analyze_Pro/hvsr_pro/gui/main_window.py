@@ -131,7 +131,7 @@ class HVSRMainWindow(QMainWindow):
         
         self.init_ui()
         self.connect_signals()
-        
+    
         # Install event filter on menu bar to fix Windows click issues
         self.menuBar().installEventFilter(self)
     
@@ -265,7 +265,7 @@ class HVSRMainWindow(QMainWindow):
         self._create_docks()
         self._connect_dock_signals()
         self._setup_canvas_and_status()
-    
+        
     def _create_tabs(self):
         """Create mode tabs (Data Load, Processing, Azimuthal)."""
         self.mode_tabs = QTabWidget()
@@ -275,6 +275,11 @@ class HVSRMainWindow(QMainWindow):
         self.data_load_tab.load_file_requested.connect(self.load_data_file)
         self.data_load_tab.file_selected.connect(self.on_data_file_selected_for_preview)
         self.data_load_tab.data_cleared.connect(self._on_data_cleared)
+        # Sync preview canvas time range edits to processing time range
+        if hasattr(self.data_load_tab, 'preview_canvas'):
+            self.data_load_tab.preview_canvas.time_range_applied.connect(
+                self._on_preview_time_range_applied
+            )
         self.mode_tabs.addTab(self.data_load_tab, "Data Load")
 
         # === Tab 2: Processing ===
@@ -296,7 +301,7 @@ class HVSRMainWindow(QMainWindow):
 
         # Connect tab change signal
         self.mode_tabs.currentChanged.connect(self.on_tab_changed)
-    
+        
     def _create_docks(self):
         """Create and configure all dock widgets."""
         # Create layers dock
@@ -335,7 +340,7 @@ class HVSRMainWindow(QMainWindow):
         
         # Connect layer dock references
         self.layers_dock.set_references(self.plot_manager, None)  # Windows set later
-    
+        
     def _connect_dock_signals(self):
         """Connect signals from all dock widgets."""
         # Azimuthal properties dock signals
@@ -352,7 +357,7 @@ class HVSRMainWindow(QMainWindow):
         # Properties dock signals
         self.properties_dock.properties_changed.connect(self.on_properties_changed)
         self.properties_dock.visualization_mode_changed.connect(self.on_view_mode_changed)
-    
+
     def _setup_canvas_and_status(self):
         """Setup canvas, status bar, and menu bar."""
         # Interactive canvas (old - keep for compatibility)
@@ -987,8 +992,8 @@ class HVSRMainWindow(QMainWindow):
         
         # Store the loaded data
         self.data = load_result.data
-        
-        # Store for processing
+
+                # Store for processing
         if load_result.mode == 'single':
             self.current_file = load_result.files[0] if load_result.files else None
         elif load_result.mode == 'multi_type1':
@@ -1026,27 +1031,47 @@ class HVSRMainWindow(QMainWindow):
             # Enable time filter checkbox
             preview_canvas.time_filter_checkbox.setChecked(True)
             
-            # Set timezone in combo box
-            tz_name = time_range.get('timezone_name', 'UTC+0 (GMT)')
-            tz_index = preview_canvas.timezone_combo.findText(tz_name, Qt.MatchContains)
-            if tz_index >= 0:
-                preview_canvas.timezone_combo.setCurrentIndex(tz_index)
-            
             # Set datetime pickers
-            from PyQt5.QtCore import QDateTime
+            from PyQt5.QtCore import QDateTime, QDate, QTime, Qt as QtConst
             
             start_dt = time_range['start']
             end_dt = time_range['end']
+            tz_name = time_range.get('timezone_name', 'UTC+0 (GMT)')
+            tz_offset = time_range.get('timezone_offset', 0.0)
             
-            # Block signals to prevent auto-updates during setting
+            # Block ALL signals to prevent cascade effects during setup
             preview_canvas.datetime_start.blockSignals(True)
             preview_canvas.datetime_end.blockSignals(True)
+            preview_canvas.timezone_combo.blockSignals(True)
             
-            preview_canvas.datetime_start.setDateTime(QDateTime(start_dt))
-            preview_canvas.datetime_end.setDateTime(QDateTime(end_dt))
+            # Set timezone combo and update internal offset tracker
+            tz_index = preview_canvas.timezone_combo.findText(tz_name, Qt.MatchContains)
+            if tz_index >= 0:
+                preview_canvas.timezone_combo.setCurrentIndex(tz_index)
+            preview_canvas.selected_timezone = tz_name
+            preview_canvas._current_tz_offset = tz_offset
             
+            # CRITICAL: Create QDateTime with Qt.UTC timeSpec to match the
+            # widget's timeSpec. Without this, Qt auto-converts LocalTime→UTC
+            # which corrupts the displayed datetime.
+            # The start_dt/end_dt are already in the user's local timezone.
+            start_qdt = QDateTime(
+                QDate(start_dt.year, start_dt.month, start_dt.day),
+                QTime(start_dt.hour, start_dt.minute, start_dt.second),
+                QtConst.UTC
+            )
+            end_qdt = QDateTime(
+                QDate(end_dt.year, end_dt.month, end_dt.day),
+                QTime(end_dt.hour, end_dt.minute, end_dt.second),
+                QtConst.UTC
+            )
+            preview_canvas.datetime_start.setDateTime(start_qdt)
+            preview_canvas.datetime_end.setDateTime(end_qdt)
+            
+            # Unblock all signals
             preview_canvas.datetime_start.blockSignals(False)
             preview_canvas.datetime_end.blockSignals(False)
+            preview_canvas.timezone_combo.blockSignals(False)
             
             # Apply the time filter
             preview_canvas.apply_time_filter()
@@ -1055,6 +1080,10 @@ class HVSRMainWindow(QMainWindow):
             
         except Exception as e:
             print(f"Warning: Could not apply time range to preview: {e}")
+    
+    def _on_preview_time_range_applied(self, time_range: dict):
+        """Update current_time_range when user edits time range in preview canvas."""
+        self.current_time_range = time_range
     
     def _on_process_requested(self, settings):
         """
@@ -1173,6 +1202,9 @@ class HVSRMainWindow(QMainWindow):
                 'statistical_outlier': _get_algo('statistical_outlier', {'method': 'iqr', 'threshold': 2.0}),
                 'hvsr_amplitude': _get_algo('hvsr_amplitude', {'min_amplitude': 1.0}),
                 'flat_peak': _get_algo('flat_peak', {'flatness_threshold': 0.15}),
+                'curve_outlier': _get_algo('curve_outlier', {
+                    'threshold': 3.0, 'max_iterations': 5, 'metric': 'mean'
+                }),
                 'cox_fdwra': _get_algo('cox_fdwra', {'n': 2.0, 'max_iterations': 50}),
                 'fdwra': _get_algo('fdwra', {'n': 2.0, 'max_iterations': 50}),
             }
@@ -1390,10 +1422,10 @@ class HVSRMainWindow(QMainWindow):
         result = self.export_ctrl.export_results()
         
         if result.success:
-            QMessageBox.information(
-                self, "Export Complete",
+                QMessageBox.information(
+                    self, "Export Complete",
                 f"Results exported to:\n{result.file_path}\n\n"
-                f"Files created:\n" +
+                    f"Files created:\n" +
                 "\n".join([f"• {Path(f).name}" for f in result.created_files.values()])
             )
         elif result.error_message:
@@ -1571,8 +1603,8 @@ class HVSRMainWindow(QMainWindow):
         if not result.success:
             if result.error_message:
                 QMessageBox.critical(self, "Load Failed", result.error_message)
-            return
-        
+                return
+            
         # Apply settings to GUI via controller
         self.session_ctrl.apply_session_state(self, result)
         

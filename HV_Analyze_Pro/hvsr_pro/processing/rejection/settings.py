@@ -107,6 +107,17 @@ class FlatPeakSettings(AlgorithmSettings):
 
 
 @dataclass
+class CurveOutlierSettings(AlgorithmSettings):
+    """Settings for curve outlier rejection (post-HVSR, iterative median-MAD)."""
+    enabled: bool = True
+    params: Dict[str, Any] = field(default_factory=lambda: {
+        'threshold': 3.0,
+        'max_iterations': 5,
+        'metric': 'mean',
+    })
+
+
+@dataclass
 class CoxFDWRASettings:
     """
     Settings for Cox et al. (2020) FDWRA algorithm.
@@ -225,6 +236,7 @@ class QCSettings:
     # Post-HVSR algorithms (frequency-domain)
     hvsr_amplitude: HVSRAmplitudeSettings = field(default_factory=HVSRAmplitudeSettings)
     flat_peak: FlatPeakSettings = field(default_factory=FlatPeakSettings)
+    curve_outlier: CurveOutlierSettings = field(default_factory=CurveOutlierSettings)
     
     # Cox FDWRA
     cox_fdwra: CoxFDWRASettings = field(default_factory=CoxFDWRASettings)
@@ -248,6 +260,7 @@ class QCSettings:
                 'statistical_outlier': self.statistical_outlier.to_dict(),
                 'hvsr_amplitude': self.hvsr_amplitude.to_dict(),
                 'flat_peak': self.flat_peak.to_dict(),
+                'curve_outlier': self.curve_outlier.to_dict(),
                 'isolation_forest': self.isolation_forest.to_dict(),
             },
             'cox_fdwra': self.cox_fdwra.to_dict()
@@ -281,6 +294,8 @@ class QCSettings:
             settings.hvsr_amplitude = HVSRAmplitudeSettings.from_dict(algos['hvsr_amplitude'])
         if 'flat_peak' in algos:
             settings.flat_peak = FlatPeakSettings.from_dict(algos['flat_peak'])
+        if 'curve_outlier' in algos:
+            settings.curve_outlier = CurveOutlierSettings.from_dict(algos['curve_outlier'])
         if 'isolation_forest' in algos:
             settings.isolation_forest = IsolationForestSettings.from_dict(algos['isolation_forest'])
         
@@ -319,6 +334,7 @@ class QCSettings:
         self.statistical_outlier = StatisticalOutlierSettings()
         self.hvsr_amplitude = HVSRAmplitudeSettings()
         self.flat_peak = FlatPeakSettings()
+        self.curve_outlier = CurveOutlierSettings()
         self.cox_fdwra = CoxFDWRASettings()
         self.isolation_forest = IsolationForestSettings()
         
@@ -366,6 +382,8 @@ class QCSettings:
             enabled.append('hvsr_amplitude')
         if self.flat_peak.enabled:
             enabled.append('flat_peak')
+        if self.curve_outlier.enabled:
+            enabled.append('curve_outlier')
         return enabled
     
     @property
@@ -387,6 +405,7 @@ class QCSettings:
             'statistical_outlier': self.statistical_outlier.to_dict(),
             'hvsr_amplitude': self.hvsr_amplitude.to_dict(),
             'flat_peak': self.flat_peak.to_dict(),
+            'curve_outlier': self.curve_outlier.to_dict(),
             'cox_fdwra': self.cox_fdwra.to_dict(),
             'isolation_forest': self.isolation_forest.to_dict(),
         }

@@ -368,6 +368,21 @@ class HVSRSettingsDialog(QDialog):
         self.statistical_settings_btn.clicked.connect(self._open_statistical_settings)
         qc_layout.addWidget(self.statistical_settings_btn, 2, 3)
 
+        # Row 3: Curve Outlier
+        self.qc_curve_outlier = QCheckBox("Curve Outlier Rejection")
+        self.qc_curve_outlier.setChecked(True)
+        self.qc_curve_outlier.setToolTip(
+            "Iterative median-MAD sigma clipping on H/V curves.\n"
+            "Rejects windows whose H/V deviates strongly from the median."
+        )
+        qc_layout.addWidget(self.qc_curve_outlier, 3, 0)
+
+        self.curve_outlier_settings_btn = QPushButton("...")
+        self.curve_outlier_settings_btn.setMaximumWidth(30)
+        self.curve_outlier_settings_btn.setToolTip("Configure curve outlier settings")
+        self.curve_outlier_settings_btn.clicked.connect(self._open_curve_outlier_settings)
+        qc_layout.addWidget(self.curve_outlier_settings_btn, 3, 1)
+
         layout.addWidget(qc_group)
 
         # Initialize QC parameters storage
@@ -446,6 +461,7 @@ class HVSRSettingsDialog(QDialog):
         self.qc_fdwra.setChecked(True)
         self.qc_hvsr_amp.setChecked(False)
         self.qc_flat_peak.setChecked(False)
+        self.qc_curve_outlier.setChecked(True)
         self.qc_statistical.setChecked(True)
         self._init_qc_params()
 
@@ -492,6 +508,7 @@ class HVSRSettingsDialog(QDialog):
             'qc_fdwra': self.qc_fdwra.isChecked(),
             'qc_hvsr_amp': self.qc_hvsr_amp.isChecked(),
             'qc_flat_peak': self.qc_flat_peak.isChecked(),
+            'qc_curve_outlier': self.qc_curve_outlier.isChecked(),
             'qc_statistical': self.qc_statistical.isChecked(),
             'qc_params': self._qc_params.copy(),
             'use_per_array': self.per_array_check.isChecked(),
@@ -580,6 +597,8 @@ class HVSRSettingsDialog(QDialog):
             self.qc_hvsr_amp.setChecked(settings['qc_hvsr_amp'])
         if 'qc_flat_peak' in settings:
             self.qc_flat_peak.setChecked(settings['qc_flat_peak'])
+        if 'qc_curve_outlier' in settings:
+            self.qc_curve_outlier.setChecked(settings['qc_curve_outlier'])
         if 'qc_statistical' in settings:
             self.qc_statistical.setChecked(settings['qc_statistical'])
         if 'qc_params' in settings:
@@ -690,6 +709,15 @@ class HVSRSettingsDialog(QDialog):
             result = dialog.get_result()
             if result:
                 self._qc_params['statistical_outlier'] = result
+
+    def _open_curve_outlier_settings(self):
+        """Open curve outlier settings dialog."""
+        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import CurveOutlierSettingsDialog
+        dialog = CurveOutlierSettingsDialog(self, self._qc_params.get('curve_outlier', {}))
+        if dialog.exec_() == QDialog.Accepted:
+            result = dialog.get_result()
+            if result:
+                self._qc_params['curve_outlier'] = result
 
 
 class ProcessLengthDialog(QDialog):

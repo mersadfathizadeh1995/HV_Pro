@@ -55,6 +55,11 @@ ALGORITHM_DEFAULTS = {
     },
     'flat_peak': {
         'flatness_threshold': 0.15
+    },
+    'curve_outlier': {
+        'threshold': 3.0,
+        'max_iterations': 5,
+        'metric': 'mean'
     }
 }
 
@@ -655,6 +660,80 @@ if HAS_PYQT5:
             self.threshold_spin.setValue(params.get('flatness_threshold', 0.15))
 
 
+    class CurveOutlierSettingsDialog(BaseAlgorithmDialog):
+        """Settings dialog for Curve Outlier Rejection algorithm."""
+        
+        def __init__(self, parent, current_params: Dict[str, Any]):
+            super().__init__(
+                parent,
+                "Curve Outlier Rejection",
+                "Iterative median-MAD sigma clipping on per-window H/V curves.\n"
+                "Rejects windows whose H/V curve deviates strongly from the\n"
+                "population median. Robust to outliers because it uses median\n"
+                "and MAD (Median Absolute Deviation) rather than mean/std.",
+                current_params
+            )
+        
+        def _setup_parameters(self):
+            row = 0
+            
+            self.params_layout.addWidget(QLabel("Threshold (sigma):"), row, 0)
+            self.threshold_spin = QDoubleSpinBox()
+            self.threshold_spin.setRange(1.0, 10.0)
+            self.threshold_spin.setDecimals(1)
+            self.threshold_spin.setSingleStep(0.5)
+            self.threshold_spin.setValue(self._current_params.get('threshold', 3.0))
+            self.threshold_spin.setToolTip(
+                "Number of scaled-MAD units beyond which a window is rejected.\n"
+                "Lower = stricter (rejects more windows).\n"
+                "Default: 3.0"
+            )
+            self.params_layout.addWidget(self.threshold_spin, row, 1)
+            row += 1
+            
+            self.params_layout.addWidget(QLabel("Max Iterations:"), row, 0)
+            self.iter_spin = QSpinBox()
+            self.iter_spin.setRange(1, 20)
+            self.iter_spin.setValue(self._current_params.get('max_iterations', 5))
+            self.iter_spin.setToolTip(
+                "Maximum number of sigma-clipping iterations.\n"
+                "Usually converges in 2-3 iterations.\n"
+                "Default: 5"
+            )
+            self.params_layout.addWidget(self.iter_spin, row, 1)
+            row += 1
+            
+            self.params_layout.addWidget(QLabel("Deviation Metric:"), row, 0)
+            self.metric_combo = QComboBox()
+            self.metric_combo.addItems(['mean', 'max'])
+            idx = self.metric_combo.findText(self._current_params.get('metric', 'mean'))
+            if idx >= 0:
+                self.metric_combo.setCurrentIndex(idx)
+            self.metric_combo.setToolTip(
+                "How per-frequency deviations are aggregated into a single score.\n"
+                "'mean': average deviation (more tolerant)\n"
+                "'max': worst-case deviation (stricter)"
+            )
+            self.params_layout.addWidget(self.metric_combo, row, 1)
+        
+        def _get_defaults(self) -> Dict[str, Any]:
+            return ALGORITHM_DEFAULTS['curve_outlier'].copy()
+        
+        def _collect_params(self) -> Dict[str, Any]:
+            return {
+                'threshold': self.threshold_spin.value(),
+                'max_iterations': self.iter_spin.value(),
+                'metric': self.metric_combo.currentText()
+            }
+        
+        def _apply_params(self, params: Dict[str, Any]):
+            self.threshold_spin.setValue(params.get('threshold', 3.0))
+            self.iter_spin.setValue(params.get('max_iterations', 5))
+            idx = self.metric_combo.findText(params.get('metric', 'mean'))
+            if idx >= 0:
+                self.metric_combo.setCurrentIndex(idx)
+
+
     # Dialog mapping
     DIALOG_CLASSES = {
         'amplitude': AmplitudeSettingsDialog,
@@ -663,7 +742,8 @@ if HAS_PYQT5:
         'statistical_outlier': StatisticalOutlierSettingsDialog,
         'fdwra': FDWRASettingsDialog,
         'hvsr_amplitude': HVSRAmplitudeSettingsDialog,
-        'flat_peak': FlatPeakSettingsDialog
+        'flat_peak': FlatPeakSettingsDialog,
+        'curve_outlier': CurveOutlierSettingsDialog
     }
 
 

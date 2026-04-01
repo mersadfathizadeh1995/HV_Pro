@@ -183,6 +183,12 @@ if HAS_PYQT5:
                         'enabled': qc.custom_algorithms.get('flat_peak', {}).get('enabled', False),
                         'params': {'flatness_threshold': 0.15}
                     },
+                    'curve_outlier': {
+                        'enabled': qc.custom_algorithms.get('curve_outlier', {}).get('enabled', True),
+                        'params': qc.custom_algorithms.get('curve_outlier', {}).get('params', {
+                            'threshold': 3.0, 'max_iterations': 5, 'metric': 'mean'
+                        })
+                    },
                     'cox_fdwra': {
                         'enabled': qc.custom_algorithms.get('cox_fdwra', {}).get('enabled', False),
                         'params': {'n': 2.0, 'max_iterations': 20}

@@ -228,7 +228,14 @@ class BatchHVSRWorker(QThread):
 
         if qc.get('qc_amplitude', True):
             from hvsr_pro.processing.rejection import AmplitudeRejection
-            engine.add_algorithm(AmplitudeRejection())
+            ap = qc.get('amplitude_params', {})
+            engine.add_algorithm(AmplitudeRejection(
+                max_amplitude=ap.get('max_amplitude'),
+                min_rms=ap.get('min_rms', 1e-10),
+                clipping_threshold=ap.get('clipping_threshold', 0.95),
+                clipping_max_percent=ap.get('clipping_max_percent', 0.01),
+                preset=ap.get('preset'),
+            ))
 
         if qc.get('qc_statistical', False):
             from hvsr_pro.processing.rejection import StatisticalOutlierRejection
@@ -236,12 +243,15 @@ class BatchHVSRWorker(QThread):
             engine.add_algorithm(StatisticalOutlierRejection(
                 method=p.get('method', 'iqr'),
                 threshold=p.get('threshold', 2.0),
+                metric=p.get('metric', 'max_deviation'),
             ))
 
         if engine.algorithms:
-            engine.evaluate(windows, auto_apply=True)
+            eval_result = engine.evaluate(windows, auto_apply=True)
             self.log_line.emit(
                 f"  QC: {windows.n_active}/{windows.n_windows} windows passed")
+            self.log_line.emit(
+                f"  {RejectionEngine.format_qc_summary(eval_result)}")
 
         self.task_progress.emit(task.label or task.station_id, 50)
         if windows.n_active == 0:
@@ -292,6 +302,58 @@ class BatchHVSRWorker(QThread):
             if n_rej > 0:
                 self.log_line.emit(
                     f"  FDWRA: {n_rej} windows rejected, recomputing...")
+                if windows.n_active > 0:
+                    result = processor.process(
+                        windows, detect_peaks_flag=True,
+                        save_window_spectra=True)
+
+        # 6. Post-HVSR rejection (HVSR amplitude, flat peak, curve outlier)
+        has_post_hvsr = (
+            qc.get('qc_hvsr_amp', False) or
+            qc.get('qc_flat_peak', False) or
+            qc.get('qc_curve_outlier', True)
+        )
+        if has_post_hvsr and windows.n_active > 0:
+            from hvsr_pro.processing.rejection import (
+                HVSRAmplitudeRejection, FlatPeakRejection,
+                CurveOutlierRejection,
+            )
+            engine.post_hvsr_algorithms = []
+
+            if qc.get('qc_hvsr_amp', False):
+                hp = qc.get('hvsr_amplitude_params', {})
+                engine.post_hvsr_algorithms.append(
+                    HVSRAmplitudeRejection(
+                        min_amplitude=hp.get('min_amplitude', 1.0),
+                        max_amplitude=hp.get('max_amplitude', 15.0),
+                    )
+                )
+
+            if qc.get('qc_flat_peak', False):
+                fp = qc.get('flat_peak_params', {})
+                engine.post_hvsr_algorithms.append(
+                    FlatPeakRejection(
+                        flatness_threshold=fp.get('flatness_threshold', 0.15),
+                    )
+                )
+
+            if qc.get('qc_curve_outlier', True):
+                cp = qc.get('curve_outlier_params', {})
+                engine.post_hvsr_algorithms.append(
+                    CurveOutlierRejection(
+                        threshold=cp.get('threshold', 3.0),
+                        max_iterations=cp.get('max_iterations', 5),
+                        metric=cp.get('metric', 'mean'),
+                    )
+                )
+
+            post_result = engine.evaluate_post_hvsr(
+                windows, result, auto_apply=True,
+            )
+            n_post_rej = post_result.get('n_rejected', 0)
+            if n_post_rej > 0:
+                self.log_line.emit(
+                    f"  Post-HVSR QC: {n_post_rej} windows rejected, recomputing...")
                 if windows.n_active > 0:
                     result = processor.process(
                         windows, detect_peaks_flag=True,

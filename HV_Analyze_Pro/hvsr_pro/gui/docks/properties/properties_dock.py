@@ -52,20 +52,20 @@ class PlotProperties:
     # Curve visibility
     show_mean: bool = True
     show_windows: bool = True
-    show_std_bands: bool = True
-    show_percentile_shading: bool = False
-    show_median: bool = False
+    show_std_bands: bool = False
+    show_percentile_shading: bool = True
+    show_median: bool = True
 
     # Annotations and stats
     show_acceptance_badge: bool = True
     show_peak_labels: bool = True
     peak_label_style: str = "full"  # full, freq_only, amp_only, minimal
     show_legend: bool = True
-    show_grid: bool = False
+    show_grid: bool = True
 
     # Aesthetics
     background_color: str = "white"  # white, gray, light_gray
-    mean_linewidth: float = 2.0
+    mean_linewidth: float = 1.5
     window_alpha: float = 0.5
     
     # Line colors
@@ -76,7 +76,7 @@ class PlotProperties:
     peak_marker_color: str = "#4CAF50"  # Green
     
     # Line widths
-    median_linewidth: float = 1.5
+    median_linewidth: float = 2.5
     std_linewidth: float = 1.5
     
     def to_dict(self) -> Dict[str, Any]:
@@ -101,20 +101,21 @@ class PlotProperties:
     
     def _get_publication_settings(self):
         """Apply publication-quality preset."""
-        self.y_mode = "mean_std"
+        self.y_mode = "auto"
         self.y_std_multiplier = 2.0
         self.show_mean = True
         self.show_windows = False
         self.show_std_bands = False
         self.show_percentile_shading = True
-        self.show_median = False
+        self.show_median = True
         self.show_acceptance_badge = True
         self.show_peak_labels = True
         self.peak_label_style = "full"
         self.show_legend = True
         self.show_grid = False
         self.background_color = "white"
-        self.mean_linewidth = 2.5
+        self.mean_linewidth = 1.5
+        self.median_linewidth = 2.5
         self.window_alpha = 0.5
     
     def _get_analysis_settings(self):
@@ -122,34 +123,36 @@ class PlotProperties:
         self.y_mode = "auto"
         self.show_mean = True
         self.show_windows = True
-        self.show_std_bands = True
-        self.show_percentile_shading = False
-        self.show_median = False
-        self.show_acceptance_badge = False
+        self.show_std_bands = False
+        self.show_percentile_shading = True
+        self.show_median = True
+        self.show_acceptance_badge = True
         self.show_peak_labels = True
         self.peak_label_style = "full"
         self.show_legend = True
-        self.show_grid = False
+        self.show_grid = True
         self.background_color = "white"
-        self.mean_linewidth = 2.0
+        self.mean_linewidth = 1.5
+        self.median_linewidth = 2.5
         self.window_alpha = 0.5
     
     def _get_minimal_settings(self):
         """Apply minimal preset."""
-        self.y_mode = "mean_std"
+        self.y_mode = "auto"
         self.y_std_multiplier = 2.0
-        self.show_mean = True
+        self.show_mean = False
         self.show_windows = False
         self.show_std_bands = False
-        self.show_percentile_shading = False
-        self.show_median = False
+        self.show_percentile_shading = True
+        self.show_median = True
         self.show_acceptance_badge = False
         self.show_peak_labels = True
         self.peak_label_style = "freq_only"
         self.show_legend = False
-        self.show_grid = False
+        self.show_grid = True
         self.background_color = "white"
-        self.mean_linewidth = 2.0
+        self.mean_linewidth = 1.5
+        self.median_linewidth = 2.5
         self.window_alpha = 0.5
 
 

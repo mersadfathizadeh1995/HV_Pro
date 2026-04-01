@@ -26,7 +26,13 @@ SESAME_CONFIG = {
             'max_ratio': 2.5
         }},
     ],
-    'post_hvsr': [],
+    'post_hvsr': [
+        {'type': 'CurveOutlierRejection', 'params': {
+            'threshold': 3.0,
+            'max_iterations': 5,
+            'metric': 'mean',
+        }},
+    ],
     'use_cox_fdwra': True,
     'fdwra_params': {
         'n': 2.0,
@@ -103,6 +109,7 @@ def create_preset_pipeline(preset: str, engine=None):
         FrequencyDomainRejection,
         HVSRAmplitudeRejection,
         FlatPeakRejection,
+        CurveOutlierRejection,
     )
     
     if preset not in PRESET_CONFIGS:
@@ -125,6 +132,7 @@ def create_preset_pipeline(preset: str, engine=None):
         'FrequencyDomainRejection': FrequencyDomainRejection,
         'HVSRAmplitudeRejection': HVSRAmplitudeRejection,
         'FlatPeakRejection': FlatPeakRejection,
+        'CurveOutlierRejection': CurveOutlierRejection,
     }
     
     # Add pre-HVSR algorithms
