@@ -260,6 +260,56 @@ def export_results(
     return f"Results saved to {output_path}"
 
 
+# ===================================================================
+# Plot styling
+# ===================================================================
+
+@mcp.tool()
+def configure_plot_style(
+    dpi: Optional[int] = None,
+    title_fontsize: Optional[int] = None,
+    axis_fontsize: Optional[int] = None,
+    legend_fontsize: Optional[int] = None,
+    show_median: Optional[bool] = None,
+    show_mean: Optional[bool] = None,
+    show_uncertainty: Optional[bool] = None,
+    uncertainty_type: Optional[str] = None,
+    show_rejected_windows: Optional[bool] = None,
+    rejected_color: Optional[str] = None,
+    rejected_alpha: Optional[float] = None,
+    rejected_linewidth: Optional[float] = None,
+    figure_format: Optional[str] = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    """Configure plot appearance for exported figures.
+
+    Only the parameters explicitly provided are changed; the rest keep
+    their current values.
+
+    Returns the updated plot style configuration.
+    """
+    analysis = _get_analysis(session_id)
+    style = analysis.config.plot_style
+    updates = {
+        k: v for k, v in {
+            "dpi": dpi, "title_fontsize": title_fontsize,
+            "axis_fontsize": axis_fontsize, "legend_fontsize": legend_fontsize,
+            "show_median": show_median, "show_mean": show_mean,
+            "show_uncertainty": show_uncertainty, "uncertainty_type": uncertainty_type,
+            "show_rejected_windows": show_rejected_windows,
+            "rejected_color": rejected_color, "rejected_alpha": rejected_alpha,
+            "rejected_linewidth": rejected_linewidth, "figure_format": figure_format,
+        }.items() if v is not None
+    }
+    for k, v in updates.items():
+        setattr(style, k, v)
+    return style.to_dict()
+
+
+# ===================================================================
+# Plot export
+# ===================================================================
+
 @mcp.tool()
 def export_plot(
     output_path: str,

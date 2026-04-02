@@ -92,6 +92,7 @@ def save_plot(
     show_median: bool = True,
     show_mean: bool = False,
     data=None,    # SeismicData | None — needed for timeseries/spectrogram
+    style=None,   # PlotStyleConfig | None
 ) -> None:
     """Render and save a single plot to *output_path*.
     
@@ -108,6 +109,12 @@ def save_plot(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from hvsr_pro.visualization import HVSRPlotter
+
+    # Merge explicit args with PlotStyleConfig (explicit args win)
+    if style is not None:
+        dpi = dpi if dpi != 150 else style.dpi
+        show_median = show_median if show_median != True else style.show_median
+        show_mean = show_mean if show_mean != False else style.show_mean
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +179,16 @@ def generate_report(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    # Read plot style from config
+    style = getattr(config, "plot_style", None)
+    if style is not None:
+        dpi = style.dpi
+        show_median = style.show_median
+        show_mean = style.show_mean
+    else:
+        show_median = True
+        show_mean = False
+
     od = Path(output_dir)
     od.mkdir(parents=True, exist_ok=True)
     files: Dict[str, str] = {}
@@ -225,7 +242,7 @@ def generate_report(
         files[name.replace(".png", "")] = str(p)
 
     try:
-        _save(plotter.plot_result(r, show_peaks=True, show_median=True, show_mean=False),
+        _save(plotter.plot_result(r, show_peaks=True, show_median=show_median, show_mean=show_mean),
               "hvsr_curve.png")
     except Exception as exc:
         logger.warning("hvsr_curve plot failed: %s", exc)

@@ -483,7 +483,7 @@ class HVSRAnalysis:
         save_plot(self._result, self._windows, output_path,
                   plot_type=plot_type, dpi=dpi,
                   show_median=show_median, show_mean=show_mean,
-                  data=self._data)
+                  data=self._data, style=self._config.plot_style)
 
     def generate_report(
         self, output_dir: Union[str, Path],

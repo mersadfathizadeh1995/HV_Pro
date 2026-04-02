@@ -631,6 +631,54 @@ class QCConfig:
 
 
 # ---------------------------------------------------------------------------
+# Plot styling
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PlotStyleConfig:
+    """Appearance options for exported plots.
+
+    Can be set independently of analysis parameters and passed to
+    ``save_plot`` / ``generate_report`` via the API or MCP tools.
+    """
+
+    dpi: int = 150
+    title_fontsize: int = 12
+    axis_fontsize: int = 11
+    legend_fontsize: int = 10
+    show_median: bool = True
+    show_mean: bool = False
+    show_uncertainty: bool = True
+    uncertainty_type: str = "percentile"   # percentile | std
+    show_rejected_windows: bool = False
+    rejected_color: str = "#808080"
+    rejected_alpha: float = 0.3
+    rejected_linewidth: float = 0.5
+    figure_format: str = "png"             # png | pdf | svg
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "dpi": self.dpi,
+            "title_fontsize": self.title_fontsize,
+            "axis_fontsize": self.axis_fontsize,
+            "legend_fontsize": self.legend_fontsize,
+            "show_median": self.show_median,
+            "show_mean": self.show_mean,
+            "show_uncertainty": self.show_uncertainty,
+            "uncertainty_type": self.uncertainty_type,
+            "show_rejected_windows": self.show_rejected_windows,
+            "rejected_color": self.rejected_color,
+            "rejected_alpha": self.rejected_alpha,
+            "rejected_linewidth": self.rejected_linewidth,
+            "figure_format": self.figure_format,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlotStyleConfig":
+        return cls(**{k: data[k] for k in data if k in cls.__dataclass_fields__})
+
+
+# ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
 
@@ -645,6 +693,7 @@ class HVSRAnalysisConfig:
     data_load: DataLoadConfig = field(default_factory=DataLoadConfig)
     time_range: TimeRangeConfig = field(default_factory=TimeRangeConfig)
     qc: QCConfig = field(default_factory=QCConfig)
+    plot_style: PlotStyleConfig = field(default_factory=PlotStyleConfig)
 
     # ------------------------------------------------------------------
     # Serialization
@@ -656,6 +705,7 @@ class HVSRAnalysisConfig:
             "data_load": self.data_load.to_dict(),
             "time_range": self.time_range.to_dict(),
             "qc": self.qc.to_dict(),
+            "plot_style": self.plot_style.to_dict(),
         }
 
     @classmethod
@@ -665,6 +715,7 @@ class HVSRAnalysisConfig:
             data_load=DataLoadConfig.from_dict(data.get("data_load", {})),
             time_range=TimeRangeConfig.from_dict(data.get("time_range", {})),
             qc=QCConfig.from_dict(data.get("qc", {})),
+            plot_style=PlotStyleConfig.from_dict(data.get("plot_style", {})),
         )
 
     def save(self, path: Union[str, Path]) -> None:
