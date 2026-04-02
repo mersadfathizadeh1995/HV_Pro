@@ -272,7 +272,10 @@ def export_plot(
     Args:
         output_path: Absolute path for the image file.
         plot_type: ``hvsr``, ``windows``, ``quality``, ``statistics``,
-            or ``dashboard``.
+            ``dashboard``, ``mean_vs_median``, ``quality_histogram``,
+            ``selected_metrics``, ``window_timeline``,
+            ``window_timeseries``, ``window_spectrogram``,
+            or ``peak_analysis``.
         dpi: Image resolution.
         session_id: Session identifier.
 
@@ -309,7 +312,9 @@ def generate_report(
         ``hvsr_curve.png``, ``hvsr_statistics.png``,
         ``hvsr_with_windows.png``, ``quality_metrics.png``,
         ``window_timeline.png``, ``peak_analysis.png``,
-        ``complete_dashboard.png``
+        ``complete_dashboard.png``, ``mean_vs_median.png``,
+        ``quality_histogram.png``, ``selected_metrics.png``,
+        ``window_timeseries.png``, ``window_spectrogram.png``
 
     Args:
         output_dir: Absolute path for the report directory.

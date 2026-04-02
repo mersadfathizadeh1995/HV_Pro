@@ -91,8 +91,16 @@ def save_plot(
     dpi: int = 150,
     show_median: bool = True,
     show_mean: bool = False,
+    data=None,    # SeismicData | None — needed for timeseries/spectrogram
 ) -> None:
-    """Render and save a single plot to *output_path*."""
+    """Render and save a single plot to *output_path*.
+    
+    Supported plot_type values:
+        hvsr, windows, quality, statistics, dashboard,
+        mean_vs_median, quality_histogram, selected_metrics,
+        window_timeline, window_timeseries, window_spectrogram,
+        peak_analysis
+    """
     if result is None or result.hvsr_result is None:
         raise ValueError("No results to plot. Call process() first.")
 
@@ -106,6 +114,7 @@ def save_plot(
     plotter = HVSRPlotter()
     r = result.hvsr_result
 
+    fig = None
     if plot_type == "hvsr":
         fig = plotter.plot_result(r, show_peaks=True,
                                   show_median=show_median, show_mean=show_mean)
@@ -117,7 +126,22 @@ def save_plot(
         fig = plotter.plot_statistics(r)
     elif plot_type == "dashboard" and windows:
         fig = plotter.plot_dashboard(r, windows)
-    else:
+    elif plot_type == "mean_vs_median":
+        fig = plotter.plot_mean_vs_median(r)
+    elif plot_type == "quality_histogram" and windows:
+        fig = plotter.plot_quality_histogram(windows)
+    elif plot_type == "selected_metrics" and windows:
+        fig = plotter.plot_selected_metrics(windows)
+    elif plot_type == "window_timeline" and windows:
+        fig = plotter.plot_timeline(windows)
+    elif plot_type == "window_timeseries" and windows:
+        fig = plotter.plot_window_timeseries(windows, data)
+    elif plot_type == "window_spectrogram" and windows:
+        fig = plotter.plot_window_spectrogram(windows, data)
+    elif plot_type == "peak_analysis" and r.primary_peak:
+        fig = plotter.plot_peak_details(r)
+    
+    if fig is None:
         raise ValueError(f"Unknown or unavailable plot type: {plot_type}")
 
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
@@ -135,6 +159,7 @@ def generate_report(
     output_dir: Union[str, Path],
     base_name: str = "hvsr",
     dpi: int = 150,
+    data=None,    # SeismicData | None — for timeseries/spectrogram plots
 ) -> Dict[str, str]:
     """Generate a comprehensive report directory.
 
@@ -226,6 +251,34 @@ def generate_report(
             _save(plotter.plot_timeline(windows), "window_timeline.png")
         except Exception as exc:
             logger.warning("window_timeline plot failed: %s", exc)
+
+        try:
+            _save(plotter.plot_quality_histogram(windows), "quality_histogram.png")
+        except Exception as exc:
+            logger.warning("quality_histogram plot failed: %s", exc)
+
+        try:
+            _save(plotter.plot_selected_metrics(windows), "selected_metrics.png")
+        except Exception as exc:
+            logger.warning("selected_metrics plot failed: %s", exc)
+
+    # Mean vs Median comparison
+    try:
+        _save(plotter.plot_mean_vs_median(r), "mean_vs_median.png")
+    except Exception as exc:
+        logger.warning("mean_vs_median plot failed: %s", exc)
+
+    # Window timeseries and spectrogram (need data)
+    if windows and data is not None:
+        try:
+            _save(plotter.plot_window_timeseries(windows, data), "window_timeseries.png")
+        except Exception as exc:
+            logger.warning("window_timeseries plot failed: %s", exc)
+
+        try:
+            _save(plotter.plot_window_spectrogram(windows, data), "window_spectrogram.png")
+        except Exception as exc:
+            logger.warning("window_spectrogram plot failed: %s", exc)
 
     if r.primary_peak:
         try:

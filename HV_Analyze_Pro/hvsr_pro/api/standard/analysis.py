@@ -482,7 +482,8 @@ class HVSRAnalysis:
         from hvsr_pro.api.standard.export import save_plot
         save_plot(self._result, self._windows, output_path,
                   plot_type=plot_type, dpi=dpi,
-                  show_median=show_median, show_mean=show_mean)
+                  show_median=show_median, show_mean=show_mean,
+                  data=self._data)
 
     def generate_report(
         self, output_dir: Union[str, Path],
@@ -492,6 +493,7 @@ class HVSRAnalysis:
         return generate_report(
             self._result, self._windows, self._config,
             output_dir, base_name=base_name, dpi=dpi,
+            data=self._data,
         )
 
     # -- session I/O (delegates to session_io module) ----------------------
