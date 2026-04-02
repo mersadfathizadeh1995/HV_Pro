@@ -17,6 +17,131 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
+# Comparison / waveform helper plots
+# ------------------------------------------------------------------
+
+def _plot_waveform_rejection(windows, data) -> "Figure":
+    """3-panel (E/N/Z) waveform with green/gray window rejection overlay."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
+    components = [
+        ("East",     data.east.data,     "#1976D2"),
+        ("North",    data.north.data,    "#388E3C"),
+        ("Vertical", data.vertical.data, "#D32F2F"),
+    ]
+    sr = data.east.sampling_rate
+    t = np.arange(len(data.east.data)) / sr
+
+    for ax, (label, waveform, color) in zip(axes, components):
+        ax.plot(t, waveform, color=color, linewidth=0.3, alpha=0.8)
+        ax.set_ylabel(label, fontsize=10)
+        ax.tick_params(labelsize=9)
+
+        for w in windows.windows:
+            s = int(w.start_sample)
+            e = min(int(w.end_sample), len(waveform))
+            if s >= len(waveform):
+                continue
+            c = "#4CAF50" if w.is_active() else "#9E9E9E"
+            a = 0.15 if w.is_active() else 0.25
+            ax.axvspan(s / sr, e / sr, color=c, alpha=a)
+
+    axes[-1].set_xlabel("Time (s)", fontsize=10)
+    axes[0].set_title("3-Component Waveform — Window Rejection Overlay", fontsize=12)
+
+    # Legend
+    from matplotlib.patches import Patch
+    axes[0].legend(
+        handles=[Patch(facecolor="#4CAF50", alpha=0.3, label="Active"),
+                 Patch(facecolor="#9E9E9E", alpha=0.4, label="Rejected")],
+        loc="upper right", fontsize=9,
+    )
+    fig.tight_layout()
+    return fig
+
+
+def _plot_pre_post_rejection(windows, data, raw_result, final_result) -> "Figure":
+    """5-panel composite: left=3C waveforms, right top=pre-QC HVSR, right bottom=post-QC."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    fig = plt.figure(figsize=(16, 10))
+    gs = fig.add_gridspec(3, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
+
+    sr = data.east.sampling_rate
+    t = np.arange(len(data.east.data)) / sr
+    components = [
+        ("East",     data.east.data,     "#1976D2"),
+        ("North",    data.north.data,    "#388E3C"),
+        ("Vertical", data.vertical.data, "#D32F2F"),
+    ]
+
+    # Left: 3 waveform panels
+    for row, (label, waveform, color) in enumerate(components):
+        ax = fig.add_subplot(gs[row, 0])
+        ax.plot(t, waveform, color=color, linewidth=0.3, alpha=0.8)
+        ax.set_ylabel(label, fontsize=9)
+        ax.tick_params(labelsize=8)
+        for w in windows.windows:
+            s, e = int(w.start_sample), min(int(w.end_sample), len(waveform))
+            if s >= len(waveform):
+                continue
+            c = "#4CAF50" if w.is_active() else "#9E9E9E"
+            a = 0.15 if w.is_active() else 0.25
+            ax.axvspan(s / sr, e / sr, color=c, alpha=a)
+        if row == 0:
+            ax.set_title("3C Waveform with Window Rejection", fontsize=11)
+            ax.legend(
+                handles=[Patch(facecolor="#4CAF50", alpha=0.3, label="Active"),
+                         Patch(facecolor="#9E9E9E", alpha=0.4, label="Rejected")],
+                loc="upper right", fontsize=8,
+            )
+        if row == 2:
+            ax.set_xlabel("Time (s)", fontsize=9)
+
+    # Right top: Pre-QC HVSR
+    ax_pre = fig.add_subplot(gs[0:2, 1])
+    ax_pre.semilogx(raw_result.frequencies, raw_result.median_hvsr,
+                     color="#FF6F00", linewidth=1.5, label="Pre-QC Median")
+    ax_pre.fill_between(raw_result.frequencies, raw_result.percentile_16,
+                         raw_result.percentile_84, color="#FF6F00", alpha=0.15)
+    ax_pre.axhline(1, color="gray", linestyle="--", alpha=0.5)
+    pk = raw_result.primary_peak
+    if pk:
+        ax_pre.axvline(pk.frequency, color="#FF6F00", linestyle=":", alpha=0.6)
+        ax_pre.annotate(f"{pk.frequency:.2f} Hz", xy=(pk.frequency, pk.amplitude),
+                         fontsize=9, color="#E65100")
+    ax_pre.set_ylabel("H/V Ratio", fontsize=9)
+    ax_pre.set_title(f"Pre-QC HVSR ({raw_result.total_windows} windows)", fontsize=10)
+    ax_pre.legend(fontsize=8)
+    ax_pre.grid(True, alpha=0.3)
+
+    # Right bottom: Post-QC HVSR
+    ax_post = fig.add_subplot(gs[2, 1])
+    ax_post.semilogx(final_result.frequencies, final_result.median_hvsr,
+                      color="#D32F2F", linewidth=1.5, label="Post-QC Median")
+    ax_post.fill_between(final_result.frequencies, final_result.percentile_16,
+                          final_result.percentile_84, color="#D32F2F", alpha=0.15)
+    ax_post.axhline(1, color="gray", linestyle="--", alpha=0.5)
+    pk2 = final_result.primary_peak
+    if pk2:
+        ax_post.axvline(pk2.frequency, color="#D32F2F", linestyle=":", alpha=0.6)
+        ax_post.annotate(f"{pk2.frequency:.2f} Hz", xy=(pk2.frequency, pk2.amplitude),
+                          fontsize=9, color="#B71C1C")
+    ax_post.set_xlabel("Frequency (Hz)", fontsize=9)
+    ax_post.set_ylabel("H/V Ratio", fontsize=9)
+    ax_post.set_title(f"Post-QC HVSR ({final_result.valid_windows} windows)", fontsize=10)
+    ax_post.legend(fontsize=8)
+    ax_post.grid(True, alpha=0.3)
+
+    fig.suptitle("Pre/Post QC Rejection Analysis", fontsize=13, fontweight="bold")
+    return fig
+
+
+# ------------------------------------------------------------------
 # Single-file exports
 # ------------------------------------------------------------------
 
@@ -93,6 +218,7 @@ def save_plot(
     show_mean: bool = False,
     data=None,    # SeismicData | None — needed for timeseries/spectrogram
     style=None,   # PlotStyleConfig | None
+    raw_result=None,  # HVSRResult | None — pre-QC result for comparison
 ) -> None:
     """Render and save a single plot to *output_path*.
     
@@ -100,7 +226,8 @@ def save_plot(
         hvsr, windows, quality, statistics, dashboard,
         mean_vs_median, quality_histogram, selected_metrics,
         window_timeline, window_timeseries, window_spectrogram,
-        peak_analysis
+        peak_analysis, raw_vs_adjusted, waveform_rejection,
+        pre_post_rejection
     """
     if result is None or result.hvsr_result is None:
         raise ValueError("No results to plot. Call process() first.")
@@ -147,6 +274,16 @@ def save_plot(
         fig = plotter.plot_window_spectrogram(windows, data)
     elif plot_type == "peak_analysis" and r.primary_peak:
         fig = plotter.plot_peak_details(r)
+    elif plot_type == "raw_vs_adjusted" and raw_result is not None:
+        fig = plotter.plot_comparison(
+            [raw_result, r],
+            ["Pre-QC (Raw)", "Post-QC (Adjusted)"],
+            title="Raw vs Adjusted HVSR",
+        )
+    elif plot_type == "waveform_rejection" and windows and data is not None:
+        fig = _plot_waveform_rejection(windows, data)
+    elif plot_type == "pre_post_rejection" and windows and data is not None and raw_result is not None:
+        fig = _plot_pre_post_rejection(windows, data, raw_result, r)
     
     if fig is None:
         raise ValueError(f"Unknown or unavailable plot type: {plot_type}")
@@ -167,6 +304,7 @@ def generate_report(
     base_name: str = "hvsr",
     dpi: int = 150,
     data=None,    # SeismicData | None — for timeseries/spectrogram plots
+    raw_result=None,  # HVSRResult | None — pre-QC result for comparison
 ) -> Dict[str, str]:
     """Generate a comprehensive report directory.
 
@@ -308,5 +446,29 @@ def generate_report(
             _save(plotter.plot_dashboard(r, windows), "complete_dashboard.png")
         except Exception as exc:
             logger.warning("complete_dashboard plot failed: %s", exc)
+
+    # Comparison / rejection plots (need raw_result and/or data)
+    if raw_result is not None:
+        try:
+            _save(plotter.plot_comparison(
+                [raw_result, r],
+                ["Pre-QC (Raw)", "Post-QC (Adjusted)"],
+                title="Raw vs Adjusted HVSR",
+            ), "raw_vs_adjusted.png")
+        except Exception as exc:
+            logger.warning("raw_vs_adjusted plot failed: %s", exc)
+
+    if windows and data is not None:
+        try:
+            _save(_plot_waveform_rejection(windows, data), "waveform_rejection.png")
+        except Exception as exc:
+            logger.warning("waveform_rejection plot failed: %s", exc)
+
+    if windows and data is not None and raw_result is not None:
+        try:
+            _save(_plot_pre_post_rejection(windows, data, raw_result, r),
+                  "pre_post_rejection.png")
+        except Exception as exc:
+            logger.warning("pre_post_rejection plot failed: %s", exc)
 
     return files

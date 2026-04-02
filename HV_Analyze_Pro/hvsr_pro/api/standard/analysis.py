@@ -176,6 +176,7 @@ class HVSRAnalysis:
         self._data = None
         self._windows = None
         self._result: Optional[AnalysisResult] = None
+        self._raw_result = None  # pre-QC result for comparison plots
 
     # -- properties --------------------------------------------------------
 
@@ -348,6 +349,10 @@ class HVSRAnalysis:
         )
         result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
 
+        # Snapshot before FDWRA / post-HVSR QC for comparison plots
+        import copy
+        self._raw_result = copy.deepcopy(result)
+
         apply_fdwra = should_apply_fdwra(qc_cfg)
         if apply_fdwra:
             _progress(85, "Applying Cox FDWRA (peak consistency)...")
@@ -483,7 +488,8 @@ class HVSRAnalysis:
         save_plot(self._result, self._windows, output_path,
                   plot_type=plot_type, dpi=dpi,
                   show_median=show_median, show_mean=show_mean,
-                  data=self._data, style=self._config.plot_style)
+                  data=self._data, style=self._config.plot_style,
+                  raw_result=getattr(self, '_raw_result', None))
 
     def generate_report(
         self, output_dir: Union[str, Path],
@@ -494,6 +500,7 @@ class HVSRAnalysis:
             self._result, self._windows, self._config,
             output_dir, base_name=base_name, dpi=dpi,
             data=self._data,
+            raw_result=getattr(self, '_raw_result', None),
         )
 
     # -- session I/O (delegates to session_io module) ----------------------

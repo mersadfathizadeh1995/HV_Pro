@@ -325,7 +325,8 @@ def export_plot(
             ``dashboard``, ``mean_vs_median``, ``quality_histogram``,
             ``selected_metrics``, ``window_timeline``,
             ``window_timeseries``, ``window_spectrogram``,
-            or ``peak_analysis``.
+            ``peak_analysis``, ``raw_vs_adjusted``,
+            ``waveform_rejection``, or ``pre_post_rejection``.
         dpi: Image resolution.
         session_id: Session identifier.
 
@@ -364,7 +365,9 @@ def generate_report(
         ``window_timeline.png``, ``peak_analysis.png``,
         ``complete_dashboard.png``, ``mean_vs_median.png``,
         ``quality_histogram.png``, ``selected_metrics.png``,
-        ``window_timeseries.png``, ``window_spectrogram.png``
+        ``window_timeseries.png``, ``window_spectrogram.png``,
+        ``raw_vs_adjusted.png``, ``waveform_rejection.png``,
+        ``pre_post_rejection.png``
 
     Args:
         output_dir: Absolute path for the report directory.
