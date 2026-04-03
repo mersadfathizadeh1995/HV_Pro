@@ -146,6 +146,208 @@ def set_processing_params(
 
 
 # ===================================================================
+# QC configuration
+# ===================================================================
+
+@mcp.tool()
+def set_qc_params(
+    session_id: str = "default",
+    # Master switches
+    enabled: Optional[bool] = None,
+    mode: Optional[str] = None,
+    phase1_enabled: Optional[bool] = None,
+    phase2_enabled: Optional[bool] = None,
+    # STA/LTA algorithm (Phase 1)
+    sta_lta_enabled: Optional[bool] = None,
+    sta_length: Optional[float] = None,
+    lta_length: Optional[float] = None,
+    sta_lta_min_ratio: Optional[float] = None,
+    sta_lta_max_ratio: Optional[float] = None,
+    # Amplitude algorithm (Phase 1)
+    amplitude_enabled: Optional[bool] = None,
+    clipping_threshold: Optional[float] = None,
+    min_rms: Optional[float] = None,
+    # Statistical Outlier algorithm (Phase 1)
+    statistical_outlier_enabled: Optional[bool] = None,
+    statistical_outlier_method: Optional[str] = None,
+    statistical_outlier_threshold: Optional[float] = None,
+    # Frequency Domain algorithm (Phase 1)
+    frequency_domain_enabled: Optional[bool] = None,
+    spike_threshold: Optional[float] = None,
+    # Post-HVSR: Curve Outlier algorithm (Phase 2)
+    curve_outlier_enabled: Optional[bool] = None,
+    curve_outlier_threshold: Optional[float] = None,
+    curve_outlier_max_iterations: Optional[int] = None,
+    # Post-HVSR: HVSR Amplitude algorithm (Phase 2)
+    hvsr_amplitude_enabled: Optional[bool] = None,
+    hvsr_amplitude_min: Optional[float] = None,
+    # Post-HVSR: Flat Peak algorithm (Phase 2)
+    flat_peak_enabled: Optional[bool] = None,
+    flatness_threshold: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Adjust quality-control parameters without replacing the whole config.
+
+    Only the parameters that are explicitly provided are changed; the rest
+    keep their current value.  Use ``list_qc_algorithms`` to discover
+    available algorithms and their defaults.
+
+    Args:
+        enabled: Master QC switch (True/False).
+        mode: QC preset — ``"sesame"`` or ``"custom"``.
+        phase1_enabled: Enable/disable pre-HVSR window rejection.
+        phase2_enabled: Enable/disable post-HVSR curve rejection.
+        sta_lta_enabled: Enable STA/LTA transient detection.
+        sta_length: Short-term average window (seconds).
+        lta_length: Long-term average window (seconds).
+        sta_lta_min_ratio: Minimum STA/LTA ratio threshold.
+        sta_lta_max_ratio: Maximum STA/LTA ratio threshold.
+        amplitude_enabled: Enable amplitude/clipping check.
+        clipping_threshold: Fraction of full-scale considered clipping (0-1).
+        min_rms: Minimum RMS amplitude (rejects dead channels).
+        statistical_outlier_enabled: Enable statistical outlier detection.
+        statistical_outlier_method: ``"iqr"`` or ``"zscore"``.
+        statistical_outlier_threshold: Deviation threshold.
+        frequency_domain_enabled: Enable frequency-domain spike detection.
+        spike_threshold: Spectral spike threshold (std devs).
+        curve_outlier_enabled: Enable post-HVSR curve outlier rejection.
+        curve_outlier_threshold: Outlier threshold (std devs).
+        curve_outlier_max_iterations: Max rejection iterations.
+        hvsr_amplitude_enabled: Enable post-HVSR amplitude check.
+        hvsr_amplitude_min: Minimum H/V amplitude to keep a window.
+        flat_peak_enabled: Enable flat-peak rejection.
+        flatness_threshold: Flatness threshold for peak rejection.
+
+    Returns:
+        The updated QC configuration as a dict.
+    """
+    analysis = _get_analysis(session_id)
+    qc = analysis.config.qc
+
+    # Master switches
+    if enabled is not None:
+        qc.enabled = enabled
+    if mode is not None:
+        qc.mode = mode
+    if phase1_enabled is not None:
+        qc.phase1_enabled = phase1_enabled
+    if phase2_enabled is not None:
+        qc.phase2_enabled = phase2_enabled
+
+    # Auto-switch to "custom" when algorithm-level params are changed
+    # (otherwise SESAME mode ignores individual algorithm settings)
+    algo_params = [
+        sta_lta_enabled, sta_length, lta_length, sta_lta_min_ratio,
+        sta_lta_max_ratio, amplitude_enabled, clipping_threshold, min_rms,
+        statistical_outlier_enabled, statistical_outlier_method,
+        statistical_outlier_threshold, frequency_domain_enabled,
+        spike_threshold, curve_outlier_enabled, curve_outlier_threshold,
+        curve_outlier_max_iterations, hvsr_amplitude_enabled,
+        hvsr_amplitude_min, flat_peak_enabled, flatness_threshold,
+    ]
+    if mode is None and any(p is not None for p in algo_params):
+        qc.mode = "custom"
+
+    # STA/LTA
+    if sta_lta_enabled is not None:
+        qc.sta_lta.enabled = sta_lta_enabled
+    if sta_length is not None:
+        qc.sta_lta.sta_length = sta_length
+    if lta_length is not None:
+        qc.sta_lta.lta_length = lta_length
+    if sta_lta_min_ratio is not None:
+        qc.sta_lta.min_ratio = sta_lta_min_ratio
+    if sta_lta_max_ratio is not None:
+        qc.sta_lta.max_ratio = sta_lta_max_ratio
+
+    # Amplitude
+    if amplitude_enabled is not None:
+        qc.amplitude.enabled = amplitude_enabled
+    if clipping_threshold is not None:
+        qc.amplitude.clipping_threshold = clipping_threshold
+    if min_rms is not None:
+        qc.amplitude.min_rms = min_rms
+
+    # Statistical Outlier
+    if statistical_outlier_enabled is not None:
+        qc.statistical_outlier.enabled = statistical_outlier_enabled
+    if statistical_outlier_method is not None:
+        qc.statistical_outlier.method = statistical_outlier_method
+    if statistical_outlier_threshold is not None:
+        qc.statistical_outlier.threshold = statistical_outlier_threshold
+
+    # Frequency Domain
+    if frequency_domain_enabled is not None:
+        qc.frequency_domain.enabled = frequency_domain_enabled
+    if spike_threshold is not None:
+        qc.frequency_domain.spike_threshold = spike_threshold
+
+    # Post-HVSR: Curve Outlier
+    if curve_outlier_enabled is not None:
+        qc.curve_outlier.enabled = curve_outlier_enabled
+    if curve_outlier_threshold is not None:
+        qc.curve_outlier.threshold = curve_outlier_threshold
+    if curve_outlier_max_iterations is not None:
+        qc.curve_outlier.max_iterations = curve_outlier_max_iterations
+
+    # Post-HVSR: HVSR Amplitude
+    if hvsr_amplitude_enabled is not None:
+        qc.hvsr_amplitude.enabled = hvsr_amplitude_enabled
+    if hvsr_amplitude_min is not None:
+        qc.hvsr_amplitude.min_amplitude = hvsr_amplitude_min
+
+    # Post-HVSR: Flat Peak
+    if flat_peak_enabled is not None:
+        qc.flat_peak.enabled = flat_peak_enabled
+    if flatness_threshold is not None:
+        qc.flat_peak.flatness_threshold = flatness_threshold
+
+    return qc.to_dict()
+
+
+@mcp.tool()
+def set_fdwra_params(
+    session_id: str = "default",
+    enabled: Optional[bool] = None,
+    n: Optional[float] = None,
+    max_iterations: Optional[int] = None,
+    min_iterations: Optional[int] = None,
+    distribution: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Adjust Cox FDWRA (Frequency-Dependent Window Rejection) parameters.
+
+    The FDWRA algorithm iteratively removes windows whose individual H/V
+    curves deviate from the median at each frequency.  Call this before
+    ``run_hvsr_analysis`` to customise or disable FDWRA.
+
+    Args:
+        enabled: Enable or disable FDWRA entirely.
+        n: Rejection threshold in standard deviations (default 2.0).
+        max_iterations: Maximum number of rejection passes (default 50).
+        min_iterations: Minimum passes before stopping (default 1).
+        distribution: Statistical distribution — ``"lognormal"`` or
+            ``"normal"`` (default ``"lognormal"``).
+
+    Returns:
+        The updated FDWRA configuration as a dict.
+    """
+    analysis = _get_analysis(session_id)
+    fdwra = analysis.config.qc.cox_fdwra
+
+    if enabled is not None:
+        fdwra.enabled = enabled
+    if n is not None:
+        fdwra.n = n
+    if max_iterations is not None:
+        fdwra.max_iterations = max_iterations
+    if min_iterations is not None:
+        fdwra.min_iterations = min_iterations
+    if distribution is not None:
+        fdwra.distribution = distribution
+
+    return fdwra.to_dict()
+
+
+# ===================================================================
 # Processing
 # ===================================================================
 

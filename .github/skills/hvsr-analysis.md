@@ -33,9 +33,11 @@ Every HVSR analysis follows this sequence. **Call the tools in this order.**
 ```
 1. load_seismic_data     — load file(s), set time range & timezone
 2. set_processing_params — configure window length, freq range, etc.
-3. run_hvsr_analysis     — compute H/V spectra + QC
-4. detect_peaks          — find resonance peaks on the H/V curve
-5. generate_report       — export all data files + 15 plot types
+3. set_qc_params         — (optional) tune QC algorithms
+4. set_fdwra_params      — (optional) enable/disable or tune FDWRA
+5. run_hvsr_analysis     — compute H/V spectra + QC
+6. detect_peaks          — find resonance peaks on the H/V curve
+7. generate_report       — export all data files + 15 plot types
    (or use export_results / export_plot for individual outputs)
 ```
 
@@ -48,7 +50,7 @@ load_seismic_data(
     end_time="2026-04-01T11:00:00",
     timezone_offset=-5          # CDT = UTC-5
 )
-set_processing_params(window_length=120, freq_min=0.2, freq_max=50)
+set_processing_params(window_length=120, freq_min=0.2, freq_max=50, n_frequencies=200)
 run_hvsr_analysis()
 detect_peaks(mode="auto_multi")
 generate_report(output_dir="D:\\data\\station01_report", base_name="STN01")
@@ -105,13 +107,13 @@ generate_report(output_dir="D:\\data\\station01_report", base_name="STN01")
 | Parameter | Type | Default | Valid Values |
 |-----------|------|---------|--------------|
 | `window_length` | float | 60 | 1–600 seconds |
-| `overlap` | float | 0.5 | 0.0–0.99 |
+| `overlap` | float | 0.0 | 0.0–0.99 |
 | `smoothing_method` | str | `"konno_ohmachi"` | `konno_ohmachi`, `parzen`, `savitzky_golay`, `linear_rectangular`, `log_rectangular`, `linear_triangular`, `log_triangular`, `none` |
 | `smoothing_bandwidth` | float | 40 | Depends on method (KO: 1–200, Parzen: 0.01–10) |
 | `horizontal_method` | str | `"geometric_mean"` | `geometric_mean`, `arithmetic_mean`, `quadratic`, `maximum` |
 | `freq_min` | float | 0.2 | > 0, in Hz |
-| `freq_max` | float | 20 | > freq_min, in Hz |
-| `n_frequencies` | int | 300 | ≥ 10 |
+| `freq_max` | float | 50 | > freq_min, in Hz |
+| `n_frequencies` | int | 200 | ≥ 10 |
 | `statistics_method` | str | `"lognormal"` | `lognormal`, `normal` |
 | `peak_basis` | str | `"median"` | `median`, `mean` |
 | `min_prominence` | float | 0.3 | ≥ 0 (lower = more peaks) |
@@ -125,6 +127,33 @@ Only parameters you explicitly provide are changed; others keep current values.
 
 Pass a JSON string representing the full `HVSRAnalysisConfig`. Missing keys
 keep their defaults. Use `get_analysis_defaults()` to see the structure first.
+
+#### `set_qc_params` (optional — tune QC algorithms)
+
+Adjust individual QC algorithm parameters. Setting any algorithm-level
+parameter automatically switches to "custom" mode. Key parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | True | Master QC switch |
+| `mode` | str | `"sesame"` | `"sesame"` or `"custom"` |
+| `sta_lta_enabled` | bool | True | Enable STA/LTA transient detection |
+| `sta_lta_max_ratio` | float | 2.5 | Max STA/LTA ratio threshold |
+| `frequency_domain_enabled` | bool | False | Enable spectral spike detection |
+| `spike_threshold` | float | 3.0 | Spectral spike threshold (std devs) |
+| `curve_outlier_enabled` | bool | True | Enable post-HVSR curve outlier |
+| `curve_outlier_threshold` | float | 3.0 | Outlier threshold (std devs) |
+
+See full parameter list in `set_qc_params` tool documentation.
+
+#### `set_fdwra_params` (optional — tune Cox FDWRA)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | True | Enable/disable FDWRA |
+| `n` | float | 2.0 | Rejection threshold in std devs |
+| `max_iterations` | int | 50 | Max rejection passes |
+| `distribution` | str | `"lognormal"` | `"lognormal"` or `"normal"` |
 
 #### `configure_plot_style` (optional — customize figure appearance)
 
@@ -284,8 +313,23 @@ Iteratively removes windows whose peak frequency deviates from the group.
 
 ### Customizing QC
 
-Use `configure_analysis` with a full QC config to enable/disable algorithms
-or change their parameters:
+Use `set_qc_params` to tune individual algorithms (auto-switches to custom mode):
+
+```
+set_qc_params(
+    sta_lta_max_ratio=3.0,
+    frequency_domain_enabled=True,
+    spike_threshold=2.5
+)
+```
+
+Use `set_fdwra_params` to control FDWRA:
+
+```
+set_fdwra_params(enabled=True, n=1.5)
+```
+
+Or use `configure_analysis` with a full QC config for advanced control:
 
 ```
 configure_analysis(config_json='{
@@ -322,10 +366,11 @@ configure_analysis(config_json='{
 
 ### For typical ambient vibration surveys:
 - **Window length:** 60–120 seconds (longer = more stable, but fewer windows)
-- **Overlap:** 0.5 (50%)
+- **Overlap:** 0.0 (no overlap — default)
 - **Smoothing:** Konno-Ohmachi with bandwidth 40 (SESAME standard)
 - **Horizontal method:** geometric_mean (SESAME recommended)
-- **Frequency range:** 0.2–50 Hz (adjust to needs)
+- **Frequency range:** 0.2–50 Hz (default)
+- **n_frequencies:** 200 (default)
 - **Statistics:** lognormal (always preferred over arithmetic)
 - **Peak basis:** median (more robust than mean)
 
@@ -366,13 +411,13 @@ configure_analysis(config_json='{
 {
   "processing": {
     "window_length": 60,
-    "overlap": 0.5,
+    "overlap": 0.0,
     "smoothing_method": "konno_ohmachi",
     "smoothing_bandwidth": 40,
     "horizontal_method": "geometric_mean",
     "freq_min": 0.2,
-    "freq_max": 20,
-    "n_frequencies": 300,
+    "freq_max": 50,
+    "n_frequencies": 200,
     "manual_sampling_rate": null,
     "use_parallel": false,
     "n_cores": null,

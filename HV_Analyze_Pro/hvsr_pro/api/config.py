@@ -33,13 +33,13 @@ class ProcessingConfig:
     """Spectral-analysis and windowing parameters."""
 
     window_length: float = 60.0
-    overlap: float = 0.5
+    overlap: float = 0.0
     smoothing_method: str = "konno_ohmachi"
     smoothing_bandwidth: float = 40.0
     horizontal_method: str = "geometric_mean"
     freq_min: float = 0.2
-    freq_max: float = 20.0
-    n_frequencies: int = 300
+    freq_max: float = 50.0
+    n_frequencies: int = 200
     manual_sampling_rate: Optional[float] = None
     use_parallel: bool = False
     n_cores: Optional[int] = None
@@ -71,13 +71,13 @@ class ProcessingConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "ProcessingConfig":
         return cls(
             window_length=data.get("window_length", 60.0),
-            overlap=data.get("overlap", 0.5),
+            overlap=data.get("overlap", 0.0),
             smoothing_method=data.get("smoothing_method", "konno_ohmachi"),
             smoothing_bandwidth=data.get("smoothing_bandwidth", 40.0),
             horizontal_method=data.get("horizontal_method", "geometric_mean"),
             freq_min=data.get("freq_min", 0.2),
-            freq_max=data.get("freq_max", 20.0),
-            n_frequencies=data.get("n_frequencies", 300),
+            freq_max=data.get("freq_max", 50.0),
+            n_frequencies=data.get("n_frequencies", 200),
             manual_sampling_rate=data.get("manual_sampling_rate"),
             use_parallel=data.get("use_parallel", False),
             n_cores=data.get("n_cores"),
@@ -218,8 +218,8 @@ class STALTAAlgoConfig:
     enabled: bool = True
     sta_length: float = 1.0
     lta_length: float = 30.0
-    min_ratio: float = 0.1
-    max_ratio: float = 5.0
+    min_ratio: float = 0.2
+    max_ratio: float = 2.5
 
     def to_dict(self) -> Dict[str, Any]:
         return {

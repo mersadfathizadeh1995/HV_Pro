@@ -27,10 +27,17 @@ mcp = FastMCP(
     "HVSR Pro",
     instructions=(
         "HVSR Pro is a seismology application for Horizontal-to-Vertical "
-        "Spectral Ratio analysis of ambient vibration recordings.  Use "
-        "these tools to load seismic data, configure processing, run the "
-        "HVSR pipeline, and export results.  Always call list_formats or "
-        "get_analysis_defaults before asking the user for parameters."
+        "Spectral Ratio analysis of ambient vibration recordings.\n\n"
+        "Typical workflow:\n"
+        "1. load_seismic_data() — Load seismic file(s) with optional time range\n"
+        "2. set_processing_params() — Adjust windowing, smoothing, frequency range\n"
+        "3. set_qc_params() — (Optional) Tune quality-control algorithms\n"
+        "4. set_fdwra_params() — (Optional) Enable/disable or tune FDWRA\n"
+        "5. run_hvsr_analysis() — Execute the full processing pipeline\n"
+        "6. detect_peaks() — Identify resonance peaks on the H/V curve\n"
+        "7. export_plot() or generate_report() — Save figures and data\n\n"
+        "Call get_analysis_defaults() to see all configurable parameters. "
+        "Call list_formats() to discover supported file types."
     ),
 )
 

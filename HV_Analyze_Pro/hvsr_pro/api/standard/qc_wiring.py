@@ -61,11 +61,11 @@ def should_apply_fdwra(qc_cfg) -> bool:
     """Decide whether Cox FDWRA should run."""
     if not qc_cfg.enabled or not qc_cfg.phase2_enabled:
         return False
-    if qc_cfg.cox_fdwra.enabled:
-        return True
-    if qc_cfg.mode == "sesame":
-        return True
-    return False
+    # Explicit enabled flag always wins
+    if not qc_cfg.cox_fdwra.enabled:
+        return False
+    # SESAME mode enables FDWRA by default (config default is enabled=True)
+    return True
 
 
 def build_post_hvsr_algos(qc_cfg) -> List:
