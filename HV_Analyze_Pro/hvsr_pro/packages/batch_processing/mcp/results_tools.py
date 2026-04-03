@@ -52,15 +52,20 @@ def get_results_summary(session_id: str = "default") -> Dict[str, Any]:
         hvsr_results = batch.get_hvsr_results()
         per_station: List[Dict[str, Any]] = []
         for res in hvsr_results:
+            primary_f0 = None
+            if res.peaks:
+                pk = res.peaks[0]
+                primary_f0 = float(
+                    pk.frequency if hasattr(pk, "frequency") else pk["frequency"]
+                )
+
             per_station.append({
-                "name": res.get("name", ""),
-                "success": res.get("success", False),
-                "n_peaks": len(res.get("peaks", [])),
-                "primary_f0": float(res["peaks"][0]["frequency"])
-                if res.get("peaks")
-                else None,
-                "valid_windows": res.get("valid_windows", 0),
-                "total_windows": res.get("total_windows", 0),
+                "name": res.station_name,
+                "success": res.success,
+                "n_peaks": len(res.peaks) if res.peaks else 0,
+                "primary_f0": primary_f0,
+                "valid_windows": int(res.valid_windows),
+                "total_windows": int(res.total_windows),
             })
 
         return {
@@ -91,35 +96,42 @@ def get_station_result(
 
         target = None
         for res in hvsr_results:
-            if res.get("name") == station_name:
+            if res.station_name == station_name:
                 target = res
                 break
 
         if target is None:
             return {"error": f"Station '{station_name}' not found in results."}
 
-        peaks = [
-            {
-                "frequency": float(p["frequency"]),
-                "amplitude": float(p["amplitude"]),
-                "prominence": float(p.get("prominence", 0.0)),
-            }
-            for p in target.get("peaks", [])
-        ]
+        peaks = []
+        for p in (target.peaks or []):
+            freq = float(p.frequency if hasattr(p, "frequency") else p["frequency"])
+            amp = float(p.amplitude if hasattr(p, "amplitude") else p["amplitude"])
+            prom = float(
+                getattr(p, "prominence", 0.0) if hasattr(p, "prominence")
+                else p.get("prominence", 0.0) if isinstance(p, dict) else 0.0
+            )
+            peaks.append({"frequency": freq, "amplitude": amp, "prominence": prom})
 
         return {
             "station_name": station_name,
-            "success": target.get("success", False),
-            "frequencies": _numpy_to_python(target.get("frequencies", [])),
-            "median_hvsr": _numpy_to_python(target.get("median_hvsr", [])),
-            "mean_hvsr": _numpy_to_python(target.get("mean_hvsr", [])),
-            "std_hvsr": _numpy_to_python(target.get("std_hvsr", [])),
-            "peaks": peaks,
-            "valid_windows": target.get("valid_windows", 0),
-            "total_windows": target.get("total_windows", 0),
-            "rejected_reasons": _numpy_to_python(
-                target.get("rejected_reasons", {})
+            "success": target.success,
+            "frequencies": _numpy_to_python(
+                target.frequencies.tolist() if target.frequencies is not None else []
             ),
+            "median_hvsr": _numpy_to_python(
+                target.median_hvsr.tolist() if target.median_hvsr is not None else []
+            ),
+            "mean_hvsr": _numpy_to_python(
+                target.mean_hvsr.tolist() if target.mean_hvsr is not None else []
+            ),
+            "std_hvsr": _numpy_to_python(
+                target.std_hvsr.tolist() if target.std_hvsr is not None else []
+            ),
+            "peaks": peaks,
+            "valid_windows": int(target.valid_windows),
+            "total_windows": int(target.total_windows),
+            "error": target.error,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -195,14 +207,22 @@ def detect_combined_peaks(
     """
     try:
         batch = _get_batch(session_id)
-        peaks = batch.detect_combined_peaks(
+        raw_peaks = batch.detect_combined_peaks(
             min_prominence, min_amplitude, n_peaks
         )
-        peaks = _numpy_to_python(peaks)
+
+        peaks = []
+        for p in (raw_peaks or []):
+            peaks.append({
+                "frequency": float(p.frequency),
+                "amplitude": float(p.amplitude),
+                "prominence": float(getattr(p, "prominence", 0)),
+                "peak_type": getattr(p, "peak_type", ""),
+            })
 
         return {
-            "n_peaks": len(peaks) if isinstance(peaks, list) else 0,
-            "peaks": peaks if isinstance(peaks, list) else [],
+            "n_peaks": len(peaks),
+            "peaks": peaks,
         }
     except Exception as e:
         return {"error": str(e)}

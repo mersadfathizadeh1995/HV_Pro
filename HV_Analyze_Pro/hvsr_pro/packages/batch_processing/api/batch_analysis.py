@@ -216,9 +216,10 @@ class BatchAnalysis:
     ):
         """Import stations by auto-detecting files in a folder."""
         from .station_ops import import_stations_from_folder
-        stations = import_stations_from_folder(folder, extensions)
+        stations, unmatched = import_stations_from_folder(folder, extensions)
         self._config.stations.extend(stations)
-        logger.info("Imported %d stations from %s", len(stations), folder)
+        logger.info("Imported %d stations from %s (%d unmatched files)",
+                     len(stations), folder, len(unmatched))
 
     def import_stations_from_csv(self, csv_path: str):
         """Import stations from a CSV file."""
@@ -511,22 +512,22 @@ class BatchAnalysis:
             return None
         wf = self._workflow_result
         return {
-            "frequencies": wf.combined_frequencies.tolist()
-            if wf.combined_frequencies is not None else [],
-            "median_hvsr": wf.combined_median.tolist()
-            if wf.combined_median is not None else [],
+            "frequencies": wf.frequencies.tolist()
+            if wf.frequencies is not None else [],
+            "median_hvsr": wf.median_hvsr.tolist()
+            if wf.median_hvsr is not None else [],
             "n_stations": wf.n_stations,
             "combined_peaks": [
-                {"frequency": p.frequency, "amplitude": p.amplitude}
+                {
+                    "frequency": float(p.frequency),
+                    "amplitude": float(p.amplitude),
+                    "prominence": float(getattr(p, "prominence", 0)),
+                    "peak_type": getattr(p, "peak_type", ""),
+                }
                 for p in (wf.combined_peaks or [])
             ],
             "peak_statistics": [
-                {
-                    "frequency": ps.frequency,
-                    "amplitude": ps.amplitude,
-                    "station_count": ps.station_count,
-                }
-                for ps in (wf.peak_statistics or [])
+                ps.to_dict() for ps in (wf.peak_statistics or [])
             ],
         }
 

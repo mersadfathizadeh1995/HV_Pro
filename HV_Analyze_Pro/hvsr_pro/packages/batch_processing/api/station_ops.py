@@ -13,8 +13,9 @@ from __future__ import annotations
 import csv
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from .config import (
     SensorDef,
@@ -373,14 +374,12 @@ def import_time_windows_from_csv(
     csv_path : str
         Path to the CSV file.
     timezone : str
-        Timezone label (``"UTC"``, ``"CST"``, ``"CDT"``).
+        Timezone — IANA name or short label.
 
     Returns
     -------
     list[TimeWindowDef]
     """
-    offset_hours = TZ_OFFSETS.get(timezone.upper(), 0)
-    offset = timedelta(hours=offset_hours)
     windows = []
 
     with open(csv_path, "r", newline="", encoding="utf-8") as f:
@@ -400,13 +399,17 @@ def import_time_windows_from_csv(
                     int(row[7]), int(row[8]), int(row[9]),
                     int(row[10]), int(row[11]), int(row[12]),
                 )
-                start_utc = start_local + offset
-                end_utc = end_local + offset
+                start_utc_str = convert_local_to_utc(
+                    start_local.strftime(_DT_FMT), timezone,
+                )
+                end_utc_str = convert_local_to_utc(
+                    end_local.strftime(_DT_FMT), timezone,
+                )
 
                 windows.append(TimeWindowDef(
                     name=name,
-                    start_utc=start_utc.strftime(_DT_FMT),
-                    end_utc=end_utc.strftime(_DT_FMT),
+                    start_utc=start_utc_str,
+                    end_utc=end_utc_str,
                     start_local=start_local.strftime(_DT_FMT),
                     end_local=end_local.strftime(_DT_FMT),
                 ))
@@ -459,7 +462,7 @@ def export_time_windows_to_csv(
 
 def convert_local_to_utc(
     local_str: str,
-    timezone: str = "UTC",
+    tz: str = "UTC",
 ) -> str:
     """
     Convert a local datetime string to UTC.
@@ -468,18 +471,34 @@ def convert_local_to_utc(
     ----------
     local_str : str
         Datetime in ``"%Y-%m-%d %H:%M:%S"`` format.
-    timezone : str
-        Source timezone label.
+    tz : str
+        Source timezone — IANA name (e.g. ``"US/Central"``,
+        ``"Asia/Tehran"``) or short label (``"UTC"``, ``"CST"``,
+        ``"CDT"``).
 
     Returns
     -------
     str
         UTC datetime in the same format.
     """
-    offset_hours = TZ_OFFSETS.get(timezone.upper(), 0)
-    dt = datetime.strptime(local_str, _DT_FMT)
-    utc = dt + timedelta(hours=offset_hours)
-    return utc.strftime(_DT_FMT)
+    dt_naive = datetime.strptime(local_str, _DT_FMT)
+
+    # Try simple offset lookup first (legacy short labels)
+    offset = TZ_OFFSETS.get(tz.upper())
+    if offset is not None:
+        utc = dt_naive + timedelta(hours=offset)
+        return utc.strftime(_DT_FMT)
+
+    # Fall back to IANA timezone via zoneinfo
+    try:
+        local_tz = ZoneInfo(tz)
+    except (KeyError, Exception):
+        # Unknown timezone — treat as UTC
+        return dt_naive.strftime(_DT_FMT)
+
+    dt_local = dt_naive.replace(tzinfo=local_tz)
+    dt_utc = dt_local.astimezone(timezone.utc)
+    return dt_utc.strftime(_DT_FMT)
 
 
 def make_time_window(
