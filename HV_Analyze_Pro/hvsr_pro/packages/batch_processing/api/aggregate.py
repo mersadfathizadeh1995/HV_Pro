@@ -302,3 +302,97 @@ def run_automatic_analysis(
     )
 
     return result
+
+
+# ────────────────────────────────────────────────────────────────────
+# Selective / filtering utilities
+# ────────────────────────────────────────────────────────────────────
+
+def filter_results(
+    hvsr_results: List[StationHVSRResult],
+    station_names: Optional[List[str]] = None,
+    topic: Optional[str] = None,
+) -> List[StationHVSRResult]:
+    """
+    Filter HVSR results by station name and/or topic.
+
+    Parameters
+    ----------
+    hvsr_results : list[StationHVSRResult]
+        Full results list.
+    station_names : list[str], optional
+        Keep only these station names.
+    topic : str, optional
+        Keep only results whose ``window_name`` matches this topic.
+
+    Returns
+    -------
+    list[StationHVSRResult]
+    """
+    filtered = [r for r in hvsr_results if r.success]
+    if station_names is not None:
+        name_set = set(station_names)
+        filtered = [r for r in filtered if r.station_name in name_set]
+    if topic is not None:
+        filtered = [r for r in filtered if r.window_name == topic]
+    return filtered
+
+
+def compute_selective_grand_median(
+    hvsr_results: List[StationHVSRResult],
+    station_names: List[str],
+    freq_min: float = 0.2,
+    freq_max: float = 50.0,
+    n_frequencies: int = 200,
+    peak_settings: Optional[PeakSettings] = None,
+) -> AutomaticWorkflowResult:
+    """
+    Compute grand median from a subset of stations.
+
+    Filters to the given station names, converts to StationResult,
+    then computes combined median and detects peaks.
+
+    Parameters
+    ----------
+    hvsr_results : list[StationHVSRResult]
+        All station results (will be filtered).
+    station_names : list[str]
+        Names of stations to include.
+    freq_min, freq_max : float
+        Frequency range for the common grid.
+    n_frequencies : int
+        Grid points.
+    peak_settings : PeakSettings, optional
+        Peak detection parameters (defaults used if not provided).
+
+    Returns
+    -------
+    AutomaticWorkflowResult
+        With combined median and peaks for the selected stations.
+    """
+    subset = filter_results(hvsr_results, station_names=station_names)
+    if not subset:
+        logger.warning("No matching stations for selective grand median")
+        return AutomaticWorkflowResult()
+
+    station_results = build_station_results(subset)
+    result = compute_combined_median(
+        station_results, freq_min, freq_max, n_frequencies,
+    )
+
+    if peak_settings is None:
+        peak_settings = PeakSettings()
+
+    detect_combined_peaks(
+        result,
+        min_prominence=peak_settings.min_prominence,
+        min_amplitude=peak_settings.min_amplitude,
+        n_peaks=peak_settings.n_peaks,
+    )
+    compute_peak_statistics(result, peak_settings.freq_tolerance)
+
+    logger.info(
+        "Selective grand median: %d/%d stations → %d peaks",
+        len(subset), len(hvsr_results), len(result.combined_peaks),
+    )
+    return result

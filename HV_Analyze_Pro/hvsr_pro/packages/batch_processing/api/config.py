@@ -448,6 +448,51 @@ class QCSettings:
 
 
 # ────────────────────────────────────────────────────────────────────
+# Figure Export Settings
+# ────────────────────────────────────────────────────────────────────
+
+@dataclass
+class FigureExportSettings:
+    """Fine-grained control over exported figures."""
+
+    dpi: int = 300
+    format: str = "png"                      # "png", "pdf", "svg"
+    size_preset: str = "default"             # "default", "compact", "large"
+    y_limit_method: str = "auto"             # "auto", "fixed", "percentile"
+    y_limit_value: Optional[float] = None    # fixed upper Y-limit
+    show_mean: bool = False
+    show_median: bool = True
+    show_uncertainty: bool = True
+    show_rejected: bool = False
+    figure_types: List[str] = field(default_factory=lambda: [
+        "hvsr_curve", "statistics", "windows", "quality",
+        "dashboard", "peak_analysis", "raw_vs_adjusted",
+        "waveform_rejection", "pre_post_rejection",
+    ])
+
+    _SIZE_MAP = {
+        "default": (10, 6),
+        "compact": (8, 5),
+        "large": (14, 8),
+    }
+
+    @property
+    def figure_size(self):
+        """Return (width, height) in inches."""
+        return self._SIZE_MAP.get(self.size_preset, (10, 6))
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d.pop("_SIZE_MAP", None)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FigureExportSettings":
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+# ────────────────────────────────────────────────────────────────────
 # Output Settings
 # ────────────────────────────────────────────────────────────────────
 
@@ -558,6 +603,11 @@ class BatchConfig:
     # Output
     output: OutputSettings = field(default_factory=OutputSettings)
 
+    # Figure export
+    figure_export: FigureExportSettings = field(
+        default_factory=FigureExportSettings
+    )
+
     # Execution
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
 
@@ -577,6 +627,7 @@ class BatchConfig:
             "peaks": self.peaks.to_dict(),
             "qc": self.qc.to_dict(),
             "output": self.output.to_dict(),
+            "figure_export": self.figure_export.to_dict(),
             "execution": self.execution.to_dict(),
             "site_name": self.site_name,
             "output_dir": self.output_dir,
@@ -599,6 +650,9 @@ class BatchConfig:
             peaks=PeakSettings.from_dict(d.get("peaks", {})),
             qc=QCSettings.from_dict(d.get("qc", {})),
             output=OutputSettings.from_dict(d.get("output", {})),
+            figure_export=FigureExportSettings.from_dict(
+                d.get("figure_export", {})
+            ),
             execution=ExecutionSettings.from_dict(d.get("execution", {})),
             site_name=d.get("site_name", "SITE"),
             output_dir=d.get("output_dir", ""),

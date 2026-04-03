@@ -533,3 +533,100 @@ def _normalize_dt(dt_str: str) -> str:
             dt_str = dt_str[: -len(suffix)]
     dt = datetime.strptime(dt_str, _DT_FMT)
     return dt.strftime(_DT_FMT)
+
+
+# ────────────────────────────────────────────────────────────────────
+# Sensor Config Persistence
+# ────────────────────────────────────────────────────────────────────
+
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def save_sensor_config(
+    sensors: List[SensorDef],
+    json_path: str,
+) -> str:
+    """
+    Save sensor definitions to a JSON file.
+
+    Parameters
+    ----------
+    sensors : list[SensorDef]
+        Sensor definitions to persist.
+    json_path : str
+        Output file path.
+
+    Returns
+    -------
+    str
+        The output path.
+    """
+    os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+    data = [s.to_dict() for s in sensors]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    logger.info("Saved %d sensor configs to %s", len(sensors), json_path)
+    return json_path
+
+
+def load_sensor_config(json_path: str) -> List[SensorDef]:
+    """
+    Load sensor definitions from a JSON file.
+
+    Parameters
+    ----------
+    json_path : str
+        Path to the JSON file.
+
+    Returns
+    -------
+    list[SensorDef]
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    sensors = [SensorDef.from_dict(d) for d in data]
+    logger.info("Loaded %d sensor configs from %s", len(sensors), json_path)
+    return sensors
+
+
+# ────────────────────────────────────────────────────────────────────
+# Auto-distribute Stations to Time Windows
+# ────────────────────────────────────────────────────────────────────
+
+def auto_distribute_stations(
+    stations: List[StationDef],
+    windows: List[TimeWindowDef],
+    mode: str = "all",
+) -> Dict[str, List[int]]:
+    """
+    Auto-assign stations to time windows.
+
+    Parameters
+    ----------
+    stations : list[StationDef]
+        Available stations.
+    windows : list[TimeWindowDef]
+        Available time windows.
+    mode : str
+        ``"all"`` — assign all stations to all windows.
+        ``"round_robin"`` — distribute stations evenly across windows.
+
+    Returns
+    -------
+    dict[str, list[int]]
+        Maps window name → list of station numbers.
+    """
+    station_nums = [s.station_num for s in stations]
+
+    if mode == "round_robin":
+        assignments: Dict[str, List[int]] = {w.name: [] for w in windows}
+        for i, stn_num in enumerate(station_nums):
+            win = windows[i % len(windows)]
+            assignments[win.name].append(stn_num)
+        return assignments
+
+    # Default: all stations to all windows
+    return {w.name: list(station_nums) for w in windows}
