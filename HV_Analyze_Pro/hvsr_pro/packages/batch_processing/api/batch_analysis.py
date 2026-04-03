@@ -395,7 +395,11 @@ class BatchAnalysis:
 
         self._hvsr_results = process_batch_hvsr(
             data_results=self._data_results,
-            config=self._config,
+            processing=self._config.processing,
+            qc=self._config.qc,
+            peaks=self._config.peaks,
+            output=self._config.output,
+            base_output_dir=self._config.output_dir,
             parallel=parallel,
             n_workers=n_workers or self._config.execution.max_parallel,
             progress_callback=progress_callback,

@@ -32,16 +32,18 @@ class DataProcessWorker(QThread):
             self.finished.emit(False, f"Error: {str(e)}\n{traceback.format_exc()}")
 
     def _run_workflow(self):
-        """Execute the data processing workflow - creates ArrayData.mat for each (TimeWindow × Station)."""
-        from scipy.io import savemat
+        """Execute the data processing workflow - creates ArrayData.mat for each (TimeWindow × Station).
 
+        Delegates to the headless API (data_engine) for actual processing,
+        keeping QThread signal infrastructure for GUI progress.
+        """
         params = self.params
-
         self.progress.emit(5, "Parsing parameters...")
 
-        time_windows = params.get('time_windows', [])  # List of time windows with names
         station_files = params['station_files']  # Dict: {station_id: [file_list]}
         output_dir = params['output_dir']
+        time_windows = params.get('time_windows', [])
+        station_assignments = params.get('station_assignments', {})
 
         if not station_files:
             self.finished.emit(False, "No station files selected!")
@@ -49,21 +51,70 @@ class DataProcessWorker(QThread):
 
         os.makedirs(output_dir, exist_ok=True)
 
-        # When no time windows are provided, use the full file duration
-        use_full_duration = not time_windows
+        # ── Convert to API objects ──
+        from hvsr_pro.packages.batch_processing.api.config import (
+            StationDef, TimeWindowDef,
+        )
+        from hvsr_pro.packages.batch_processing.api.data_engine import (
+            prepare_station_data,
+        )
 
-        # Detect whether files are MiniSEED or other formats
-        all_miniseed = self._all_files_are_miniseed(station_files)
+        stations = []
+        for stn_id, files in sorted(station_files.items()):
+            stations.append(StationDef(
+                station_num=int(stn_id) if isinstance(stn_id, (int, float)) else stn_id,
+                station_name=f"STN{int(stn_id):02d}" if isinstance(stn_id, (int, float)) else str(stn_id),
+                files=list(files),
+            ))
 
-        if use_full_duration:
-            results = self._process_full_duration(station_files, output_dir, all_miniseed)
-        elif all_miniseed:
-            results = self._process_miniseed(station_files, time_windows, output_dir)
-        else:
-            results = self._process_generic(station_files, time_windows, output_dir)
+        api_windows = []
+        for tw in time_windows:
+            api_windows.append(TimeWindowDef(
+                name=tw.get('name', 'Window'),
+                start_utc=tw.get('start_utc', ''),
+                end_utc=tw.get('end_utc', ''),
+            ))
 
-        if results is None:
-            return  # error already emitted
+        # Convert station_assignments: {window_name: [station_nums]}
+        api_assignments = {}
+        for wname, stn_list in station_assignments.items():
+            api_assignments[wname] = [
+                int(s) if isinstance(s, (int, float)) else s
+                for s in stn_list
+            ]
+
+        self.progress.emit(10, "Starting data processing via API...")
+
+        # ── Call API ──
+        try:
+            data_results = prepare_station_data(
+                stations=stations,
+                time_windows=api_windows,
+                output_dir=output_dir,
+                station_assignments=api_assignments,
+                progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+            )
+        except Exception as e:
+            self.finished.emit(False, f"Data processing failed: {e}")
+            return
+
+        # ── Convert back to legacy result format ──
+        results = []
+        for dr in data_results:
+            if dr.success:
+                results.append({
+                    'station_id': dr.station_id,
+                    'station_name': dr.station_name,
+                    'window_name': dr.window_name,
+                    'dir': dr.output_dir,
+                    'mat_path': dr.mat_path,
+                    'fs': dr.sampling_rate,
+                    'data_length_sec': dr.data_length_seconds,
+                })
+
+        if not results:
+            self.finished.emit(False, "No data files were created successfully!")
+            return
 
         self.progress.emit(95, "Finalizing...")
         self.params['results'] = results

@@ -174,240 +174,115 @@ class BatchHVSRWorker(QThread):
     # ------------------------------------------------------------------
 
     def _process_single_task(self, task: BatchTask):
-        from hvsr_pro.core.data_structures import SeismicData, ComponentData
-        from hvsr_pro.processing import WindowManager, RejectionEngine, HVSRProcessor
+        """Process a single station through the HVSR pipeline via API.
+
+        Delegates the 10-step HVSR pipeline to
+        ``api.hvsr_engine.process_station_hvsr()``, then handles
+        figure generation and interactive data storage.
+        """
+        from hvsr_pro.packages.batch_processing.api.config import (
+            batch_config_from_worker_settings,
+        )
+        from hvsr_pro.packages.batch_processing.api.data_engine import DataResult
+        from hvsr_pro.packages.batch_processing.api.hvsr_engine import (
+            process_station_hvsr,
+        )
 
         settings = self.hvsr_settings
-        window_length = settings.get('window_length', 120)
-        overlap = settings.get('overlap', 0.5)
-        smoothing_bw = settings.get('konno_ohmachi_bandwidth', 40)
-        smoothing_method = settings.get('smoothing_method', 'konno_ohmachi')
         freq_min = settings.get('freq_min', 0.2)
         freq_max = settings.get('freq_max', 30.0)
-        n_frequencies = settings.get('n_frequencies', 300)
-        horizontal_method = settings.get('horizontal_method', 'geometric_mean')
-        taper = settings.get('taper', 'tukey')
-        detrend = settings.get('detrend', 'linear')
-        statistics_method = settings.get('statistics_method', 'lognormal')
-        std_ddof = settings.get('std_ddof', 1)
-        min_prominence = settings.get('min_prominence', 0.5)
-        min_amplitude = settings.get('min_amplitude', 2.0)
-        peak_basis = settings.get('peak_basis', 'median')
 
-        self.task_progress.emit(task.label or task.station_id, 10)
+        # ── Convert to API objects ──
+        config = batch_config_from_worker_settings(settings)
 
-        # 1. Load data
-        self.log_line.emit(f"  Loading: {task.mat_path}")
-        data = self._load_mat_to_seismic_data(task.mat_path)
-        if data is None:
-            raise ValueError(f"Could not load data from {task.mat_path}")
+        # Parse station_id as int if possible
+        try:
+            stn_num = int(str(task.station_id).replace('STN', '').replace('Station_', ''))
+        except (ValueError, TypeError):
+            stn_num = 0
 
-        self.task_progress.emit(task.label or task.station_id, 20)
-
-        # 2. Create windows
-        self.log_line.emit(
-            f"  Creating windows (length={window_length}s, overlap={overlap})")
-        manager = WindowManager(window_length=window_length, overlap=overlap)
-        windows = manager.create_windows(data, calculate_quality=True)
-        self.log_line.emit(f"  Created {windows.n_windows} windows")
-        self.task_progress.emit(task.label or task.station_id, 30)
-
-        # 3. QC (Phase 1 - pre-HVSR)
-        engine = RejectionEngine()
-        qc = settings.get('qc_settings', {})
-
-        if qc.get('qc_stalta', True):
-            from hvsr_pro.processing.rejection import STALTARejection
-            p = qc.get('sta_lta_params', {})
-            engine.add_algorithm(STALTARejection(
-                sta_length=p.get('sta_length', 1.0),
-                lta_length=p.get('lta_length', 30.0),
-                min_ratio=p.get('min_ratio', 0.2),
-                max_ratio=p.get('max_ratio', 2.5),
-            ))
-
-        if qc.get('qc_amplitude', True):
-            from hvsr_pro.processing.rejection import AmplitudeRejection
-            ap = qc.get('amplitude_params', {})
-            engine.add_algorithm(AmplitudeRejection(
-                max_amplitude=ap.get('max_amplitude'),
-                min_rms=ap.get('min_rms', 1e-10),
-                clipping_threshold=ap.get('clipping_threshold', 0.95),
-                clipping_max_percent=ap.get('clipping_max_percent', 0.01),
-                preset=ap.get('preset'),
-            ))
-
-        if qc.get('qc_statistical', False):
-            from hvsr_pro.processing.rejection import StatisticalOutlierRejection
-            p = qc.get('statistical_params', {})
-            engine.add_algorithm(StatisticalOutlierRejection(
-                method=p.get('method', 'iqr'),
-                threshold=p.get('threshold', 2.0),
-                metric=p.get('metric', 'max_deviation'),
-            ))
-
-        if engine.algorithms:
-            eval_result = engine.evaluate(windows, auto_apply=True)
-            self.log_line.emit(
-                f"  QC: {windows.n_active}/{windows.n_windows} windows passed")
-            self.log_line.emit(
-                f"  {RejectionEngine.format_qc_summary(eval_result)}")
-
-        self.task_progress.emit(task.label or task.station_id, 50)
-        if windows.n_active == 0:
-            raise ValueError("No windows passed QC")
-
-        # 4. HVSR
-        self.log_line.emit(
-            f"  Computing HVSR ({smoothing_method}, bw={smoothing_bw})")
-        processor = HVSRProcessor(
-            smoothing_method=smoothing_method,
-            smoothing_bandwidth=smoothing_bw,
-            horizontal_method=horizontal_method,
-            f_min=freq_min, f_max=freq_max,
-            n_frequencies=n_frequencies,
-            taper=taper,
-            detrend=detrend,
-            statistics_method=statistics_method,
-            std_ddof=std_ddof,
-            min_prominence=min_prominence,
-            min_amplitude=min_amplitude,
-            peak_basis=peak_basis,
+        data_result = DataResult(
+            station_id=stn_num,
+            station_name=task.station_id,
+            window_name=task.window_name,
+            output_dir=task.output_dir,
+            mat_path=task.mat_path,
+            sampling_rate=0.0,
+            data_length_seconds=0.0,
+            success=True,
         )
-        result = processor.process(
-            windows, detect_peaks_flag=True, save_window_spectra=True)
 
-        self.log_line.emit(
-            f"  HVSR computed: {result.valid_windows} valid windows")
-        if result.primary_peak:
-            self.log_line.emit(
-                f"  Primary peak: {result.primary_peak.frequency:.2f} Hz")
+        # ── Call API (Steps 1-9) ──
+        task_label = task.label or task.station_id
 
-        self.task_progress.emit(task.label or task.station_id, 75)
+        def _progress(label_str, pct):
+            self.task_progress.emit(task_label, pct)
+            if pct in (10, 20, 30, 50, 70, 85, 90, 100):
+                step_names = {
+                    10: "Loading data",
+                    20: "Creating windows",
+                    30: "Phase 1 QC",
+                    50: "Computing HVSR",
+                    70: "FDWRA",
+                    85: "Resampling",
+                    90: "Saving outputs",
+                    100: "Done",
+                }
+                self.log_line.emit(f"  {step_names.get(pct, '')} ({pct}%)")
 
-        # 5. Cox FDWRA (Phase 2 - post-HVSR)
-        if qc.get('qc_fdwra', True):
-            fdwra_p = qc.get('fdwra_params', {})
-            fdwra_result = engine.evaluate_fdwra(
-                windows, result,
-                n=fdwra_p.get('n', 2.0),
-                max_iterations=fdwra_p.get('max_iterations', 50),
-                min_iterations=fdwra_p.get('min_iterations', 1),
-                distribution_fn=fdwra_p.get('distribution_fn', 'lognormal'),
-                distribution_mc=fdwra_p.get('distribution_mc', 'lognormal'),
-                search_range_hz=(freq_min, freq_max),
-                auto_apply=True,
-            )
-            n_rej = fdwra_result.get('n_rejected', 0)
-            if n_rej > 0:
-                self.log_line.emit(
-                    f"  FDWRA: {n_rej} windows rejected, recomputing...")
-                if windows.n_active > 0:
-                    result = processor.process(
-                        windows, detect_peaks_flag=True,
-                        save_window_spectra=True)
-
-        # 6. Post-HVSR rejection (HVSR amplitude, flat peak, curve outlier)
-        has_post_hvsr = (
-            qc.get('qc_hvsr_amp', False) or
-            qc.get('qc_flat_peak', False) or
-            qc.get('qc_curve_outlier', True)
+        hvsr_result = process_station_hvsr(
+            data_result=data_result,
+            processing=config.processing,
+            qc=config.qc,
+            peaks=config.peaks,
+            output=config.output,
+            output_dir=task.output_dir,
+            progress_callback=_progress,
         )
-        if has_post_hvsr and windows.n_active > 0:
-            from hvsr_pro.processing.rejection import (
-                HVSRAmplitudeRejection, FlatPeakRejection,
-                CurveOutlierRejection,
-            )
-            engine.post_hvsr_algorithms = []
 
-            if qc.get('qc_hvsr_amp', False):
-                hp = qc.get('hvsr_amplitude_params', {})
-                engine.post_hvsr_algorithms.append(
-                    HVSRAmplitudeRejection(
-                        min_amplitude=hp.get('min_amplitude', 1.0),
-                        max_amplitude=hp.get('max_amplitude', 15.0),
-                    )
-                )
+        if not hvsr_result.success:
+            raise ValueError(hvsr_result.error)
 
-            if qc.get('qc_flat_peak', False):
-                fp = qc.get('flat_peak_params', {})
-                engine.post_hvsr_algorithms.append(
-                    FlatPeakRejection(
-                        flatness_threshold=fp.get('flatness_threshold', 0.15),
-                    )
-                )
+        # Log results
+        self.log_line.emit(
+            f"  HVSR computed: {hvsr_result.valid_windows} valid windows")
+        if hvsr_result.peaks:
+            pk = hvsr_result.peaks[0]
+            self.log_line.emit(
+                f"  Primary peak: {pk.frequency:.2f} Hz (A={pk.amplitude:.2f})")
 
-            if qc.get('qc_curve_outlier', True):
-                cp = qc.get('curve_outlier_params', {})
-                engine.post_hvsr_algorithms.append(
-                    CurveOutlierRejection(
-                        threshold=cp.get('threshold', 3.0),
-                        max_iterations=cp.get('max_iterations', 5),
-                        metric=cp.get('metric', 'mean'),
-                    )
-                )
-
-            post_result = engine.evaluate_post_hvsr(
-                windows, result, auto_apply=True,
-            )
-            n_post_rej = post_result.get('n_rejected', 0)
-            if n_post_rej > 0:
-                self.log_line.emit(
-                    f"  Post-HVSR QC: {n_post_rej} windows rejected, recomputing...")
-                if windows.n_active > 0:
-                    result = processor.process(
-                        windows, detect_peaks_flag=True,
-                        save_window_spectra=True)
-
-        self.task_progress.emit(task.label or task.station_id, 85)
-
-        # ── Build fig_label used across all output filenames ──
+        # ── Build fig_label (matches legacy naming) ──
         fig_label = task.station_id
         if task.window_name:
             fig_label = f"{task.station_id}_{task.window_name}"
 
-        # ── Resample to common log-spaced grid ──
-        raw_freq = result.frequencies
-        spec_arrays = {
-            'mean_hvsr': result.mean_hvsr,
-            'median_hvsr': result.median_hvsr,
-            'std_hvsr': result.std_hvsr,
-            'percentile_16': result.percentile_16,
-            'percentile_84': result.percentile_84,
+        # ── Figure generation ──
+        freq_rs = hvsr_result.frequencies
+        rs = {
+            'mean_hvsr': hvsr_result.mean_hvsr,
+            'median_hvsr': hvsr_result.median_hvsr,
+            'std_hvsr': hvsr_result.std_hvsr,
+            'percentile_16': hvsr_result.percentile_16,
+            'percentile_84': hvsr_result.percentile_84,
         }
-        freq_rs, rs = _resample_to_log_grid(
-            raw_freq, spec_arrays, freq_min, freq_max, n_points=300)
-
-        # Collect per-window HVSR curves (resampled)
-        per_window_hvsr = []
-        if result.window_spectra:
-            for ws in result.window_spectra:
-                if ws.is_valid and ws.hvsr is not None:
-                    per_window_hvsr.append(
-                        np.interp(freq_rs, ws.frequencies, ws.hvsr))
-
-        # ── Outputs ──
-        out_dir = task.output_dir
-        os.makedirs(out_dir, exist_ok=True)
-
-        tw = settings.get('window_length', 120)
-
-        self._save_result_json(out_dir, fig_label, result, task, windows,
-                               freq_rs, rs, per_window_hvsr)
-        self._save_median_mat(out_dir, fig_label, tw, freq_rs, rs,
-                              per_window_hvsr, result)
-        self._save_peaks_mat(out_dir, fig_label, result)
-        self._save_peaks_csv(out_dir, fig_label, result)
-        self._save_stats_csv(out_dir, fig_label, freq_rs, rs)
+        per_window_hvsr = hvsr_result.per_window_hvsr or []
 
         if settings.get('save_png', True) or settings.get('save_pdf', False):
             self._generate_all_figures(
-                out_dir, fig_label, freq_rs, rs, per_window_hvsr,
-                result, windows, data, settings)
+                task.output_dir, fig_label, freq_rs, rs, per_window_hvsr,
+                hvsr_result.hvsr_result,
+                hvsr_result.window_collection,
+                hvsr_result.seismic_data,
+                settings)
 
-        # Store intermediate data for interactive mode
-        combined_hv = np.column_stack(per_window_hvsr) if per_window_hvsr else rs['mean_hvsr'].reshape(-1, 1)
-        rejected_mask = np.array([not w.is_active() for w in windows.windows]) if windows else np.zeros(1, dtype=bool)
+        # ── Store intermediate data for interactive mode ──
+        combined_hv = (np.column_stack(per_window_hvsr)
+                       if per_window_hvsr
+                       else rs['mean_hvsr'].reshape(-1, 1))
+        rejected_mask = (hvsr_result.rejected_mask
+                         if hvsr_result.rejected_mask is not None
+                         else np.zeros(hvsr_result.total_windows, dtype=bool))
+
         station_data = {
             'task': task,
             'fig_label': fig_label,
@@ -415,15 +290,15 @@ class BatchHVSRWorker(QThread):
             'rs': rs,
             'combined_hv': combined_hv,
             'rejected_mask': rejected_mask,
-            'result': result,
-            'windows': windows,
-            'data': data,
-            'out_dir': out_dir,
+            'result': hvsr_result.hvsr_result,
+            'windows': hvsr_result.window_collection,
+            'data': hvsr_result.seismic_data,
+            'out_dir': task.output_dir,
             'per_window_hvsr': per_window_hvsr,
         }
         self.station_results.append(station_data)
 
-        self.task_progress.emit(task.label or task.station_id, 100)
+        self.task_progress.emit(task_label, 100)
 
     # ------------------------------------------------------------------
     #  Data loading
