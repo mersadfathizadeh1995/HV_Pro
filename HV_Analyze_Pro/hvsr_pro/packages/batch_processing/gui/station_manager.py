@@ -191,7 +191,7 @@ class StationManager:
             return
 
         # Show mapping dialog for review
-        from hvsr_pro.packages.batch_processing.dialogs.sensor_file_mapping import (
+        from hvsr_pro.packages.batch_processing.gui.dialogs.sensor_file_mapping import (
             SensorFileMappingDialog,
         )
         dlg = SensorFileMappingDialog(

@@ -229,7 +229,7 @@ def export_enhanced_curve(curves_dir: str, checked: list,
     """Generate a large publication-quality HVSR curve figure."""
     from matplotlib.figure import Figure as MplFigure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from hvsr_pro.packages.batch_processing.dialogs.figure_export_settings import DEFAULT_SETTINGS
+    from hvsr_pro.packages.batch_processing.gui.dialogs.figure_export_settings import DEFAULT_SETTINGS
 
     _log = log_fn or (lambda msg: None)
     s = dict(DEFAULT_SETTINGS)
@@ -241,7 +241,7 @@ def export_enhanced_curve(curves_dir: str, checked: list,
     array_names = stats['array_names']
     array_stats = stats['array_stats']
 
-    from hvsr_pro.packages.batch_processing.widgets.results_canvas import ARRAY_COLORS, _station_color, _compute_smart_ylim
+    from hvsr_pro.packages.batch_processing.gui.widgets.results_canvas import ARRAY_COLORS, _station_color, _compute_smart_ylim
 
     fig = MplFigure(figsize=(s['curve_fig_w'], s['curve_fig_h']), dpi=300)
     canvas = FigureCanvasAgg(fig)
@@ -304,7 +304,7 @@ def export_enhanced_histogram(hist_dir: str, checked: list,
     from matplotlib.figure import Figure as MplFigure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.ticker import MaxNLocator
-    from hvsr_pro.packages.batch_processing.dialogs.figure_export_settings import DEFAULT_SETTINGS
+    from hvsr_pro.packages.batch_processing.gui.dialogs.figure_export_settings import DEFAULT_SETTINGS
 
     _log = log_fn or (lambda msg: None)
     s = dict(DEFAULT_SETTINGS)

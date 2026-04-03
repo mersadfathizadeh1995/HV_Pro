@@ -23,11 +23,11 @@ import os
 import numpy as np
 
 # Package-local imports
-from hvsr_pro.packages.batch_processing.dialogs.hvsr_settings import HVSRSettingsDialog
-from hvsr_pro.packages.batch_processing.dialogs.time_windows import TimeWindowsDialog
-from hvsr_pro.packages.batch_processing.workers.data_worker import DataProcessWorker
-from hvsr_pro.packages.batch_processing.workers.hvsr_worker import BatchHVSRWorker, BatchTask
-from hvsr_pro.packages.batch_processing.station_manager import StationManager
+from hvsr_pro.packages.batch_processing.gui.dialogs.hvsr_settings import HVSRSettingsDialog
+from hvsr_pro.packages.batch_processing.gui.dialogs.time_windows import TimeWindowsDialog
+from hvsr_pro.packages.batch_processing.gui.workers.data_worker import DataProcessWorker
+from hvsr_pro.packages.batch_processing.gui.workers.hvsr_worker import BatchHVSRWorker, BatchTask
+from hvsr_pro.packages.batch_processing.gui.station_manager import StationManager
 from hvsr_pro.packages.batch_processing import report_export
 from hvsr_pro.packages.batch_processing import results_handler
 
@@ -470,7 +470,7 @@ class BatchProcessingWindow(QMainWindow):
     def _build_results_tab(self):
         """Build the Results & Summary tab."""
         try:
-            from hvsr_pro.packages.batch_processing.widgets import (
+            from hvsr_pro.packages.batch_processing.gui.widgets import (
                 ResultsTableWidget, ResultsCanvasWidget,
                 ResultsLayerTree, ResultsHistogramWidget,
             )
@@ -594,7 +594,7 @@ class BatchProcessingWindow(QMainWindow):
             QMessageBox.warning(self, "No Stations", "No stations selected for report.")
             return
 
-        from hvsr_pro.packages.batch_processing.dialogs.figure_export_settings import (
+        from hvsr_pro.packages.batch_processing.gui.dialogs.figure_export_settings import (
             FigureExportSettingsDialog, DEFAULT_SETTINGS,
         )
         dlg = FigureExportSettingsDialog(self, self._fig_export_settings)
@@ -896,7 +896,7 @@ class BatchProcessingWindow(QMainWindow):
 
     def _open_sensor_editor(self):
         """Open the Sensor Pattern Editor dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.sensor_pattern_editor import SensorPatternEditor
+        from hvsr_pro.packages.batch_processing.gui.dialogs.sensor_pattern_editor import SensorPatternEditor
         if not hasattr(self, '_sensor_manager'):
             from hvsr_pro.packages.batch_processing.sensor_config import SensorConfigManager
             self._sensor_manager = SensorConfigManager.default()
@@ -949,7 +949,7 @@ class BatchProcessingWindow(QMainWindow):
         )
 
     def _init_hvsr_defaults(self):
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import ALGORITHM_DEFAULTS
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import ALGORITHM_DEFAULTS
         self.hvsr_settings = {
             'freq_min': 0.2, 'freq_max': 30.0,
             'smoothing_type': 'Konno-Ohmachi', 'smoothing_bw': 40,
@@ -1262,7 +1262,7 @@ class BatchProcessingWindow(QMainWindow):
 
     def _run_interactive_peak_picking(self):
         """Open interactive peak-picking dialog for each station."""
-        from hvsr_pro.packages.batch_processing.dialogs.interactive_peak_dialog import (
+        from hvsr_pro.packages.batch_processing.gui.dialogs.interactive_peak_dialog import (
             InteractivePeakDialog)
 
         station_results = self.hvsr_worker.station_results

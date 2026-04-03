@@ -610,7 +610,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _init_qc_params(self):
         """Initialize QC algorithm parameters with defaults."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import ALGORITHM_DEFAULTS
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import ALGORITHM_DEFAULTS
         self._qc_params = {
             'amplitude': ALGORITHM_DEFAULTS['amplitude'].copy(),
             'sta_lta': ALGORITHM_DEFAULTS['sta_lta'].copy(),
@@ -622,14 +622,14 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_figure_export_dialog(self):
         """Open the detailed figure export configuration dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.figure_export_dialog import FigureExportDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.figure_export_dialog import FigureExportDialog
         dlg = FigureExportDialog(self, current_config=self._figure_export_config or None)
         if dlg.exec_() == QDialog.Accepted:
             self._figure_export_config = dlg.get_config()
 
     def _open_amplitude_settings(self):
         """Open amplitude check settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import AmplitudeSettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import AmplitudeSettingsDialog
         dialog = AmplitudeSettingsDialog(self, self._qc_params.get('amplitude', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -667,7 +667,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_stalta_settings(self):
         """Open STA/LTA settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import STALTASettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import STALTASettingsDialog
         dialog = STALTASettingsDialog(self, self._qc_params.get('sta_lta', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -676,7 +676,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_fdwra_settings(self):
         """Open FDWRA (Cox) settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import FDWRASettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import FDWRASettingsDialog
         dialog = FDWRASettingsDialog(self, self._qc_params.get('fdwra', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -685,7 +685,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_hvsr_amp_settings(self):
         """Open HVSR amplitude settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import HVSRAmplitudeSettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import HVSRAmplitudeSettingsDialog
         dialog = HVSRAmplitudeSettingsDialog(self, self._qc_params.get('hvsr_amplitude', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -694,7 +694,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_flat_peak_settings(self):
         """Open flat peak settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import FlatPeakSettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import FlatPeakSettingsDialog
         dialog = FlatPeakSettingsDialog(self, self._qc_params.get('flat_peak', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -703,7 +703,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_statistical_settings(self):
         """Open statistical outlier settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import StatisticalOutlierSettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import StatisticalOutlierSettingsDialog
         dialog = StatisticalOutlierSettingsDialog(self, self._qc_params.get('statistical_outlier', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()
@@ -712,7 +712,7 @@ class HVSRSettingsDialog(QDialog):
 
     def _open_curve_outlier_settings(self):
         """Open curve outlier settings dialog."""
-        from hvsr_pro.packages.batch_processing.dialogs.qc_settings import CurveOutlierSettingsDialog
+        from hvsr_pro.packages.batch_processing.gui.dialogs.qc_settings import CurveOutlierSettingsDialog
         dialog = CurveOutlierSettingsDialog(self, self._qc_params.get('curve_outlier', {}))
         if dialog.exec_() == QDialog.Accepted:
             result = dialog.get_result()

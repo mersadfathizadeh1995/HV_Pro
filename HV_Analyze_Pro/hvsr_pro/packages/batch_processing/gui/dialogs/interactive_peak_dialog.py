@@ -31,7 +31,7 @@ from matplotlib.figure import Figure as MplFig
 import matplotlib.lines as mlines
 from scipy.stats import lognorm
 
-from hvsr_pro.packages.batch_processing.widgets.window_layers_panel import (
+from hvsr_pro.packages.batch_processing.gui.widgets.window_layers_panel import (
     WindowLayersPanel,
 )
 
