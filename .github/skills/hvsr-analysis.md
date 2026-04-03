@@ -242,7 +242,7 @@ Returns a list of peaks, each with `frequency`, `amplitude`, `prominence`.
 | `base_name` | str | `"hvsr"` | Prefix for data file names |
 | `dpi` | int | 150 | Resolution for all plots |
 
-Generates up to **20 files** (5 data + 15 plots).
+Generates up to **21 files** (6 data + 15 plots).
 
 ### 3.7 Session Management
 
