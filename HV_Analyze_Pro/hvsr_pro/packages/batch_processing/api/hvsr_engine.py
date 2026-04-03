@@ -427,8 +427,18 @@ def process_station_hvsr(
 
         # Map processing settings to legacy format names
         smoothing_method = processing.smoothing_method
-        if smoothing_method == "Konno-Ohmachi":
-            smoothing_method = "konno_ohmachi"
+        _sm_lower = smoothing_method.lower().replace("-", "").replace("_", "").replace(" ", "")
+        _SM_MAP = {
+            "konnoohmachi": "konno_ohmachi",
+            "parzen": "parzen",
+            "savitzkygolay": "savitzky_golay",
+            "linearrectangular": "linear_rectangular",
+            "logrectangular": "log_rectangular",
+            "lineartriangular": "linear_triangular",
+            "logtriangular": "log_triangular",
+            "none": "none",
+        }
+        smoothing_method = _SM_MAP.get(_sm_lower, smoothing_method)
 
         horizontal_method = processing.horizontal_method
         _h_map = {

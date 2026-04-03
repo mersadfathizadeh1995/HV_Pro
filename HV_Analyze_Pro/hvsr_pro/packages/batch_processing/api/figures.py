@@ -189,6 +189,10 @@ def generate_station_figures(
         logger.warning("No per-window HVSR data for figures")
         return {}
 
+    # Convert list of arrays to 2-D numpy array
+    if isinstance(combined_hv, list):
+        combined_hv = np.column_stack(combined_hv)  # (n_freq, n_windows)
+
     # Ensure combined_hv is (n_freq, n_windows) shape
     if combined_hv.ndim == 2:
         if combined_hv.shape[0] != len(freq_ref):
@@ -199,7 +203,18 @@ def generate_station_figures(
 
     if rejected_mask is None:
         rejected_mask = np.zeros(n_windows, dtype=bool)
-    accepted_indices = [i for i in range(n_windows) if not rejected_mask[i]]
+
+    # per_window_hvsr may only contain valid windows (not all n_windows).
+    # Build accepted_indices relative to combined_hv's actual column count.
+    # Also fix rejected_mask to match combined_hv columns so the figure
+    # renderer correctly plots ALL valid curves (not skipping them).
+    n_valid = combined_hv.shape[1]
+    if n_valid < n_windows:
+        accepted_indices = list(range(n_valid))
+        # combined_hv only has valid windows — mark none as rejected
+        rejected_mask = np.zeros(n_valid, dtype=bool)
+    else:
+        accepted_indices = [i for i in range(n_windows) if not rejected_mask[i]]
 
     # Build hvsr_pro objects for detailed figures
     hvsr_result_obj = None
@@ -278,13 +293,28 @@ def _build_hvsr_pro_objects_from_engine_result(
     rejected_mask = hvsr_result.rejected_mask
     n_windows = hvsr_result.total_windows
 
-    if combined_hv is not None and combined_hv.ndim == 2:
+    # Convert list of arrays to 2-D numpy array
+    if isinstance(combined_hv, list) and len(combined_hv) > 0:
+        combined_hv = np.column_stack(combined_hv)  # (n_freq, n_windows)
+
+    if combined_hv is not None and hasattr(combined_hv, 'ndim') and combined_hv.ndim == 2:
         if combined_hv.shape[0] != len(freq_ref):
             combined_hv = combined_hv.T
 
     if rejected_mask is None:
         rejected_mask = np.zeros(n_windows, dtype=bool)
-    accepted_indices = [i for i in range(n_windows) if not rejected_mask[i]]
+
+    n_valid = combined_hv.shape[1] if (combined_hv is not None and hasattr(combined_hv, 'shape') and combined_hv.ndim == 2) else 0
+    if n_valid > 0 and n_valid < n_windows:
+        accepted_indices = list(range(n_valid))
+        # Keep original rejected_mask at full length (n_windows) — needed by
+        # build_hvsr_pro_objects which loops over n_windows to build
+        # WindowCollection entries.  Pad combined_hv with zero columns so
+        # its column count matches n_windows for the hvsr_pro builder.
+        pad_cols = n_windows - n_valid
+        combined_hv = np.hstack([combined_hv, np.zeros((combined_hv.shape[0], pad_cols))])
+    else:
+        accepted_indices = [i for i in range(n_windows) if not rejected_mask[i]]
     rejected_reasons = hvsr_result.rejected_reasons or [""] * n_windows
 
     # Extract raw arrays from seismic data if available
@@ -305,6 +335,18 @@ def _build_hvsr_pro_objects_from_engine_result(
         n_per_win = int(sample_rate * hvsr_result.window_length)
     else:
         n_per_win = len(array_z) // max(n_windows, 1)
+
+    # Cap n_windows to what the raw data can actually support
+    if n_per_win > 0 and len(array_z) > 0:
+        max_complete_windows = len(array_z) // n_per_win
+        if n_windows > max_complete_windows:
+            n_windows = max_complete_windows
+            # Trim rejected_mask and rejected_reasons to match
+            rejected_mask = rejected_mask[:n_windows]
+            rejected_reasons = rejected_reasons[:n_windows]
+            # Ensure combined_hv has at least n_windows columns
+            if combined_hv.shape[1] > n_windows:
+                combined_hv = combined_hv[:, :n_windows]
 
     return build_hvsr_pro_objects(
         freq_ref=freq_ref,
