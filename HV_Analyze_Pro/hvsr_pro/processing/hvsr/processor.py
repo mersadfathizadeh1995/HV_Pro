@@ -152,7 +152,8 @@ class HVSRProcessor:
                  f_min: float = 0.2,
                  f_max: float = 30.0,
                  n_frequencies: int = 300,
-                 parallel: bool = False,
+                 parallel: bool = True,
+                 n_cores: Optional[int] = None,
                  horizontal_method: str = 'geometric_mean',
                  taper: Optional[str] = 'tukey',
                  detrend: str = 'linear',
@@ -176,7 +177,8 @@ class HVSRProcessor:
             f_min: Minimum frequency in Hz (default: 0.2)
             f_max: Maximum frequency in Hz (default: 30.0)
             n_frequencies: Number of frequency points (default: 300)
-            parallel: Enable parallel processing for windows (default: False)
+            parallel: Enable parallel processing for windows (default: True)
+            n_cores: Number of worker processes (default: cpu_count - 1)
             horizontal_method: Method for combining horizontal components
             taper: Taper window type ('hann', 'hamming', 'blackman', 'tukey', None)
             detrend: Detrend method ('linear', 'mean', 'none'). Default 'linear'
@@ -197,6 +199,7 @@ class HVSRProcessor:
         self.f_max = f_max
         self.n_frequencies = n_frequencies
         self.parallel = parallel
+        self.n_cores = n_cores
         self.horizontal_method = horizontal_method
         self.taper = taper if taper else None
         self.detrend = detrend
@@ -252,9 +255,8 @@ class HVSRProcessor:
         hvsr_curves = []
         failed_windows = []
         
-        if self.parallel and len(window_list) > 20:
-            # Parallel processing for large datasets
-            n_workers = max(1, cpu_count() - 1)
+        if self.parallel and len(window_list) > 4:
+            n_workers = self.n_cores if self.n_cores else max(1, cpu_count() - 1)
             logger.info(f"Using parallel processing with {n_workers} workers")
             
             args_list = [
@@ -301,22 +303,25 @@ class HVSRProcessor:
         hvsr_array = np.array(hvsr_curves)
         
         # Compute statistics
-        mean_hvsr = np.mean(hvsr_array, axis=0)
-        std_hvsr = np.std(hvsr_array, axis=0, ddof=self.std_ddof)
-        
         if self.statistics_method == 'lognormal':
-            # Lognormal statistics (matches old system)
+            # Log-space statistics: compute parameters directly from per-window
+            # log(H/V) values.  This is robust to outlier windows because the
+            # mean and std are estimated in log-space before exponentiating.
             from scipy.stats import lognorm
-            # Guard against zero/negative means
-            safe_mean = np.maximum(mean_hvsr, 1e-10)
-            safe_std = np.maximum(std_hvsr, 1e-10)
-            zeta = np.sqrt(np.log1p((safe_std ** 2) / (safe_mean ** 2)))
-            lam = np.log(safe_mean) - 0.5 * zeta ** 2
-            median_hvsr = lognorm.median(s=zeta, scale=np.exp(lam))
-            percentile_16, percentile_84 = (
-                lognorm.ppf(p, s=zeta, scale=np.exp(lam)) for p in (0.16, 0.84))
+            safe_hvsr = np.maximum(hvsr_array, 1e-10)
+            log_hvsr = np.log(safe_hvsr)
+            lam = np.mean(log_hvsr, axis=0)
+            zeta = np.std(log_hvsr, axis=0, ddof=self.std_ddof)
+
+            median_hvsr = np.exp(lam)
+            mean_hvsr = np.exp(lam + 0.5 * zeta ** 2)
+            std_hvsr = mean_hvsr * np.sqrt(np.expm1(zeta ** 2))
+            percentile_16 = lognorm.ppf(0.16, s=zeta, scale=np.exp(lam))
+            percentile_84 = lognorm.ppf(0.84, s=zeta, scale=np.exp(lam))
         else:
             # Direct numpy statistics
+            mean_hvsr = np.mean(hvsr_array, axis=0)
+            std_hvsr = np.std(hvsr_array, axis=0, ddof=self.std_ddof)
             median_hvsr = np.median(hvsr_array, axis=0)
             percentile_16 = np.percentile(hvsr_array, 16, axis=0)
             percentile_84 = np.percentile(hvsr_array, 84, axis=0)

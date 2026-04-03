@@ -3,439 +3,286 @@ HVSR Pro Processing Worker
 ==========================
 
 Background thread for HVSR processing pipeline.
+Delegates to ``hvsr_pro.api.HVSRAnalysis`` for the actual computation.
 """
 
-import numpy as np
+import traceback
 
 try:
     from PyQt5.QtCore import QThread, pyqtSignal
     HAS_PYQT5 = True
 except ImportError:
     HAS_PYQT5 = False
-    # Provide dummy classes for when PyQt5 is not available
     class QThread:
         pass
     class pyqtSignal:
         def __init__(self, *args): pass
 
 from hvsr_pro.core import HVSRDataHandler
-from hvsr_pro.processing import WindowManager, RejectionEngine, HVSRProcessor
-from hvsr_pro.processing.hvsr import HVSRResult
 
 
 class ProcessingThread(QThread):
     """Background thread for HVSR processing with multi-file support."""
-    
+
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(object, object, object)  # result, windows, data
     error = pyqtSignal(str)
-    
-    def __init__(self, file_input, window_length, overlap, smoothing_bandwidth, 
+
+    def __init__(self, file_input, window_length, overlap, smoothing_bandwidth,
                  load_mode='single', time_range=None,
-                 freq_min=0.2, freq_max=20.0, n_frequencies=100, 
+                 freq_min=0.2, freq_max=20.0, n_frequencies=100,
                  qc_mode='balanced', apply_cox_fdwra=False,
-                 use_parallel=False, n_cores=None, 
+                 use_parallel=False, n_cores=None,
                  manual_sampling_rate=None, custom_qc_settings=None,
                  cox_fdwra_settings=None, smoothing_method='konno_ohmachi',
                  file_format='auto', degrees_from_north=None,
                  qc_enabled=True, phase1_enabled=True, phase2_enabled=True,
                  horizontal_method='geometric_mean'):
         super().__init__()
-        self.file_input = file_input  # Can be str, list, or dict
-        self.load_mode = load_mode  # 'single', 'multi_type1', 'multi_type2', 'multi_component'
-        self.format = file_format  # File format for multi-component loading
-        self.degrees_from_north = degrees_from_north  # Sensor orientation for multi-component
+        self.file_input = file_input
+        self.load_mode = load_mode
+        self.format = file_format
+        self.degrees_from_north = degrees_from_north
         self.window_length = window_length
         self.overlap = overlap
-        self.smoothing_method = smoothing_method  # Smoothing method name
+        self.smoothing_method = smoothing_method
         self.smoothing_bandwidth = smoothing_bandwidth
-        self.horizontal_method = horizontal_method  # Horizontal combination method
-        self.time_range = time_range  # Optional time range filter
+        self.horizontal_method = horizontal_method
+        self.time_range = time_range
         self.freq_min = freq_min
         self.freq_max = freq_max
         self.n_frequencies = n_frequencies
-        self.qc_mode = qc_mode  # QC strictness mode
-        self.apply_cox_fdwra = apply_cox_fdwra  # Apply Cox FDWRA after HVSR
-        self.use_parallel = use_parallel  # Enable parallel processing
-        self.n_cores = n_cores  # Number of cores to use for parallel processing
-        self.manual_sampling_rate = manual_sampling_rate  # Optional manual sampling rate override
-        self.custom_qc_settings = custom_qc_settings  # Optional custom QC settings
-        # Cox FDWRA settings: {'n': float, 'max_iterations': int, 'min_iterations': int, 'distribution': str}
+        self.qc_mode = qc_mode
+        self.apply_cox_fdwra = apply_cox_fdwra
+        self.use_parallel = use_parallel
+        self.n_cores = n_cores
+        self.manual_sampling_rate = manual_sampling_rate
+        self.custom_qc_settings = custom_qc_settings
         self.cox_fdwra_settings = cox_fdwra_settings or {}
-        
-        # Phase-level QC control
-        self.qc_enabled = qc_enabled  # Master QC enable/disable
-        self.phase1_enabled = phase1_enabled  # Phase 1 (Pre-HVSR) enable
-        self.phase2_enabled = phase2_enabled  # Phase 2 (Post-HVSR) enable
-    
+        self.qc_enabled = qc_enabled
+        self.phase1_enabled = phase1_enabled
+        self.phase2_enabled = phase2_enabled
+
+    # ------------------------------------------------------------------
+    # public
+    # ------------------------------------------------------------------
+
     def run(self):
-        """Execute processing pipeline with multi-file support."""
+        """Execute the processing pipeline via the headless API."""
         try:
-            # Step 1: Load data
-            handler = HVSRDataHandler()
-            
-            if self.load_mode == 'single':
-                self.progress.emit(10, "Loading seismic data...")
-                data = handler.load_data(self.file_input)
-                
-            elif self.load_mode == 'multi_type1':
-                self.progress.emit(10, f"Loading {len(self.file_input)} MiniSEED files (Type 1)...")
-                data = handler.load_multi_miniseed_type1(self.file_input)
-                
-            elif self.load_mode == 'multi_type2':
-                complete_groups = [g for g in self.file_input.values() 
-                                 if 'E' in g and 'N' in g and 'Z' in g]
-                self.progress.emit(10, f"Loading {len(complete_groups)} file groups (Type 2)...")
-                data = handler.load_multi_miniseed_type2(self.file_input)
-            
-            elif self.load_mode == 'multi_component':
-                # Multi-component file loading (SAC, PEER formats)
-                # file_input can be dict {'N': path, 'E': path, 'Z': path} or list of paths
-                self.progress.emit(10, "Loading multi-component files...")
-                if isinstance(self.file_input, dict):
-                    # Extract files in order N, E, Z
-                    files = [str(self.file_input.get(c)) for c in ['N', 'E', 'Z'] if c in self.file_input]
-                else:
-                    files = self.file_input
-                
-                # Get format and orientation if available
-                file_format = getattr(self, 'format', 'auto')
-                degrees_from_north = getattr(self, 'degrees_from_north', None)
-                
-                data = handler.load_multi_component(
-                    files,
-                    format=file_format,
-                    degrees_from_north=degrees_from_north
-                )
-            
-            else:
-                raise ValueError(f"Unknown load mode: {self.load_mode}")
-
-            # Step 1.2: Apply manual sampling rate override (if enabled)
-            if self.manual_sampling_rate:
-                self.progress.emit(12, f"Overriding sampling rate to {self.manual_sampling_rate:.4f} Hz...")
-                data.east.sampling_rate = self.manual_sampling_rate
-                data.north.sampling_rate = self.manual_sampling_rate
-                data.vertical.sampling_rate = self.manual_sampling_rate
-
-            # Step 1.5: Apply time range slicing (if enabled)
-            if self.time_range and self.time_range.get('enabled'):
-                self.progress.emit(15, "Applying time range filter...")
-                
-                start_local = self.time_range['start']
-                end_local = self.time_range['end']
-                tz_offset = self.time_range['timezone_offset']
-                tz_name = self.time_range.get('timezone_name', f'UTC{tz_offset:+.0f}')
-                
-                self.progress.emit(17, f"Time range: {start_local.strftime('%Y-%m-%d %H:%M')} to {end_local.strftime('%H:%M')} ({tz_name})")
-                
-                try:
-                    # Apply time slicing
-                    data = handler.slice_by_time(data, start_local, end_local, int(tz_offset))
-                    
-                    duration_hours = data.duration / 3600
-                    self.progress.emit(20, f"Sliced to {duration_hours:.2f} hours")
-                    
-                except ValueError as e:
-                    # Time range error - show detailed message
-                    raise ValueError(f"Time range error: {str(e)}")
-            
-            # Step 2: Create windows
-            self.progress.emit(30, "Creating windows...")
-            manager = WindowManager(
-                window_length=self.window_length,
-                overlap=self.overlap
+            config = self._build_config()
+            analysis = self._build_analysis(config)
+            result = analysis.process(
+                progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
             )
-            windows = manager.create_windows(data, calculate_quality=True)
-            
-            # Step 3: Quality control
-            engine = RejectionEngine()
 
-            # Check master QC enable flag first
-            qc_disabled = not self.qc_enabled
-            if self.custom_qc_settings:
-                # Also check settings-level enable flag
-                qc_disabled = qc_disabled or not self.custom_qc_settings.get('enabled', True)
-            
-            eval_result = None
-            if qc_disabled:
-                self.progress.emit(50, "Quality control disabled (skipping)...")
-            elif not self.phase1_enabled:
-                self.progress.emit(50, "Phase 1 QC disabled (skipping pre-HVSR rejection)...")
-            elif self.qc_mode == 'sesame':
-                self.progress.emit(50, "Applying quality control (SESAME standard)...")
-                engine.create_default_pipeline(mode='sesame')
-                eval_result = engine.evaluate(windows, auto_apply=True)
-            elif self.qc_mode == 'custom' and self.custom_qc_settings:
-                self.progress.emit(50, "Applying quality control (custom settings)...")
-                self._apply_custom_qc(engine, self.custom_qc_settings)
-                eval_result = engine.evaluate(windows, auto_apply=True)
-            elif self.qc_mode == 'custom':
-                self.progress.emit(50, "Custom QC mode with no settings (skipping pre-HVSR)...")
-            else:
-                self.progress.emit(50, f"Unknown QC mode '{self.qc_mode}', using SESAME standard...")
-                engine.create_default_pipeline(mode='sesame')
-                eval_result = engine.evaluate(windows, auto_apply=True)
-            
-            # Log QC results with per-algorithm breakdown
-            qc_msg = f"QC: {windows.n_active}/{windows.n_windows} windows active ({windows.acceptance_rate*100:.1f}%)"
-            if eval_result is not None:
-                qc_msg += f"  [{RejectionEngine.format_qc_summary(eval_result)}]"
-            self.progress.emit(60, qc_msg)
-            
-            # Check if NO windows passed QC
-            if windows.n_active == 0:
-                self.progress.emit(65, f"ERROR: No windows passed QC (0/{windows.n_windows})")
-                
-                # Create a dummy result with valid but empty data to prevent crash
-                # Create frequency array
-                frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
-                
-                # Create dummy HVSR values (all ones to avoid division issues)
-                dummy_hvsr = np.ones_like(frequencies)
-                
-                result = HVSRResult(
-                    frequencies=frequencies,
-                    mean_hvsr=dummy_hvsr,
-                    median_hvsr=dummy_hvsr,
-                    std_hvsr=np.zeros_like(frequencies),
-                    percentile_16=dummy_hvsr * 0.9,
-                    percentile_84=dummy_hvsr * 1.1,
-                    window_spectra=[],
-                    peaks=[],
-                    total_windows=windows.n_windows,
-                    valid_windows=0,
-                    metadata={'qc_failure': True, 'message': 'No windows passed QC'}
-                )
-                
-                # Emit error but continue to show the empty result
-                self.error.emit("No windows passed QC. Please adjust QC settings or check data quality.")
-                self.finished.emit(result, windows, data)
-                return
-            
-            # If too many rejected, warn but continue
-            if windows.n_active < 10 and windows.n_windows > 50:
-                self.progress.emit(65, f"WARNING: Only {windows.n_active} windows passed QC. Consider relaxing quality settings.")
-            
-            # Step 4: Compute HVSR
-            if self.use_parallel:
-                cores_msg = f" using {self.n_cores} cores" if self.n_cores else ""
-                self.progress.emit(70, f"Computing HVSR (parallel processing{cores_msg})...")
-            else:
-                self.progress.emit(70, "Computing HVSR...")
+            if result.qc_summary.errors:
+                self.error.emit(result.qc_summary.errors[0])
 
-            # Note: n_cores is stored for future use when HVSRProcessor supports it
-            # Currently, parallel processing uses all available cores
-            processor = HVSRProcessor(
-                smoothing_method=self.smoothing_method,
-                smoothing_bandwidth=self.smoothing_bandwidth,
-                horizontal_method=self.horizontal_method,
-                f_min=self.freq_min,
-                f_max=self.freq_max,
-                n_frequencies=self.n_frequencies,
-                parallel=self.use_parallel
+            self.finished.emit(result.hvsr_result, result.windows, result.data)
+
+        except Exception as exc:
+            detail = f"{exc}\n\nTraceback:\n{traceback.format_exc()}"
+            self.error.emit(detail)
+
+    # ------------------------------------------------------------------
+    # config bridge
+    # ------------------------------------------------------------------
+
+    def _build_config(self):
+        """Map legacy thread attributes into ``HVSRAnalysisConfig``."""
+        from hvsr_pro.api.config import (
+            HVSRAnalysisConfig,
+            ProcessingConfig,
+            DataLoadConfig,
+            TimeRangeConfig,
+            QCConfig,
+            CoxFDWRAConfig,
+            AmplitudeAlgoConfig,
+            QualityThresholdAlgoConfig,
+            STALTAAlgoConfig,
+            FrequencyDomainAlgoConfig,
+            StatisticalOutlierAlgoConfig,
+            HVSRAmplitudeAlgoConfig,
+            FlatPeakAlgoConfig,
+            CurveOutlierAlgoConfig,
+        )
+
+        processing = ProcessingConfig(
+            window_length=self.window_length,
+            overlap=self.overlap,
+            smoothing_method=self.smoothing_method,
+            smoothing_bandwidth=self.smoothing_bandwidth,
+            horizontal_method=self.horizontal_method,
+            freq_min=self.freq_min,
+            freq_max=self.freq_max,
+            n_frequencies=self.n_frequencies,
+            manual_sampling_rate=self.manual_sampling_rate,
+            use_parallel=self.use_parallel,
+            n_cores=self.n_cores,
+        )
+
+        data_load = DataLoadConfig(
+            load_mode=self.load_mode,
+            file_format=self.format,
+            degrees_from_north=self.degrees_from_north,
+        )
+
+        time_range = TimeRangeConfig()
+        if self.time_range and self.time_range.get('enabled'):
+            time_range.enabled = True
+            s = self.time_range.get('start')
+            e = self.time_range.get('end')
+            time_range.start = s.isoformat() if hasattr(s, 'isoformat') else str(s) if s else None
+            time_range.end = e.isoformat() if hasattr(e, 'isoformat') else str(e) if e else None
+            time_range.timezone_offset = int(self.time_range.get('timezone_offset', 0))
+            time_range.timezone_name = self.time_range.get('timezone_name')
+
+        qc = self._build_qc_config()
+
+        return HVSRAnalysisConfig(
+            processing=processing,
+            data_load=data_load,
+            time_range=time_range,
+            qc=qc,
+        )
+
+    def _build_qc_config(self):
+        """Translate the legacy QC flags + custom_qc_settings dict into ``QCConfig``."""
+        from hvsr_pro.api.config import (
+            QCConfig,
+            CoxFDWRAConfig,
+            AmplitudeAlgoConfig,
+            QualityThresholdAlgoConfig,
+            STALTAAlgoConfig,
+            FrequencyDomainAlgoConfig,
+            StatisticalOutlierAlgoConfig,
+            HVSRAmplitudeAlgoConfig,
+            FlatPeakAlgoConfig,
+            CurveOutlierAlgoConfig,
+        )
+
+        qc = QCConfig(
+            enabled=self.qc_enabled,
+            mode=self.qc_mode if self.qc_mode in ('sesame', 'custom') else 'sesame',
+            phase1_enabled=self.phase1_enabled,
+            phase2_enabled=self.phase2_enabled,
+        )
+
+        # Cox FDWRA
+        cox_settings = self.cox_fdwra_settings or {}
+        cox_enabled = self.apply_cox_fdwra or self.qc_mode == 'sesame'
+        if self.custom_qc_settings:
+            fdwra_s = self.custom_qc_settings.get('algorithms', {}).get('fdwra', {})
+            cox_enabled = cox_enabled or fdwra_s.get('enabled', False)
+
+        qc.cox_fdwra = CoxFDWRAConfig(
+            enabled=cox_enabled,
+            n=cox_settings.get('n', 2.0),
+            max_iterations=cox_settings.get('max_iterations', 50),
+            min_iterations=cox_settings.get('min_iterations', 1),
+            distribution=cox_settings.get('distribution', 'lognormal'),
+        )
+
+        # Populate per-algorithm settings from the custom_qc_settings dict
+        if self.custom_qc_settings and self.qc_mode == 'custom':
+            algos = self.custom_qc_settings.get('algorithms', {})
+
+            a = algos.get('amplitude', {})
+            ap = a.get('params', {})
+            qc.amplitude = AmplitudeAlgoConfig(
+                enabled=a.get('enabled', False),
+                max_amplitude=ap.get('max_amplitude'),
+                min_rms=ap.get('min_rms', 1e-10),
+                clipping_threshold=ap.get('clipping_threshold', 0.95),
             )
-            result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
-            
-            # Step 5: Apply Cox FDWRA (if enabled and Phase 2 is enabled)
-            apply_fdwra = self.apply_cox_fdwra or self.qc_mode == 'sesame'
-            if self.custom_qc_settings:
-                # Check FDWRA enabled in custom settings
-                fdwra_settings = self.custom_qc_settings.get('algorithms', {}).get('fdwra', {})
-                apply_fdwra = apply_fdwra or fdwra_settings.get('enabled', False)
-            
-            # Phase 2 must be enabled and master QC must be enabled
-            apply_fdwra = apply_fdwra and self.qc_enabled and self.phase2_enabled
-            
-            if apply_fdwra:
-                self.progress.emit(85, "Applying Cox FDWRA (peak consistency)...")
-                
-                # Store raw spectra BEFORE Cox FDWRA rejection (for comparison plot)
-                raw_window_spectra = list(result.window_spectra)  # Copy before modification
-                
-                # Get Cox FDWRA settings (with defaults)
-                cox_n = self.cox_fdwra_settings.get('n', 2.0)
-                cox_max_iter = self.cox_fdwra_settings.get('max_iterations', 50)
-                cox_min_iter = self.cox_fdwra_settings.get('min_iterations', 1)
-                cox_dist = self.cox_fdwra_settings.get('distribution', 'lognormal')
-                
-                fdwra_result = engine.evaluate_fdwra(
-                    windows,
-                    result,
-                    n=cox_n,
-                    max_iterations=cox_max_iter,
-                    min_iterations=cox_min_iter,
-                    distribution_fn=cox_dist,
-                    distribution_mc=cox_dist,
-                    search_range_hz=(self.freq_min, self.freq_max),
-                    auto_apply=True
-                )
-                
-                n_rejected = fdwra_result['n_rejected']
-                converged = fdwra_result['converged']
-                iterations = fdwra_result['iterations']
-                
-                self.progress.emit(90, f"Cox FDWRA: {n_rejected} windows rejected, converged in {iterations} iterations")
-                
-                # Recompute HVSR with updated window states
-                if n_rejected > 0:
-                    # Check if Cox FDWRA rejected ALL windows
-                    if windows.n_active == 0:
-                        self.progress.emit(92, f"ERROR: Cox FDWRA rejected all windows")
-                        
-                        # Create dummy result like before
-                        frequencies = np.logspace(np.log10(self.freq_min), np.log10(self.freq_max), self.n_frequencies)
-                        dummy_hvsr = np.ones_like(frequencies)
-                        
-                        result = HVSRResult(
-                            frequencies=frequencies,
-                            mean_hvsr=dummy_hvsr,
-                            median_hvsr=dummy_hvsr,
-                            std_hvsr=np.zeros_like(frequencies),
-                            percentile_16=dummy_hvsr * 0.9,
-                            percentile_84=dummy_hvsr * 1.1,
-                            window_spectra=[],
-                            peaks=[],
-                            total_windows=windows.n_windows,
-                            valid_windows=0,
-                            metadata={'qc_failure': True, 'message': 'Cox FDWRA rejected all windows'}
-                        )
-                        
-                        self.error.emit("Cox FDWRA rejected all windows. Please disable Cox FDWRA or adjust settings.")
-                        self.finished.emit(result, windows, data)
-                        return
-                    else:
-                        self.progress.emit(92, "Recomputing HVSR after Cox FDWRA...")
-                        result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
-                        
-                        # Store raw spectra in result metadata for comparison plot
-                        result.metadata['raw_window_spectra'] = raw_window_spectra
-                else:
-                    # No rejection, raw and final are the same
-                    result.metadata['raw_window_spectra'] = raw_window_spectra
-            
-            # Step 6: Apply post-HVSR algorithms (HVSR amplitude, flat peak, curve outlier)
-            if self.qc_enabled and self.phase2_enabled:
-                if self.custom_qc_settings:
-                    algos = self.custom_qc_settings.get('algorithms', {})
-                else:
-                    algos = {
-                        'curve_outlier': {'enabled': True, 'params': {
-                            'threshold': 3.0, 'max_iterations': 5, 'metric': 'mean'
-                        }}
-                    }
-                
-                hvsr_amp = algos.get('hvsr_amplitude', {})
-                flat_peak = algos.get('flat_peak', {})
-                curve_outlier = algos.get('curve_outlier', {})
-                
-                has_post_hvsr = (
-                    hvsr_amp.get('enabled', False) or 
-                    flat_peak.get('enabled', False) or
-                    curve_outlier.get('enabled', False)
-                )
-                
-                if has_post_hvsr and windows.n_active > 0:
-                    from hvsr_pro.processing.rejection import (
-                        HVSRAmplitudeRejection, FlatPeakRejection, CurveOutlierRejection
-                    )
-                    
-                    self.progress.emit(95, "Applying post-HVSR rejection algorithms...")
-                    
-                    engine.post_hvsr_algorithms = []
-                    
-                    if hvsr_amp.get('enabled', False):
-                        params = hvsr_amp.get('params', {})
-                        engine.post_hvsr_algorithms.append(
-                            HVSRAmplitudeRejection(min_amplitude=params.get('min_amplitude', 1.0))
-                        )
-                    
-                    if flat_peak.get('enabled', False):
-                        params = flat_peak.get('params', {})
-                        engine.post_hvsr_algorithms.append(
-                            FlatPeakRejection(flatness_threshold=params.get('flatness_threshold', 0.15))
-                        )
-                    
-                    if curve_outlier.get('enabled', False):
-                        params = curve_outlier.get('params', {})
-                        engine.post_hvsr_algorithms.append(
-                            CurveOutlierRejection(
-                                threshold=params.get('threshold', 3.0),
-                                max_iterations=params.get('max_iterations', 5),
-                                metric=params.get('metric', 'mean'),
-                            )
-                        )
-                    
-                    post_result = engine.evaluate_post_hvsr(windows, result, auto_apply=True)
-                    n_post_rejected = post_result.get('n_rejected', 0)
-                    
-                    if n_post_rejected > 0:
-                        self.progress.emit(97, f"Post-HVSR: {n_post_rejected} windows rejected, recomputing...")
-                        if windows.n_active > 0:
-                            result = processor.process(windows, detect_peaks_flag=True, save_window_spectra=True)
-                    
-                    self.progress.emit(98, f"Post-HVSR QC complete ({windows.n_active} windows remaining)")
-            
-            self.progress.emit(100, "Complete!")
-            self.finished.emit(result, windows, data)
-            
-        except Exception as e:
-            import traceback
-            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            self.error.emit(error_detail)
 
-    def _apply_custom_qc(self, engine, settings):
-        """Apply custom QC settings to rejection engine.
-        
-        Handles both key naming conventions:
-        - 'spectral_spike' (from unified panel) and 'frequency_domain' (legacy)
-        - 'fdwra' and 'cox_fdwra' (different naming in different panels)
-        """
-        from hvsr_pro.processing.rejection import QualityThresholdRejection, StatisticalOutlierRejection
-        from hvsr_pro.processing.rejection import STALTARejection, FrequencyDomainRejection, AmplitudeRejection
+            qt = algos.get('quality_threshold', {})
+            qtp = qt.get('params', {})
+            qc.quality_threshold = QualityThresholdAlgoConfig(
+                enabled=qt.get('enabled', False),
+                threshold=qtp.get('threshold', 0.5),
+            )
 
-        algorithms = settings.get('algorithms', {})
+            sl = algos.get('sta_lta', {})
+            slp = sl.get('params', {})
+            qc.sta_lta = STALTAAlgoConfig(
+                enabled=sl.get('enabled', False),
+                sta_length=slp.get('sta_length', 1.0),
+                lta_length=slp.get('lta_length', 30.0),
+                min_ratio=slp.get('min_ratio', 0.2),
+                max_ratio=slp.get('max_ratio', 2.5),
+            )
 
-        # Amplitude rejection
-        amp_settings = algorithms.get('amplitude', {})
-        if amp_settings.get('enabled', False):
-            params = amp_settings.get('params', {})
-            engine.add_algorithm(AmplitudeRejection(
-                max_amplitude=params.get('max_amplitude'),
-                min_rms=params.get('min_rms', 1e-10),
-                clipping_threshold=params.get('clipping_threshold', 0.95)
-            ))
+            fd = algos.get('frequency_domain', algos.get('spectral_spike', {}))
+            fdp = fd.get('params', {})
+            qc.frequency_domain = FrequencyDomainAlgoConfig(
+                enabled=fd.get('enabled', False),
+                spike_threshold=fdp.get('spike_threshold', 3.0),
+            )
 
-        # Quality threshold
-        qt_settings = algorithms.get('quality_threshold', {})
-        if qt_settings.get('enabled', False):
-            params = qt_settings.get('params', {})
-            threshold = params.get('threshold', 0.5)
-            engine.add_algorithm(QualityThresholdRejection(threshold=threshold))
+            so = algos.get('statistical_outlier', {})
+            sop = so.get('params', {})
+            qc.statistical_outlier = StatisticalOutlierAlgoConfig(
+                enabled=so.get('enabled', False),
+                method=sop.get('method', 'iqr'),
+                threshold=sop.get('threshold', 2.0),
+            )
 
-        # STA/LTA
-        stalta_settings = algorithms.get('sta_lta', {})
-        if stalta_settings.get('enabled', False):
-            params = stalta_settings.get('params', {})
-            engine.add_algorithm(STALTARejection(
-                sta_length=params.get('sta_length', 1.0),
-                lta_length=params.get('lta_length', 30.0),
-                min_ratio=params.get('min_ratio', 0.2),
-                max_ratio=params.get('max_ratio', 2.5)
-            ))
+            ha = algos.get('hvsr_amplitude', {})
+            hap = ha.get('params', {})
+            qc.hvsr_amplitude = HVSRAmplitudeAlgoConfig(
+                enabled=ha.get('enabled', False),
+                min_amplitude=hap.get('min_amplitude', 1.0),
+            )
 
-        # Frequency domain / spectral spike (check both keys)
-        freq_settings = algorithms.get('frequency_domain', algorithms.get('spectral_spike', {}))
-        if freq_settings.get('enabled', False):
-            params = freq_settings.get('params', {})
-            spike_threshold = params.get('spike_threshold', 3.0)
-            engine.add_algorithm(FrequencyDomainRejection(spike_threshold=spike_threshold))
+            fp = algos.get('flat_peak', {})
+            fpp = fp.get('params', {})
+            qc.flat_peak = FlatPeakAlgoConfig(
+                enabled=fp.get('enabled', False),
+                flatness_threshold=fpp.get('flatness_threshold', 0.15),
+            )
 
-        # Statistical outlier
-        stat_settings = algorithms.get('statistical_outlier', {})
-        if stat_settings.get('enabled', False):
-            params = stat_settings.get('params', {})
-            method = params.get('method', 'iqr')
-            threshold = params.get('threshold', 2.0)
-            engine.add_algorithm(StatisticalOutlierRejection(method=method, threshold=threshold))
+            co = algos.get('curve_outlier', {})
+            cop = co.get('params', {})
+            qc.curve_outlier = CurveOutlierAlgoConfig(
+                enabled=co.get('enabled', True),
+                threshold=cop.get('threshold', 3.0),
+                max_iterations=cop.get('max_iterations', 5),
+                metric=cop.get('metric', 'mean'),
+            )
+        else:
+            # SESAME mode defaults: curve_outlier enabled, others at their defaults
+            qc.curve_outlier = CurveOutlierAlgoConfig(enabled=True)
 
+        return qc
+
+    def _build_analysis(self, config):
+        """Create the ``HVSRAnalysis`` and load data from ``self.file_input``."""
+        from hvsr_pro.api.analysis import HVSRAnalysis
+
+        analysis = HVSRAnalysis(config)
+        handler = HVSRDataHandler()
+        dl = config.data_load
+
+        if dl.load_mode == 'single':
+            analysis._data = handler.load_data(self.file_input)
+        elif dl.load_mode == 'multi_type1':
+            analysis._data = handler.load_multi_miniseed_type1(self.file_input)
+        elif dl.load_mode == 'multi_type2':
+            analysis._data = handler.load_multi_miniseed_type2(self.file_input)
+        elif dl.load_mode == 'multi_component':
+            fi = self.file_input
+            if isinstance(fi, dict):
+                files = [str(fi.get(c)) for c in ('N', 'E', 'Z') if c in fi]
+            else:
+                files = fi
+            analysis._data = handler.load_multi_component(
+                files,
+                format=dl.file_format,
+                degrees_from_north=dl.degrees_from_north,
+            )
+        else:
+            raise ValueError(f"Unknown load mode: {dl.load_mode}")
+
+        return analysis

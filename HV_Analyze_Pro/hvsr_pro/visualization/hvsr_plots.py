@@ -17,68 +17,54 @@ from hvsr_pro.processing.hvsr import HVSRResult, Peak
 
 def _calculate_smart_annotation_position(peak_x, peak_y, ax, x_data, y_data):
     """
-    Calculate smart annotation position that avoids overlaps.
-    
-    Args:
-        peak_x: Peak x-coordinate (frequency)
-        peak_y: Peak y-coordinate (amplitude)
-        ax: Matplotlib axes
-        x_data: Full x data array
-        y_data: Full y data array
+    Calculate annotation position in DATA coordinates so it hugs the curve
+    regardless of figure size or amplitude scale.
     
     Returns:
-        (x_offset, y_offset, horizontal_alignment, vertical_alignment)
+        (text_x, text_y, ha, va) — text_x/text_y are in DATA coordinates
     """
-    # Get axis limits
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
     
-    # Normalize peak position (0 to 1)
-    # Handle log scale for x-axis
+    # Normalize peak position to [0, 1]
     if ax.get_xscale() == 'log':
-        x_norm = (np.log10(peak_x) - np.log10(xlim[0])) / (np.log10(xlim[1]) - np.log10(xlim[0]))
+        log_range = np.log10(xlim[1]) - np.log10(xlim[0])
+        x_norm = (np.log10(peak_x) - np.log10(xlim[0])) / log_range if log_range > 0 else 0.5
     else:
-        x_norm = (peak_x - xlim[0]) / (xlim[1] - xlim[0])
+        x_range = xlim[1] - xlim[0]
+        x_norm = (peak_x - xlim[0]) / x_range if x_range > 0 else 0.5
     
-    y_norm = (peak_y - ylim[0]) / (ylim[1] - ylim[0])
+    y_range = ylim[1] - ylim[0]
+    y_norm = (peak_y - ylim[0]) / y_range if y_range > 0 else 0.5
     
-    # Determine best position based on peak location
-    # Priority: Avoid top 20% (title area) and edges
+    # Y offset: 8% of visible Y range
+    dy = y_range * 0.08
+    # X offset in log-space: shift by ~0.15 decades
+    if ax.get_xscale() == 'log' and peak_x > 0:
+        dx_factor = 10 ** 0.15  # multiply/divide frequency by this
+    else:
+        dx_factor = None
     
-    # Default offsets (in points)
-    x_offset = 20
-    y_offset = 20
-    ha = 'left'
-    va = 'bottom'
-    
-    # If peak is in upper region (y > 0.7), place annotation below
-    if y_norm > 0.7:
-        y_offset = -30
+    # Vertical: if peak is in upper 35%, place BELOW; otherwise ABOVE
+    if y_norm > 0.65:
+        text_y = peak_y - dy * 2
         va = 'top'
-    # If peak is in lower region (y < 0.3), place annotation above
-    elif y_norm < 0.3:
-        y_offset = 30
-        va = 'bottom'
-    # Middle region - place above by default
     else:
-        y_offset = 25
+        text_y = peak_y + dy
         va = 'bottom'
     
-    # Horizontal positioning
-    # If peak is on right side, place annotation to the left
-    if x_norm > 0.7:
-        x_offset = -25
+    # Horizontal: if peak is in right 30%, place LEFT; otherwise RIGHT
+    if x_norm > 0.70:
+        text_x = peak_x / dx_factor if dx_factor else peak_x - (xlim[1] - xlim[0]) * 0.08
         ha = 'right'
-    # If peak is on left side, place annotation to the right
-    elif x_norm < 0.3:
-        x_offset = 25
+    elif x_norm < 0.30:
+        text_x = peak_x * dx_factor if dx_factor else peak_x + (xlim[1] - xlim[0]) * 0.08
         ha = 'left'
-    # Center region - slightly to the right
     else:
-        x_offset = 30
+        text_x = peak_x * dx_factor if dx_factor else peak_x + (xlim[1] - xlim[0]) * 0.08
         ha = 'left'
     
-    return x_offset, y_offset, ha, va
+    return text_x, text_y, ha, va
 
 
 def plot_hvsr_curve(result: HVSRResult,
@@ -86,6 +72,7 @@ def plot_hvsr_curve(result: HVSRResult,
                    show_uncertainty: bool = True,
                    show_peaks: bool = True,
                    show_median: bool = True,
+                   show_mean: bool = False,
                    uncertainty_type: str = 'percentile',
                    title: Optional[str] = None,
                    **kwargs) -> Axes:
@@ -97,7 +84,8 @@ def plot_hvsr_curve(result: HVSRResult,
         ax: Matplotlib axes (creates new if None)
         show_uncertainty: Show uncertainty band
         show_peaks: Mark detected peaks
-        show_median: Show median curve
+        show_median: Show median curve (primary)
+        show_mean: Show mean curve (secondary)
         uncertainty_type: 'percentile' (16-84) or 'std' (±1σ)
         title: Plot title
         **kwargs: Additional plot kwargs
@@ -110,10 +98,11 @@ def plot_hvsr_curve(result: HVSRResult,
 
     frequencies = result.frequencies
 
-    # Check for degenerate data (all zeros or extremely small values)
-    mean_max = np.max(np.abs(result.mean_hvsr))
-    data_range = np.ptp(result.mean_hvsr)  # peak-to-peak range
-    is_degenerate = (data_range < 1e-10) or (mean_max < 1e-10)
+    # Choose reference curve for degenerate check and Y-limits
+    ref_curve = result.median_hvsr if result.median_hvsr is not None else result.mean_hvsr
+    ref_max = np.max(np.abs(ref_curve))
+    data_range = np.ptp(ref_curve)
+    is_degenerate = (data_range < 1e-10) or (ref_max < 1e-10)
 
     line_color = kwargs.pop('color', '#1976D2')
     line_width = kwargs.pop('linewidth', 1.5)
@@ -140,37 +129,53 @@ def plot_hvsr_curve(result: HVSRResult,
                    color='#D32F2F', linewidth=2.5, linestyle='-',
                    label='Median H/V', zorder=101)
 
-    # Plot mean HVSR (secondary curve)
-    ax.semilogx(frequencies, result.mean_hvsr,
-               color=line_color, linewidth=line_width,
-               label='Mean H/V', zorder=100, **kwargs)
+    # Plot mean HVSR (secondary curve) — only if explicitly requested
+    if show_mean and not is_degenerate:
+        ax.semilogx(frequencies, result.mean_hvsr,
+                   color=line_color, linewidth=line_width,
+                   label='Mean H/V', zorder=100, alpha=0.6, **kwargs)
+
+    # If neither median nor mean shown, plot median as fallback
+    if not show_median and not show_mean and not is_degenerate:
+        ax.semilogx(frequencies, result.median_hvsr if result.median_hvsr is not None else result.mean_hvsr,
+                   color='#D32F2F', linewidth=2.5, linestyle='-',
+                   label='H/V', zorder=101)
     
-    # Mark peaks
+    # Mark peaks — annotate all detected peaks
     if show_peaks and result.peaks:
-        for i, peak in enumerate(result.peaks[:3]):  # Top 3 peaks
-            marker_size = 10 if i == 0 else 8  # Larger for primary
-            marker_color = 'red' if i == 0 else 'orange'
+        primary = result.primary_peak  # Highest-amplitude peak
+        primary_freq = primary.frequency if primary else None
+        
+        for peak in result.peaks:
+            is_primary = (primary_freq is not None and 
+                         abs(peak.frequency - primary_freq) < 1e-6)
+            marker_size = 10 if is_primary else 7
+            marker_color = 'red' if is_primary else 'orange'
             
             ax.plot(peak.frequency, peak.amplitude, 
                    'o', color=marker_color, markersize=marker_size,
-                   markeredgecolor='black', markeredgewidth=1,
+                   markeredgecolor='black', markeredgewidth=2 if is_primary else 1,
                    zorder=5)
             
-            # Annotate primary peak
-            if i == 0:
-                # Calculate smart position
-                x_off, y_off, ha, va = _calculate_smart_annotation_position(
-                    peak.frequency, peak.amplitude, ax, frequencies, result.mean_hvsr
+            if is_primary:
+                # Full annotation for the primary peak
+                text_x, text_y, ha, va = _calculate_smart_annotation_position(
+                    peak.frequency, peak.amplitude, ax, frequencies, ref_curve
                 )
-                
-                # Use LaTeX formatting for subscript to ensure proper rendering when saving
                 ax.annotate(f'$f_0$ = {peak.frequency:.2f} Hz\nA = {peak.amplitude:.2f}',
                            xy=(peak.frequency, peak.amplitude),
-                           xytext=(x_off, y_off), textcoords='offset points',
+                           xytext=(text_x, text_y), textcoords='data',
                            bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
                            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2'),
                            fontsize=10, fontweight='bold',
                            horizontalalignment=ha, verticalalignment=va)
+            else:
+                # Secondary peaks: small frequency label
+                ax.annotate(f'{peak.frequency:.2f} Hz',
+                           xy=(peak.frequency, peak.amplitude),
+                           xytext=(0, 8), textcoords='offset points',
+                           fontsize=7, ha='center', va='bottom',
+                           color='darkorange', fontweight='bold')
     
     # Formatting
     ax.set_xlabel('Frequency (Hz)', fontsize=12)
@@ -186,17 +191,16 @@ def plot_hvsr_curve(result: HVSRResult,
     ax.legend(loc='best', fontsize=10)
     ax.set_xlim(frequencies[0], frequencies[-1])
 
-    # Smart Y-limit: clip at zero, cap at robust upper bound
+    # Y-limit based on median (robust) or percentile_84
     if not is_degenerate:
-        ylim_candidates = [np.max(result.mean_hvsr) * 1.5]
+        ylim_candidates = [np.max(ref_curve) * 1.5]
         if result.percentile_84 is not None:
             ylim_candidates.append(np.max(result.percentile_84) * 1.2)
         ax.set_ylim(0, max(ylim_candidates))
 
-    # Handle degenerate data - set reasonable y-limits
+    # Handle degenerate data
     if is_degenerate:
         ax.set_ylim(-0.1, 0.1)
-        # Add warning
         ax.text(0.5, 0.5,
                '⚠️ WARNING: HVSR values are extremely small or zero\n'
                'Check input data quality',
@@ -355,10 +359,10 @@ def plot_peak_analysis(peak: Peak,
              colors='green', linestyles=':', linewidth=2,
              label=f'Prominence = {peak.prominence:.2f}')
     
-    # Annotations with smart positioning
-    x_off, y_off, ha, va = _calculate_smart_annotation_position(
+    # Annotations with smart positioning (data coordinates)
+    text_x, text_y, ha, va = _calculate_smart_annotation_position(
         peak.frequency, peak.amplitude, ax, 
-        result.frequencies, result.mean_hvsr
+        frequencies, hvsr
     )
     
     # Use LaTeX formatting for subscript to ensure proper rendering when saving
@@ -366,7 +370,7 @@ def plot_peak_analysis(peak: Peak,
                f'A = {peak.amplitude:.2f}\n'
                f'Q = {peak.quality:.2f}',
                xy=(peak.frequency, peak.amplitude),
-               xytext=(x_off, y_off), textcoords='offset points',
+               xytext=(text_x, text_y), textcoords='data',
                bbox=dict(boxstyle='round,pad=0.7', fc='yellow', alpha=0.8),
                arrowprops=dict(arrowstyle='->', lw=2),
                fontsize=11, fontweight='bold',
@@ -396,10 +400,10 @@ def plot_hvsr_statistics(result: HVSRResult,
     if fig is None:
         fig = plt.figure(figsize=(14, 10))
     
-    # Panel 1: Mean with uncertainty
+    # Panel 1: Median with uncertainty
     ax1 = fig.add_subplot(2, 2, 1)
-    plot_hvsr_curve(result, ax=ax1, show_peaks=True, 
-                   title='Mean H/V with Uncertainty')
+    plot_hvsr_curve(result, ax=ax1, show_peaks=True, show_median=True, show_mean=False,
+                   title='Median H/V with Uncertainty')
     
     # Panel 2: Mean vs Median
     ax2 = fig.add_subplot(2, 2, 2)

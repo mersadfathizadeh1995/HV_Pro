@@ -22,8 +22,8 @@ SESAME_CONFIG = {
         {'type': 'STALTARejection', 'params': {
             'sta_length': 1.0,
             'lta_length': 30.0,
-            'min_ratio': 0.2,
-            'max_ratio': 2.5
+            'min_ratio': 0.1,
+            'max_ratio': 5.0
         }},
     ],
     'post_hvsr': [

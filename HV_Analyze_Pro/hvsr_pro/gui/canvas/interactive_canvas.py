@@ -261,28 +261,23 @@ class InteractiveHVSRCanvas(QWidget):
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
     
     def plot_hvsr_curve(self):
-        """Plot HVSR curve with uncertainty."""
+        """Plot HVSR curve with uncertainty — unified with API (median-first)."""
         ax = self.ax_hvsr
         ax.clear()
 
         result = self.hvsr_result
 
-        # Check for degenerate data (all zeros or extremely small values)
-        mean_max = np.max(np.abs(result.mean_hvsr))
-        mean_min = np.min(np.abs(result.mean_hvsr))
-        data_range = np.ptp(result.mean_hvsr)  # peak-to-peak range
+        # Use median as primary curve (same as API), fall back to mean
+        primary = result.median_hvsr if result.median_hvsr is not None else result.mean_hvsr
+        ref_max = np.max(np.abs(primary))
+        data_range = np.ptp(primary)
 
-        is_degenerate = (data_range < 1e-10) or (mean_max < 1e-10)
+        is_degenerate = (data_range < 1e-10) or (ref_max < 1e-10)
 
         if is_degenerate:
-            # Data is degenerate (all zeros or extremely small)
-            ax.semilogx(result.frequencies, result.mean_hvsr,
-                       'b-', linewidth=2, label='Mean H/V (degenerate data)')
-
-            # Set reasonable default y-limits for degenerate data
+            ax.semilogx(result.frequencies, primary,
+                       'b-', linewidth=2, label='Median H/V (degenerate)')
             ax.set_ylim(-0.1, 0.1)
-
-            # Add warning annotation
             ax.text(0.5, 0.5,
                    '⚠️ WARNING: HVSR values are extremely small or zero\n'
                    'This may indicate:\n'
@@ -295,24 +290,34 @@ class InteractiveHVSRCanvas(QWidget):
                    fontsize=10, color='red',
                    bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
         else:
-            # Normal data - plot as usual
-            ax.semilogx(result.frequencies, result.mean_hvsr,
-                       'b-', linewidth=2, label='Mean H/V')
+            # Median as primary (red, thick) — matches API plot style
+            ax.semilogx(result.frequencies, primary,
+                       color='#D32F2F', linewidth=2.5, label='Median H/V', zorder=101)
 
-            # Plot uncertainty (16-84 percentile)
+            # Mean as secondary (blue, thin, dashed)
+            if result.mean_hvsr is not None:
+                ax.semilogx(result.frequencies, result.mean_hvsr,
+                           color='#1976D2', linewidth=1.2, alpha=0.5,
+                           linestyle='--', label='Mean H/V', zorder=100)
+
+            # Uncertainty band (purple, matching API)
             ax.fill_between(result.frequencies,
-                           result.percentile_16,
+                           np.maximum(result.percentile_16, 0),
                            result.percentile_84,
-                           alpha=0.3, color='blue', label='16-84th percentile')
+                           alpha=0.2, color='#9C27B0', label='16-84th percentile')
 
-            # Mark primary peak
+            # Mark all peaks
+            for i, peak in enumerate(result.peaks if result.peaks else []):
+                marker_size = 10 if i == 0 else 7
+                marker_color = 'red' if i == 0 else 'orange'
+                ax.plot(peak.frequency, peak.amplitude,
+                       'o', color=marker_color, markersize=marker_size,
+                       markeredgecolor='black', markeredgewidth=1 if i > 0 else 2,
+                       zorder=5, label='Primary Peak' if i == 0 else (None if i > 0 else None))
+
+            # Annotate primary peak
             if result.primary_peak:
                 peak = result.primary_peak
-                ax.plot(peak.frequency, peak.amplitude,
-                       'ro', markersize=10, markeredgecolor='black',
-                       markeredgewidth=2, zorder=5, label='Primary Peak')
-
-                # Annotate
                 ax.annotate(f'f₀ = {peak.frequency:.2f} Hz\nA = {peak.amplitude:.2f}',
                            xy=(peak.frequency, peak.amplitude),
                            xytext=(20, 20), textcoords='offset points',
@@ -320,14 +325,18 @@ class InteractiveHVSRCanvas(QWidget):
                            arrowprops=dict(arrowstyle='->', lw=2),
                            fontsize=10, fontweight='bold')
 
+            # Y-limits based on median
+            ylim_candidates = [ref_max * 1.5]
+            if result.percentile_84 is not None:
+                ylim_candidates.append(np.max(result.percentile_84) * 1.2)
+            ax.set_ylim(0, max(ylim_candidates))
+
         ax.set_xlabel('Frequency (Hz)', fontsize=11)
         ax.set_ylabel('H/V Spectral Ratio', fontsize=11)
         ax.set_title(f'HVSR Curve ({result.valid_windows} windows)',
                     fontsize=12, fontweight='bold')
         ax.grid(True, which='both', alpha=0.3, linestyle=':')
         ax.legend(loc='best', fontsize=9)
-
-        # Always set x-limits
         ax.set_xlim(result.frequencies[0], result.frequencies[-1])
     
     def plot_window_statistics(self):

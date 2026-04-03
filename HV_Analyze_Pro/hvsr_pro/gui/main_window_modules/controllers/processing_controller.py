@@ -32,6 +32,55 @@ class FullProcessingSettings:
     time_range: Optional[Dict] = None
     current_file: Any = None
 
+    def to_analysis_config(self):
+        """Convert to ``hvsr_pro.api.config.HVSRAnalysisConfig``."""
+        from hvsr_pro.api.config import (
+            HVSRAnalysisConfig, ProcessingConfig, DataLoadConfig,
+            TimeRangeConfig, QCConfig, CoxFDWRAConfig,
+        )
+
+        p = self.processing
+        processing = ProcessingConfig(
+            window_length=p.window_length,
+            overlap=p.overlap,
+            smoothing_method=getattr(p, 'smoothing_method', 'konno_ohmachi'),
+            smoothing_bandwidth=p.smoothing_bandwidth,
+            horizontal_method=getattr(p, 'horizontal_method', 'geometric_mean'),
+            freq_min=p.freq_min,
+            freq_max=p.freq_max,
+            n_frequencies=p.n_frequencies,
+            manual_sampling_rate=getattr(p, 'manual_sampling_rate', None),
+            use_parallel=self.use_parallel,
+            n_cores=self.n_cores,
+        )
+
+        data_load = DataLoadConfig(load_mode=self.load_mode)
+
+        time_range = TimeRangeConfig()
+        if self.time_range and self.time_range.get('enabled'):
+            time_range.enabled = True
+            s = self.time_range.get('start')
+            e = self.time_range.get('end')
+            time_range.start = s.isoformat() if hasattr(s, 'isoformat') else str(s) if s else None
+            time_range.end = e.isoformat() if hasattr(e, 'isoformat') else str(e) if e else None
+            time_range.timezone_offset = int(self.time_range.get('timezone_offset', 0))
+
+        qc = QCConfig.from_qc_settings(self.qc)
+        qc.cox_fdwra = CoxFDWRAConfig(
+            enabled=self.cox_fdwra.enabled,
+            n=self.cox_fdwra.n,
+            max_iterations=self.cox_fdwra.max_iterations,
+            min_iterations=self.cox_fdwra.min_iterations,
+            distribution=self.cox_fdwra.distribution_fn,
+        )
+
+        return HVSRAnalysisConfig(
+            processing=processing,
+            data_load=data_load,
+            time_range=time_range,
+            qc=qc,
+        )
+
 
 if HAS_PYQT5:
     class ProcessingController(QObject):

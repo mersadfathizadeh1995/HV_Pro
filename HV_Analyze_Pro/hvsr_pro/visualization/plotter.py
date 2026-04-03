@@ -65,7 +65,8 @@ class HVSRPlotter:
                    result: HVSRResult,
                    show_uncertainty: bool = True,
                    show_peaks: bool = True,
-                   show_median: bool = False,
+                   show_median: bool = True,
+                   show_mean: bool = False,
                    title: Optional[str] = None,
                    save_path: Optional[str] = None) -> Figure:
         """
@@ -75,7 +76,8 @@ class HVSRPlotter:
             result: HVSRResult object
             show_uncertainty: Show uncertainty band
             show_peaks: Mark peaks
-            show_median: Show median curve
+            show_median: Show median curve (primary)
+            show_mean: Show mean curve (secondary)
             title: Custom title
             save_path: Path to save figure
             
@@ -88,6 +90,7 @@ class HVSRPlotter:
                        show_uncertainty=show_uncertainty,
                        show_peaks=show_peaks,
                        show_median=show_median,
+                       show_mean=show_mean,
                        title=title)
         
         plt.tight_layout()
@@ -369,18 +372,26 @@ class HVSRPlotter:
         
         return fig
     
-    def plot_with_windows(self, result: HVSRResult, title: str = None) -> Figure:
-        """Plot HVSR with individual window curves."""
+    def plot_with_windows(self, result: HVSRResult, title: str = None,
+                         show_rejected: bool = False) -> Figure:
+        """Plot HVSR with individual window curves (active windows only by default)."""
         fig, ax = plt.subplots(figsize=(12, 7))
         
-        # Plot individual windows
+        # Plot individual active window curves
         if result.window_spectra:
-            for i, spectrum in enumerate(result.window_spectra[:50]):  # Limit to 50
+            plotted = 0
+            for spectrum in result.window_spectra:
+                if not show_rejected and hasattr(spectrum, 'rejected') and spectrum.rejected:
+                    continue
                 ax.semilogx(result.frequencies, spectrum.hvsr, 
                            'gray', alpha=0.3, linewidth=0.5)
+                plotted += 1
+                if plotted >= 50:
+                    break
         
-        # Plot mean and uncertainty
-        plot_hvsr_curve(result, ax=ax, show_peaks=True,
+        # Plot median curve and uncertainty
+        plot_hvsr_curve(result, ax=ax, show_peaks=True, show_median=True,
+                       show_mean=False,
                        title=title or 'HVSR with Individual Windows')
         
         return fig
